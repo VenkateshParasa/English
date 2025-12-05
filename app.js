@@ -1013,9 +1013,9 @@ function initializeSentenceButtons() {
             // Show hint button after 3 attempts
             if (state.sentenceAttempts >= 3 && !state.sentenceHintUsed) {
                 showHintButton();
-                showFeedback('sentenceFeedback', `✗ Incorrect. Try ${state.sentenceAttempts} times. Hint available!`, 'error');
+                showFeedback('sentenceFeedback', '✗ Incorrect. Click the hint button for help!', 'error');
             } else {
-                showFeedback('sentenceFeedback', `✗ Incorrect. Attempt ${state.sentenceAttempts}/3`, 'error');
+                showFeedback('sentenceFeedback', `✗ Incorrect. Try again! (Attempt ${state.sentenceAttempts}/3)`, 'error');
             }
         }
     };
