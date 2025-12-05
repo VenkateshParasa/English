@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>English Learning Portal</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎓 English Learning Portal</h1>
+            <div class="progress-bar">
+                <div class="progress-fill" id="overallProgress"></div>
+            </div>
+            <p class="progress-text">Overall Progress: <span id="progressPercent">0%</span></p>
+        </header>
+
+        <nav class="main-nav">
+            <button class="nav-btn active" data-section="dashboard">📊 Dashboard</button>
+            <button class="nav-btn" data-section="vocabulary">📚 Vocabulary</button>
+            <button class="nav-btn" data-section="sentences">✍️ Sentences</button>
+            <button class="nav-btn" data-section="reading">📖 Reading</button>
+            <button class="nav-btn" data-section="listening">🎧 Listening</button>
+            <button class="nav-btn" data-section="puzzles">🧩 Puzzles</button>
+        </nav>
+
+        <!-- Dashboard Section -->
+        <section id="dashboard" class="section active">
+            <h2>Welcome to Your Learning Journey!</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>📚 Words Learned</h3>
+                    <p class="stat-number" id="wordsLearned">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>✍️ Sentences Completed</h3>
+                    <p class="stat-number" id="sentencesCompleted">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>📖 Reading Exercises</h3>
+                    <p class="stat-number" id="readingCompleted">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>🧩 Puzzles Solved</h3>
+                    <p class="stat-number" id="puzzlesSolved">0</p>
+                </div>
+            </div>
+            <div class="daily-goal">
+                <h3>Today's Goal</h3>
+                <p>Complete at least one activity from each category!</p>
+                <div class="goal-checklist">
+                    <label><input type="checkbox" id="goalVocab" disabled> Vocabulary Practice</label>
+                    <label><input type="checkbox" id="goalSentence" disabled> Sentence Formation</label>
+                    <label><input type="checkbox" id="goalReading" disabled> Reading Exercise</label>
+                    <label><input type="checkbox" id="goalListening" disabled> Listening Practice</label>
+                    <label><input type="checkbox" id="goalPuzzle" disabled> Puzzle Activity</label>
+                </div>
+            </div>
+            
+            <!-- Statistics Section -->
+            <div class="statistics-container">
+                <div class="stat-box" id="todayStats">
+                    <h4>📅 Today's Progress</h4>
+                    <p>Loading...</p>
+                </div>
+                <div class="stat-box" id="overallStats">
+                    <h4>📊 Overall Statistics</h4>
+                    <p>Loading...</p>
+                </div>
+                <div class="stat-box" id="averageStats">
+                    <h4>📈 Daily Averages</h4>
+                    <p>Loading...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Vocabulary Section -->
+        <section id="vocabulary" class="section">
+            <h2>📚 Daily Vocabulary Practice</h2>
+            <div class="difficulty-selector">
+                <button class="diff-btn active" data-level="basic">Basic</button>
+                <button class="diff-btn" data-level="intermediate">Intermediate</button>
+                <button class="diff-btn" data-level="medium">Medium</button>
+            </div>
+            <div class="vocab-container">
+                <div class="word-card" id="wordCard">
+                    <h3 class="word" id="currentWord">Loading...</h3>
+                    <p class="pronunciation" id="pronunciation"></p>
+                    <p class="definition" id="definition"></p>
+                    <p class="example" id="example"></p>
+                    <button class="btn-primary" id="speakWord">🔊 Pronounce</button>
+                </div>
+                <div class="vocab-quiz">
+                    <h3>Test Your Knowledge</h3>
+                    <p id="quizQuestion"></p>
+                    <div class="quiz-options" id="quizOptions"></div>
+                    <div class="navigation-buttons">
+                        <button class="btn-secondary" id="prevWord">← Previous</button>
+                        <button class="btn-primary" id="nextWord">Next →</button>
+                    </div>
+                </div>
+                <div class="vocab-progress">
+                    <p>Today's Progress: <span id="vocabProgress">0/10</span></p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Sentence Formation Section -->
+        <section id="sentences" class="section">
+            <h2>✍️ Sentence Formation Practice</h2>
+            <div class="difficulty-selector">
+                <button class="diff-btn active" data-level="basic">Basic</button>
+                <button class="diff-btn" data-level="intermediate">Intermediate</button>
+                <button class="diff-btn" data-level="medium">Medium</button>
+            </div>
+            <div class="sentence-container">
+                <!-- Drag and Drop Exercise -->
+                <div class="exercise-card sentence-exercise-container" id="dragDropContainer">
+                    <h3>Arrange the Words</h3>
+                    <p class="instruction">Drag and drop the words to form a correct sentence:</p>
+                    <div class="word-bank" id="wordBank"></div>
+                    <div class="sentence-builder" id="sentenceBuilder">
+                        <p class="placeholder">Drop words here...</p>
+                    </div>
+                </div>
+
+                <!-- Fill in the Blanks Exercise -->
+                <div class="exercise-card sentence-exercise-container" id="fillBlankExerciseContainer" style="display:none;">
+                    <h3>Fill in the Blanks</h3>
+                    <p class="instruction" id="fillBlankInstruction"></p>
+                    <div class="fill-blank-container" id="fillBlankContainer"></div>
+                </div>
+
+                <!-- Multiple Choice Exercise -->
+                <div class="exercise-card sentence-exercise-container" id="multipleChoiceContainer" style="display:none;">
+                    <h3>Choose the Correct Sentence</h3>
+                    <div id="multipleChoiceContent"></div>
+                </div>
+
+                <!-- Reorder Words Exercise -->
+                <div class="exercise-card sentence-exercise-container" id="reorderContainer" style="display:none;">
+                    <h3>Build the Sentence</h3>
+                    <div id="reorderContent"></div>
+                </div>
+
+                <!-- Universal Controls -->
+                <div class="exercise-card">
+                    <div class="button-group">
+                        <button class="btn-primary" id="checkSentence">Check Answer</button>
+                        <button class="btn-secondary" id="resetSentence">Reset</button>
+                    </div>
+                    <div class="navigation-buttons">
+                        <button class="btn-secondary" id="prevSentence">← Previous</button>
+                        <button class="btn-primary" id="nextSentence">Next →</button>
+                    </div>
+                    <div class="feedback" id="sentenceFeedback"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Reading Section -->
+        <section id="reading" class="section">
+            <h2>📖 Reading & Dictation Practice</h2>
+            <div class="difficulty-selector">
+                <button class="diff-btn active" data-level="basic">Basic</button>
+                <button class="diff-btn" data-level="intermediate">Intermediate</button>
+                <button class="diff-btn" data-level="medium">Medium</button>
+            </div>
+            <div class="reading-container">
+                <div class="reading-passage">
+                    <h3 id="passageTitle">Loading...</h3>
+                    <div class="passage-text" id="passageText"></div>
+                    
+                    <!-- Audio Controls -->
+                    <div class="audio-controls">
+                        <button class="btn-primary" id="readAloud">▶️ Play</button>
+                        <button class="btn-secondary" id="pauseReading" style="display:none;">⏸️ Pause</button>
+                        <button class="btn-secondary" id="resumeReading" style="display:none;">▶️ Resume</button>
+                        <button class="btn-secondary" id="stopReading" style="display:none;">⏹️ Stop</button>
+                        <button class="btn-primary" id="replayReading" style="display:none;">🔄 Replay</button>
+                    </div>
+                    
+                    <div class="navigation-buttons">
+                        <button class="btn-secondary" id="prevReading">← Previous</button>
+                        <button class="btn-primary" id="nextReading">Next →</button>
+                    </div>
+                </div>
+                <div class="comprehension-quiz">
+                    <h3>Comprehension Questions</h3>
+                    <div id="comprehensionQuestions"></div>
+                    <button class="btn-primary" id="checkComprehension">Check Answers</button>
+                    <div class="feedback" id="comprehensionFeedback"></div>
+                </div>
+                <div class="dictation-exercise">
+                    <h3>Dictation Practice</h3>
+                    <p>Listen and type what you hear:</p>
+                    <button class="btn-primary" id="playDictation">▶️ Play Audio</button>
+                    <textarea id="dictationInput" placeholder="Type what you hear..."></textarea>
+                    <button class="btn-primary" id="checkDictation">Check Answer</button>
+                    <div class="feedback" id="dictationFeedback"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Listening Section -->
+        <section id="listening" class="section">
+            <h2>🎧 Listening & Speaking Practice</h2>
+            <div class="listening-container">
+                <div class="exercise-card">
+                    <h3>Listen and Repeat</h3>
+                    <p class="instruction">Click to hear the sentence, then repeat it:</p>
+                    <div class="sentence-display" id="listenSentence"></div>
+                    <button class="btn-primary" id="playListening">🔊 Play</button>
+                    <button class="btn-primary" id="startRecording">🎤 Record Your Voice</button>
+                    <button class="btn-secondary" id="stopRecording" disabled>⏹️ Stop</button>
+                    <button class="btn-primary" id="replayRecording" style="display:none;">🔄 Replay Recording</button>
+                    <div class="recording-status" id="recordingStatus"></div>
+                    <div class="feedback" id="listeningFeedback"></div>
+                    <div class="navigation-buttons">
+                        <button class="btn-secondary" id="prevListening">← Previous</button>
+                        <button class="btn-primary" id="nextListening">Next →</button>
+                    </div>
+                </div>
+                <div class="exercise-card">
+                    <h3>Speech Recognition Practice</h3>
+                    <p class="instruction">Say the word shown below:</p>
+                    <div class="target-word" id="targetWord"></div>
+                    <button class="btn-primary" id="startSpeech">🎤 Start Speaking</button>
+                    <div class="recognized-text" id="recognizedText"></div>
+                    <div class="feedback" id="speechFeedback"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Puzzles Section -->
+        <section id="puzzles" class="section">
+            <h2>🧩 Fun Puzzles & Games</h2>
+            <div class="puzzle-selector">
+                <button class="puzzle-btn active" data-puzzle="wordsearch">Word Search</button>
+                <button class="puzzle-btn" data-puzzle="crossword">Crossword</button>
+                <button class="puzzle-btn" data-puzzle="scramble">Word Scramble</button>
+                <button class="puzzle-btn" data-puzzle="matching">Word Matching</button>
+            </div>
+            
+            <!-- Word Search -->
+            <div class="puzzle-container active" id="wordsearch">
+                <h3>Word Search</h3>
+                <p>Find all the hidden words!</p>
+                <div class="word-list" id="searchWordList"></div>
+                <div class="word-grid" id="wordGrid"></div>
+                <button class="btn-primary" id="newWordSearch">New Puzzle</button>
+            </div>
+
+            <!-- Crossword -->
+            <div class="puzzle-container" id="crossword">
+                <h3>Mini Crossword</h3>
+                <div class="crossword-clues">
+                    <div class="clues-section">
+                        <h4>Across</h4>
+                        <div id="cluesAcross"></div>
+                    </div>
+                    <div class="clues-section">
+                        <h4>Down</h4>
+                        <div id="cluesDown"></div>
+                    </div>
+                </div>
+                <div class="crossword-grid" id="crosswordGrid"></div>
+                <button class="btn-primary" id="checkCrossword">Check Answers</button>
+                <button class="btn-secondary" id="newCrossword">New Puzzle</button>
+            </div>
+
+            <!-- Word Scramble -->
+            <div class="puzzle-container" id="scramble">
+                <h3>Word Scramble</h3>
+                <p>Unscramble the letters to form a word:</p>
+                <div class="scrambled-word" id="scrambledWord"></div>
+                <input type="text" id="scrambleInput" placeholder="Type your answer...">
+                <div class="hint" id="scrambleHint"></div>
+                <button class="btn-primary" id="checkScramble">Check</button>
+                <button class="btn-secondary" id="showHint">Show Hint</button>
+                <button class="btn-primary" id="nextScramble">Next Word</button>
+                <div class="feedback" id="scrambleFeedback"></div>
+            </div>
+
+            <!-- Word Matching -->
+            <div class="puzzle-container" id="matching">
+                <h3>Word Matching</h3>
+                <p>Match words with their meanings:</p>
+                <div class="matching-game">
+                    <div class="matching-column" id="wordsColumn"></div>
+                    <div class="matching-column" id="meaningsColumn"></div>
+                </div>
+                <button class="btn-primary" id="checkMatching">Check Matches</button>
+                <button class="btn-secondary" id="resetMatching">Reset</button>
+                <div class="feedback" id="matchingFeedback"></div>
+            </div>
+        </section>
+    </div>
+
+    <script src="data.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
