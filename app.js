@@ -37,6 +37,8 @@ const state = {
         puzzle: false
     },
     sentenceBuilderWords: [],
+    sentenceAttempts: 0,
+    sentenceHintUsed: false,
     // Enhanced progress tracking
     completedExercises: {
         vocabulary: new Set(),
@@ -767,6 +769,11 @@ function loadSentenceExercise() {
     const difficulty = state.currentDifficulty;
     const exercises = sentenceExercises[difficulty];
     
+    // Reset attempts and hint for new exercise
+    state.sentenceAttempts = 0;
+    state.sentenceHintUsed = false;
+    hideHintButton();
+    
     // Use local data or generate new exercise
     let exercise;
     if (state.currentSentenceIndex < exercises.length) {
@@ -775,6 +782,9 @@ function loadSentenceExercise() {
         // Generate unlimited exercises
         exercise = generateSentenceExercise(state.currentSentenceIndex);
     }
+    
+    // Store current exercise for hint system
+    state.currentExercise = exercise;
     
     // Randomly choose exercise type
     const exerciseTypes = ['dragdrop', 'fillblank', 'multiplechoice', 'reorder'];
@@ -995,14 +1005,33 @@ function initializeSentenceButtons() {
             markExerciseComplete('sentences', state.currentSentenceIndex);
             updateDashboard();
             saveProgress();
+            hideHintButton();
         } else {
-            showFeedback('sentenceFeedback', `✗ Incorrect. Correct: "${correctAnswer}"`, 'error');
+            // Increment attempts
+            state.sentenceAttempts++;
+            
+            // Show hint button after 3 attempts
+            if (state.sentenceAttempts >= 3 && !state.sentenceHintUsed) {
+                showHintButton();
+                showFeedback('sentenceFeedback', `✗ Incorrect. Try ${state.sentenceAttempts} times. Hint available!`, 'error');
+            } else {
+                showFeedback('sentenceFeedback', `✗ Incorrect. Attempt ${state.sentenceAttempts}/3`, 'error');
+            }
+        }
+    };
+    
+    // Hint button handler
+    document.getElementById('sentenceHint').onclick = () => {
+        if (state.sentenceAttempts >= 3 && !state.sentenceHintUsed) {
+            state.sentenceHintUsed = true;
+            showSentenceHint();
         }
     };
     
     document.getElementById('resetSentence').onclick = () => {
         loadSentenceExercise();
         document.getElementById('sentenceFeedback').classList.remove('visible');
+        document.getElementById('hintDisplay').classList.remove('visible');
     };
     
     document.getElementById('prevSentence').onclick = () => {
@@ -1010,6 +1039,7 @@ function initializeSentenceButtons() {
             state.currentSentenceIndex--;
             loadSentenceExercise();
             document.getElementById('sentenceFeedback').classList.remove('visible');
+            document.getElementById('hintDisplay').classList.remove('visible');
             saveProgress();
         }
     };
@@ -1018,8 +1048,57 @@ function initializeSentenceButtons() {
         state.currentSentenceIndex++;
         loadSentenceExercise();
         document.getElementById('sentenceFeedback').classList.remove('visible');
+        document.getElementById('hintDisplay').classList.remove('visible');
         saveProgress();
     };
+}
+
+// ============================================
+// HINT SYSTEM FOR SENTENCES
+// ============================================
+
+function showHintButton() {
+    const hintBtn = document.getElementById('sentenceHint');
+    if (hintBtn) {
+        hintBtn.style.display = 'inline-block';
+        hintBtn.classList.add('pulse');
+    }
+}
+
+function hideHintButton() {
+    const hintBtn = document.getElementById('sentenceHint');
+    if (hintBtn) {
+        hintBtn.style.display = 'none';
+        hintBtn.classList.remove('pulse');
+    }
+    const hintDisplay = document.getElementById('hintDisplay');
+    if (hintDisplay) {
+        hintDisplay.classList.remove('visible');
+    }
+}
+
+function showSentenceHint() {
+    if (!state.currentExercise) return;
+    
+    const hintDisplay = document.getElementById('hintDisplay');
+    if (!hintDisplay) return;
+    
+    // Get a random word from the correct sentence as a hint
+    const words = state.currentExercise.words || state.currentExercise.correct.split(' ');
+    const randomIndex = Math.floor(Math.random() * words.length);
+    const hintWord = words[randomIndex];
+    const position = randomIndex + 1;
+    
+    hintDisplay.innerHTML = `
+        <div class="hint-content">
+            <span class="hint-icon">💡</span>
+            <strong>Hint:</strong> Word #${position} is "<span class="hint-word">${hintWord}</span>"
+        </div>
+    `;
+    hintDisplay.classList.add('visible');
+    
+    // Hide hint button after use
+    hideHintButton();
 }
 
 // ============================================

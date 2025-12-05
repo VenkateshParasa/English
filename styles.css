@@ -802,7 +802,7 @@ header h1 {
 }
 
 /* Button Styles */
-.btn-primary, .btn-secondary {
+.btn-primary, .btn-secondary, .btn-hint {
     padding: 12px 30px;
     border: none;
     border-radius: 25px;
@@ -835,6 +835,33 @@ header h1 {
 
 .btn-secondary:hover {
     background: #e0e0e0;
+}
+
+.btn-hint {
+    background: linear-gradient(135deg, #ffd700 0%, #ffb700 100%);
+    color: #333;
+    font-weight: bold;
+    border: 2px solid #ffa500;
+}
+
+.btn-hint:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(255, 183, 0, 0.4);
+}
+
+.btn-hint.pulse {
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(255, 183, 0, 0.7);
+    }
+    50% {
+        transform: scale(1.05);
+        box-shadow: 0 0 0 10px rgba(255, 183, 0, 0);
+    }
 }
 
 .button-group {
@@ -1102,6 +1129,64 @@ header h1 {
     background: #e3f2fd;
     color: #1565c0;
     border: 2px solid #2196F3;
+}
+
+/* Hint Display Styles */
+.hint-display {
+    padding: 20px;
+    margin: 20px 0;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #fff9e6 0%, #ffe6b3 100%);
+    border: 2px solid #ffa500;
+    display: none;
+    animation: slideDown 0.3s ease;
+}
+
+.hint-display.visible {
+    display: block;
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.hint-content {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    font-size: 1.1em;
+    color: #333;
+}
+
+.hint-icon {
+    font-size: 2em;
+    animation: bounce 1s infinite;
+}
+
+@keyframes bounce {
+    0%, 100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-5px);
+    }
+}
+
+.hint-word {
+    color: #ff6b00;
+    font-weight: bold;
+    font-size: 1.2em;
+    padding: 5px 15px;
+    background: white;
+    border-radius: 8px;
+    border: 2px dashed #ffa500;
 }
 
 /* Responsive Design */
