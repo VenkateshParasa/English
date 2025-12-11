@@ -92,7 +92,9 @@ const cache = {
     set: (key, value) => {
         try {
             localStorage.setItem(key, JSON.stringify({ value, timestamp: Date.now() }));
-        } catch (e) { console.warn('Cache failed:', e); }
+        } catch (e) {
+            ErrorHandler.logError(e, 'cache operation');
+        }
     },
     get: (key) => {
         try {
@@ -121,7 +123,9 @@ function saveProgress() {
             }
         };
         localStorage.setItem('learningProgress', JSON.stringify(toSave));
-    } catch (e) { console.warn('Save failed:', e); }
+    } catch (e) {
+        ErrorHandler.logError(e, 'save progress');
+    }
 }
 
 function loadProgress() {
@@ -174,7 +178,9 @@ function loadProgress() {
             calculateAverages();
             updateDashboard();
         }
-    } catch (e) { console.warn('Load failed:', e); }
+    } catch (e) {
+        ErrorHandler.logError(e, 'load progress');
+    }
 }
 
 // Reset daily stats for new day
@@ -879,13 +885,30 @@ const speechAPI = {
     startRecognition: (callback) => {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
-            alert('Speech recognition not supported');
+            Toast.error('Speech recognition not supported in this browser');
             return null;
         }
         const recognition = new SpeechRecognition();
         recognition.lang = 'en-US';
-        recognition.onresult = (e) => callback(e.results[0][0].transcript);
-        recognition.onerror = (e) => console.error('Recognition error:', e.error);
+        recognition.onresult = (e) => {
+            try {
+                const transcript = e.results[0][0].transcript;
+                // Validate and sanitize the speech recognition result
+                const validatedTranscript = ErrorHandler.validateInput(transcript, {
+                    required: true,
+                    maxLength: 500,
+                    pattern: /^[a-zA-Z0-9\s.,!?'\-]+$/
+                });
+                callback(validatedTranscript);
+            } catch (error) {
+                ErrorHandler.handleError(error, 'speech recognition result');
+                Toast.error('Invalid speech input detected');
+            }
+        };
+        recognition.onerror = (e) => {
+            ErrorHandler.logError(new Error(e.error), 'speech recognition');
+            Toast.error('Speech recognition error. Please try again.');
+        };
         recognition.start();
         return recognition;
     }
@@ -1221,16 +1244,43 @@ function loadDragDropSentence(exercise) {
     [...exercise.words].sort(() => Math.random() - 0.5).forEach(word => {
         const chip = document.createElement('div');
         chip.className = 'word-chip';
-        chip.textContent = word;
+        // Sanitize word content before displaying
+        const sanitizedWord = ErrorHandler.sanitizeInput(word);
+        chip.textContent = sanitizedWord;
         chip.draggable = true;
-        chip.ondragstart = (e) => { e.dataTransfer.setData('text', word); chip.classList.add('dragging'); };
+        chip.ondragstart = (e) => {
+            try {
+                // Validate word before allowing drag
+                const validatedWord = ErrorHandler.validateInput(sanitizedWord, {
+                    required: true,
+                    maxLength: 100,
+                    pattern: /^[a-zA-Z0-9\s.,!?'\-]+$/
+                });
+                e.dataTransfer.setData('text', validatedWord);
+                chip.classList.add('dragging');
+            } catch (error) {
+                e.preventDefault();
+                ErrorHandler.handleError(error, 'drag operation');
+                Toast.warning('Invalid word detected');
+            }
+        };
         chip.ondragend = () => chip.classList.remove('dragging');
         chip.onclick = () => {
-            const placeholder = sentenceBuilder.querySelector('.placeholder');
-            if (placeholder) placeholder.remove();
-            sentenceBuilder.classList.add('has-words');
-            sentenceBuilder.appendChild(chip);
-            state.sentenceBuilderWords.push(chip.textContent);
+            try {
+                const placeholder = sentenceBuilder.querySelector('.placeholder');
+                if (placeholder) placeholder.remove();
+                sentenceBuilder.classList.add('has-words');
+                sentenceBuilder.appendChild(chip);
+                // Validate before adding to state
+                const validatedText = ErrorHandler.validateInput(chip.textContent, {
+                    required: true,
+                    maxLength: 100
+                });
+                state.sentenceBuilderWords.push(validatedText);
+            } catch (error) {
+                ErrorHandler.handleError(error, 'word selection');
+                Toast.warning('Invalid word selection');
+            }
         };
         wordBank.appendChild(chip);
     });
@@ -1242,8 +1292,22 @@ function initializeSentenceBuilderDragDrop() {
     builder.ondragover = (e) => e.preventDefault();
     builder.ondrop = (e) => {
         e.preventDefault();
-        const chip = document.querySelector('.word-chip.dragging');
-        if (chip) chip.click();
+        try {
+            // Validate dropped data
+            const droppedText = e.dataTransfer.getData('text');
+            if (droppedText) {
+                const validatedText = ErrorHandler.validateInput(droppedText, {
+                    required: true,
+                    maxLength: 100,
+                    pattern: /^[a-zA-Z0-9\s.,!?'\-]+$/
+                });
+            }
+            const chip = document.querySelector('.word-chip.dragging');
+            if (chip) chip.click();
+        } catch (error) {
+            ErrorHandler.handleError(error, 'drop operation');
+            Toast.warning('Invalid drop operation');
+        }
     };
 }
 
