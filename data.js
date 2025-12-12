@@ -111,6 +111,116 @@ const vocabularyData = {
                 options: ["A place", "A measurement of duration", "A person", "A food"],
                 correct: 1
             }
+        },
+        {
+            word: "School",
+            pronunciation: "/skuːl/",
+            definition: "A place where children go to learn",
+            example: "I go to school every weekday.",
+            quiz: {
+                question: "What is a school?",
+                options: ["A store", "A place to learn", "A park", "A hospital"],
+                correct: 1
+            }
+        },
+        {
+            word: "Play",
+            pronunciation: "/pleɪ/",
+            definition: "To engage in activity for enjoyment",
+            example: "Children love to play outside.",
+            quiz: {
+                question: "To play means to...",
+                options: ["Work", "Have fun", "Sleep", "Study"],
+                correct: 1
+            }
+        },
+        {
+            word: "Sun",
+            pronunciation: "/sʌn/",
+            definition: "The star that gives Earth light and heat",
+            example: "The sun rises in the morning.",
+            quiz: {
+                question: "The sun is...",
+                options: ["A planet", "A star", "A moon", "A cloud"],
+                correct: 1
+            }
+        },
+        {
+            word: "Tree",
+            pronunciation: "/triː/",
+            definition: "A tall plant with a wooden trunk and branches",
+            example: "Birds build nests in trees.",
+            quiz: {
+                question: "A tree is...",
+                options: ["An animal", "A plant", "A building", "A vehicle"],
+                correct: 1
+            }
+        },
+        {
+            word: "Run",
+            pronunciation: "/rʌn/",
+            definition: "To move quickly on foot",
+            example: "I like to run in the park.",
+            quiz: {
+                question: "To run means to...",
+                options: ["Walk slowly", "Move quickly", "Stand still", "Sit down"],
+                correct: 1
+            }
+        },
+        {
+            word: "Smile",
+            pronunciation: "/smaɪl/",
+            definition: "To make a happy expression with your face",
+            example: "She has a beautiful smile.",
+            quiz: {
+                question: "A smile shows...",
+                options: ["Anger", "Happiness", "Fear", "Sadness"],
+                correct: 1
+            }
+        },
+        {
+            word: "Color",
+            pronunciation: "/ˈkʌlər/",
+            definition: "The property of objects that we see with our eyes",
+            example: "Red is my favorite color.",
+            quiz: {
+                question: "Color is something we...",
+                options: ["Hear", "See", "Taste", "Smell"],
+                correct: 1
+            }
+        },
+        {
+            word: "Music",
+            pronunciation: "/ˈmjuːzɪk/",
+            definition: "Sounds arranged in a pleasing way",
+            example: "I enjoy listening to music.",
+            quiz: {
+                question: "Music is made of...",
+                options: ["Colors", "Sounds", "Smells", "Tastes"],
+                correct: 1
+            }
+        },
+        {
+            word: "Help",
+            pronunciation: "/help/",
+            definition: "To make it easier for someone to do something",
+            example: "Can you help me with this?",
+            quiz: {
+                question: "To help means to...",
+                options: ["Ignore", "Assist", "Avoid", "Refuse"],
+                correct: 1
+            }
+        },
+        {
+            word: "Kind",
+            pronunciation: "/kaɪnd/",
+            definition: "Friendly, generous, and considerate",
+            example: "She is a very kind person.",
+            quiz: {
+                question: "Kind means...",
+                options: ["Mean", "Friendly", "Angry", "Sad"],
+                correct: 1
+            }
         }
     ],
     intermediate: [
@@ -644,15 +754,15 @@ const listeningExercises = {
 const puzzleData = {
     wordSearch: {
         basic: {
-            words: ["HAPPY", "BOOK", "FRIEND", "WATER", "HOUSE", "LEARN", "FOOD", "TIME"],
+            words: ["HAPPY", "BOOK", "FRIEND", "WATER", "HOUSE", "LEARN", "FOOD", "TIME", "SCHOOL", "PLAY", "SUN", "TREE", "RUN", "SMILE", "COLOR", "MUSIC", "HELP", "KIND", "LOVE", "DREAM"],
             gridSize: 10
         },
         intermediate: {
-            words: ["ACHIEVE", "CHALLENGE", "DEVELOP", "IMPORTANT", "KNOWLEDGE", "SUCCESS"],
+            words: ["ACHIEVE", "CHALLENGE", "DEVELOP", "IMPORTANT", "KNOWLEDGE", "SUCCESS", "PRACTICE", "OPPORTUNITY", "UNDERSTAND", "ENVIRONMENT", "IMPROVE", "PROGRESS", "CREATIVE", "CONFIDENT"],
             gridSize: 10
         },
         medium: {
-            words: ["ACCOMPLISH", "BENEFICIAL", "COLLABORATE", "EFFICIENT", "IMPLEMENT"],
+            words: ["ACCOMPLISH", "BENEFICIAL", "COLLABORATE", "EFFICIENT", "IMPLEMENT", "FUNDAMENTAL", "PERSPECTIVE", "SIGNIFICANT", "VERSATILE", "DEMONSTRATE"],
             gridSize: 12
         }
     },
@@ -662,21 +772,36 @@ const puzzleData = {
             { word: "FRIEND", scrambled: "DIENRF", hint: "Someone you like" },
             { word: "WATER", scrambled: "RETAW", hint: "Clear liquid we drink" },
             { word: "HOUSE", scrambled: "ESUOH", hint: "Where we live" },
-            { word: "LEARN", scrambled: "NRAEL", hint: "Gain knowledge" }
+            { word: "LEARN", scrambled: "NRAEL", hint: "Gain knowledge" },
+            { word: "SCHOOL", scrambled: "LOOHCS", hint: "Place to learn" },
+            { word: "PLAY", scrambled: "YALP", hint: "Have fun" },
+            { word: "SMILE", scrambled: "LIMSE", hint: "Happy expression" },
+            { word: "MUSIC", scrambled: "CIMSU", hint: "Pleasant sounds" },
+            { word: "HELP", scrambled: "PLEH", hint: "Assist someone" }
         ],
         intermediate: [
             { word: "ACHIEVE", scrambled: "VEECHIA", hint: "Reach a goal" },
             { word: "CHALLENGE", scrambled: "GELNLECHA", hint: "Difficult task" },
             { word: "DEVELOP", scrambled: "VELOPDE", hint: "Grow and improve" },
             { word: "SUCCESS", scrambled: "SCESSUC", hint: "Achievement of goals" },
-            { word: "PRACTICE", scrambled: "TICPRACE", hint: "Repeated exercise" }
+            { word: "PRACTICE", scrambled: "TICPRACE", hint: "Repeated exercise" },
+            { word: "KNOWLEDGE", scrambled: "WLEDGEKNO", hint: "Information and skills" },
+            { word: "IMPORTANT", scrambled: "TANTIMPOR", hint: "Significant" },
+            { word: "OPPORTUNITY", scrambled: "TUNITYOPPOR", hint: "Favorable chance" },
+            { word: "UNDERSTAND", scrambled: "DERSTANDUN", hint: "Comprehend" },
+            { word: "ENVIRONMENT", scrambled: "MENTVIRONEN", hint: "Surroundings" }
         ],
         medium: [
             { word: "COLLABORATE", scrambled: "LABORCOLATE", hint: "Work together" },
             { word: "DEMONSTRATE", scrambled: "TEMONSDRATE", hint: "Show clearly" },
             { word: "EFFICIENT", scrambled: "FICIEFENT", hint: "Productive" },
             { word: "IMPLEMENT", scrambled: "LEMENTPIM", hint: "Put into action" },
-            { word: "VERSATILE", scrambled: "VERSALITE", hint: "Adaptable" }
+            { word: "VERSATILE", scrambled: "VERSALITE", hint: "Adaptable" },
+            { word: "FUNDAMENTAL", scrambled: "MENTALFUNDA", hint: "Basic and essential" },
+            { word: "PERSPECTIVE", scrambled: "TIVEPERSPECT", hint: "Viewpoint" },
+            { word: "SIGNIFICANT", scrambled: "CANTSIGNIFI", hint: "Important" },
+            { word: "ACCOMPLISH", scrambled: "PLISHACCOM", hint: "Complete successfully" },
+            { word: "BENEFICIAL", scrambled: "CIALBENEF", hint: "Advantageous" }
         ]
     },
     matching: {
@@ -685,21 +810,36 @@ const puzzleData = {
             { word: "Friend", meaning: "Someone you like" },
             { word: "Learn", meaning: "Gain knowledge" },
             { word: "Beautiful", meaning: "Pleasing to look at" },
-            { word: "Family", meaning: "Related people" }
+            { word: "Family", meaning: "Related people" },
+            { word: "School", meaning: "Place to learn" },
+            { word: "Play", meaning: "Have fun" },
+            { word: "Help", meaning: "Assist someone" },
+            { word: "Kind", meaning: "Friendly" },
+            { word: "Smile", meaning: "Happy expression" }
         ],
         intermediate: [
             { word: "Achieve", meaning: "Reach a goal" },
             { word: "Challenge", meaning: "Difficult task" },
             { word: "Develop", meaning: "Grow and improve" },
             { word: "Important", meaning: "Significant" },
-            { word: "Success", meaning: "Achievement" }
+            { word: "Success", meaning: "Achievement" },
+            { word: "Knowledge", meaning: "Information and skills" },
+            { word: "Opportunity", meaning: "Favorable chance" },
+            { word: "Practice", meaning: "Repeated exercise" },
+            { word: "Understand", meaning: "Comprehend" },
+            { word: "Environment", meaning: "Surroundings" }
         ],
         medium: [
             { word: "Collaborate", meaning: "Work together" },
             { word: "Demonstrate", meaning: "Show clearly" },
             { word: "Efficient", meaning: "Productive" },
             { word: "Fundamental", meaning: "Basic and essential" },
-            { word: "Versatile", meaning: "Adaptable" }
+            { word: "Versatile", meaning: "Adaptable" },
+            { word: "Perspective", meaning: "Viewpoint" },
+            { word: "Significant", meaning: "Important" },
+            { word: "Accomplish", meaning: "Complete successfully" },
+            { word: "Beneficial", meaning: "Advantageous" },
+            { word: "Implement", meaning: "Put into action" }
         ]
     }
 };

@@ -292,24 +292,193 @@ function retakeExercise(type, index) {
     updateNavigationButtons(type);
 }
 
-// Generate unlimited sentence exercises
+// Hybrid sentence generation: Combines curated data with algorithmic generation
 function generateSentenceExercise(index) {
-    const templates = [
-        { words: ["The", "sun", "is", "shining", "brightly"], correct: "The sun is shining brightly" },
-        { words: ["I", "love", "learning", "new", "things"], correct: "I love learning new things" },
-        { words: ["Practice", "makes", "perfect", "every", "day"], correct: "Practice makes perfect every day" },
-        { words: ["Reading", "books", "expands", "your", "mind"], correct: "Reading books expands your mind" },
-        { words: ["Hard", "work", "leads", "to", "success"], correct: "Hard work leads to success" }
-    ];
+    const difficulty = state.currentDifficulty;
     
-    const baseExercise = templates[index % templates.length];
+    // First, check if we have curated sentences from data.js
+    const curatedExercises = sentenceExercises[difficulty] || [];
+    const curatedCount = curatedExercises.length;
+    
+    // Strategy: Use curated sentences first, then alternate between curated and generated
+    // Pattern: C C C C C G C G C G C G... (where C=Curated, G=Generated)
+    // This ensures users see quality curated content mixed with unlimited variety
+    
+    if (index < curatedCount) {
+        // Use curated sentences for first N exercises
+        return curatedExercises[index];
+    }
+    
+    // After curated sentences, alternate: every 2nd sentence is curated (cycling), others are generated
+    const adjustedIndex = index - curatedCount;
+    const shouldUseCurated = adjustedIndex % 3 === 0; // Every 3rd sentence uses curated (cycling)
+    
+    if (shouldUseCurated && curatedCount > 0) {
+        // Cycle through curated sentences
+        return curatedExercises[adjustedIndex % curatedCount];
+    }
+    
+    // Generate new sentence using templates
+    return generateAlgorithmicSentence(index, difficulty);
+}
+
+// Algorithmic sentence generation with multiple templates
+function generateAlgorithmicSentence(index, difficulty) {
+    // Multiple sentence templates for variety
+    const sentenceTemplates = {
+        basic: [
+            // Template 1: Subject + Verb + Adverb + Place (50 words each = 6.25M combinations)
+            (i) => {
+                const subjects = ["The cat", "My dog", "The bird", "A child", "The teacher", "My friend", "The rabbit", "A butterfly", "The fish", "My sister", "The puppy", "A kitten", "The mouse", "My cousin", "The baby", "A squirrel", "The horse", "My brother", "The duck", "A turtle", "The frog", "A spider", "The bee", "My neighbor", "The ant", "A ladybug", "The owl", "My classmate", "The fox", "A deer", "The bear", "My pet", "The lion", "A tiger", "The elephant", "My uncle", "The monkey", "A panda", "The zebra", "My aunt", "The giraffe", "A kangaroo", "The penguin", "My grandma", "The dolphin", "A whale", "The seal", "My grandpa", "The otter", "A raccoon"];
+                const verbs = ["runs", "jumps", "plays", "walks", "dances", "swims", "flies", "hops", "climbs", "skips", "moves", "travels", "wanders", "explores", "rushes", "strolls", "marches", "glides", "bounces", "races", "jogs", "sprints", "trots", "gallops", "crawls", "slides", "rolls", "spins", "twirls", "leaps", "dives", "soars", "floats", "drifts", "sways", "wobbles", "shuffles", "struts", "prances", "scampers", "darts", "zooms", "speeds", "hurries", "ambles", "meanders", "roams", "ventures", "proceeds", "advances"];
+                const adverbs = ["quickly", "happily", "quietly", "slowly", "carefully", "gracefully", "eagerly", "gently", "freely", "lightly", "swiftly", "smoothly", "steadily", "rapidly", "briskly", "lazily", "calmly", "peacefully", "joyfully", "cheerfully", "merrily", "playfully", "energetically", "vigorously", "actively", "busily", "diligently", "patiently", "cautiously", "nervously", "confidently", "boldly", "bravely", "timidly", "shyly", "proudly", "humbly", "politely", "kindly", "warmly", "tenderly", "lovingly", "sweetly", "softly", "silently", "noisily", "loudly", "wildly", "crazily", "madly"];
+                const places = ["in the park", "at home", "in the garden", "at school", "by the river", "in the forest", "by the lake", "on the hill", "at the beach", "in the city", "near the pond", "at the zoo", "in the meadow", "by the stream", "on the mountain", "at the farm", "in the valley", "by the ocean", "on the island", "at the village", "in the jungle", "by the waterfall", "on the bridge", "at the harbor", "in the desert", "by the canyon", "on the plateau", "at the oasis", "in the woods", "by the creek", "on the cliff", "at the shore", "in the field", "by the bay", "on the path", "at the trail", "in the clearing", "by the marsh", "on the ridge", "at the summit", "in the grove", "by the inlet", "on the slope", "at the peak", "in the thicket", "by the rapids", "on the terrace", "at the lookout", "in the sanctuary", "by the estuary"];
+                return `${subjects[i % 50]} ${verbs[Math.floor(i/50) % 50]} ${adverbs[Math.floor(i/2500) % 50]} ${places[Math.floor(i/125000) % 50]}`;
+            },
+            // Template 2: Subject + Verb + Object + Time (50 words each = 6.25M combinations)
+            (i) => {
+                const subjects = ["The sun", "The moon", "A student", "The flower", "The baby", "A squirrel", "The horse", "My brother", "The duck", "A turtle", "The star", "A cloud", "The tree", "My sister", "The plant", "A seed", "The grass", "My friend", "The rose", "A daisy", "The lily", "My cousin", "The tulip", "A sunflower", "The orchid", "My classmate", "The blossom", "A petal", "The leaf", "My neighbor", "The branch", "A twig", "The root", "My teacher", "The stem", "A bud", "The vine", "My parent", "The shrub", "A bush", "The hedge", "My sibling", "The garden", "A lawn", "The meadow", "My relative", "The field", "A pasture", "The prairie", "My companion"];
+                const verbs = ["shines", "grows", "sleeps", "eats", "rests", "works", "studies", "learns", "teaches", "watches", "blooms", "flourishes", "thrives", "develops", "matures", "expands", "rises", "sets", "glows", "sparkles", "twinkles", "radiates", "beams", "illuminates", "brightens", "warms", "heats", "cools", "refreshes", "nourishes", "feeds", "sustains", "supports", "strengthens", "energizes", "revitalizes", "rejuvenates", "renews", "restores", "heals", "soothes", "comforts", "relaxes", "calms", "quiets", "settles", "stabilizes", "balances", "harmonizes", "unifies"];
+                const objects = ["brightly", "beautifully", "peacefully", "warmly", "kindly", "proudly", "sweetly", "calmly", "wisely", "safely", "gently", "softly", "quietly", "loudly", "clearly", "vividly", "brilliantly", "magnificently", "splendidly", "wonderfully", "marvelously", "gloriously", "radiantly", "luminously", "dazzlingly", "stunningly", "impressively", "remarkably", "notably", "significantly", "considerably", "substantially", "greatly", "immensely", "tremendously", "enormously", "vastly", "hugely", "massively", "extensively", "broadly", "widely", "fully", "completely", "totally", "entirely", "wholly", "absolutely", "perfectly", "flawlessly"];
+                const times = ["every morning", "at night", "during the day", "in the evening", "at dawn", "at sunset", "all day long", "throughout the year", "in springtime", "during winter", "in summer", "during autumn", "at noon", "at midnight", "in the afternoon", "during twilight", "at dusk", "throughout the season", "in the fall", "during harvest", "at sunrise", "throughout the month", "in January", "during February", "at Easter", "throughout December", "in the weekend", "during holidays", "at Christmas", "throughout vacation", "in the morning", "during breakfast", "at lunchtime", "throughout dinner", "in the daytime", "during nighttime", "at bedtime", "throughout naptime", "in the early hours", "during late hours", "at prime time", "throughout rush hour", "in the quiet hours", "during peak season", "at off-peak times", "throughout busy periods", "in leisure time", "during work hours", "at closing time", "throughout opening hours"];
+                return `${subjects[i % 50]} ${verbs[Math.floor(i/50) % 50]} ${objects[Math.floor(i/2500) % 50]} ${times[Math.floor(i/125000) % 50]}`;
+            },
+            // Template 3: Subject + Verb + Adjective + Noun (50 words each = 6.25M combinations)
+            (i) => {
+                const subjects = ["The children", "My friends", "The students", "The birds", "The flowers", "The trees", "The clouds", "The stars", "The animals", "The people", "The kids", "My family", "The learners", "The butterflies", "The plants", "The forests", "The skies", "The planets", "The creatures", "The citizens", "The toddlers", "My relatives", "The pupils", "The insects", "The gardens", "The mountains", "The heavens", "The galaxies", "The beings", "The residents", "The youngsters", "My neighbors", "The scholars", "The bees", "The orchards", "The hills", "The atmospheres", "The universes", "The organisms", "The inhabitants", "The teenagers", "My colleagues", "The apprentices", "The ants", "The farms", "The valleys", "The spaces", "The worlds", "The species", "The communities"];
+                const verbs = ["love", "enjoy", "appreciate", "admire", "explore", "discover", "create", "build", "share", "celebrate", "cherish", "treasure", "value", "embrace", "welcome", "accept", "respect", "honor", "praise", "recognize", "acknowledge", "understand", "comprehend", "grasp", "realize", "perceive", "observe", "notice", "see", "witness", "experience", "feel", "sense", "detect", "identify", "find", "locate", "seek", "search", "hunt", "pursue", "chase", "follow", "track", "trace", "investigate", "examine", "study", "analyze", "evaluate"];
+                const adjectives = ["beautiful", "wonderful", "amazing", "exciting", "interesting", "colorful", "peaceful", "joyful", "special", "magical", "fantastic", "incredible", "spectacular", "magnificent", "splendid", "gorgeous", "stunning", "breathtaking", "remarkable", "extraordinary", "exceptional", "outstanding", "superb", "excellent", "marvelous", "fabulous", "terrific", "awesome", "brilliant", "dazzling", "radiant", "glorious", "delightful", "charming", "lovely", "pleasant", "enjoyable", "entertaining", "fascinating", "captivating", "enchanting", "mesmerizing", "intriguing", "compelling", "engaging", "absorbing", "gripping", "thrilling", "exhilarating", "electrifying"];
+                const nouns = ["moments", "experiences", "adventures", "stories", "memories", "places", "activities", "games", "songs", "dreams", "times", "occasions", "events", "happenings", "incidents", "episodes", "chapters", "periods", "phases", "stages", "journeys", "trips", "voyages", "expeditions", "quests", "missions", "ventures", "undertakings", "endeavors", "pursuits", "projects", "tasks", "assignments", "challenges", "opportunities", "possibilities", "prospects", "chances", "options", "choices", "selections", "preferences", "favorites", "treasures", "gems", "jewels", "prizes", "rewards", "gifts", "blessings"];
+                return `${subjects[i % 50]} ${verbs[Math.floor(i/50) % 50]} ${adjectives[Math.floor(i/2500) % 50]} ${nouns[Math.floor(i/125000) % 50]}`;
+            },
+            // Template 4: Time + Subject + Verb + Place (50 words each = 6.25M combinations)
+            (i) => {
+                const times = ["Every day", "Sometimes", "Often", "Usually", "Always", "Frequently", "Occasionally", "Regularly", "Daily", "Weekly", "Monthly", "Yearly", "Annually", "Seasonally", "Periodically", "Constantly", "Continuously", "Repeatedly", "Routinely", "Habitually", "Typically", "Normally", "Generally", "Commonly", "Ordinarily", "Customarily", "Traditionally", "Conventionally", "Standardly", "Universally", "Consistently", "Steadily", "Reliably", "Dependably", "Predictably", "Unfailingly", "Invariably", "Perpetually", "Endlessly", "Ceaselessly", "Incessantly", "Unceasingly", "Unremittingly", "Persistently", "Continually", "Eternally", "Everlastingly", "Permanently", "Forever", "Indefinitely"];
+                const subjects = ["we", "they", "people", "students", "children", "friends", "families", "teachers", "neighbors", "visitors", "folks", "individuals", "persons", "learners", "kids", "companions", "relatives", "educators", "residents", "guests", "citizens", "members", "participants", "attendees", "observers", "spectators", "audiences", "crowds", "groups", "teams", "classes", "communities", "societies", "populations", "generations", "youngsters", "adults", "seniors", "elders", "youth", "teenagers", "toddlers", "infants", "babies", "colleagues", "coworkers", "partners", "associates", "peers", "classmates"];
+                const verbs = ["meet", "gather", "play", "work", "study", "practice", "exercise", "relax", "chat", "laugh", "talk", "discuss", "converse", "communicate", "interact", "socialize", "mingle", "network", "connect", "bond", "unite", "join", "assemble", "congregate", "convene", "collaborate", "cooperate", "coordinate", "organize", "arrange", "plan", "prepare", "train", "rehearse", "perform", "present", "demonstrate", "show", "display", "exhibit", "share", "exchange", "trade", "swap", "give", "receive", "offer", "provide", "supply", "deliver"];
+                const places = ["in the library", "at the playground", "in the classroom", "at the gym", "in the cafeteria", "at the museum", "in the auditorium", "at the stadium", "in the laboratory", "at the workshop", "in the theater", "at the arena", "in the hall", "at the center", "in the studio", "at the gallery", "in the office", "at the clinic", "in the hospital", "at the store", "in the mall", "at the market", "in the plaza", "at the square", "in the courtyard", "at the pavilion", "in the lobby", "at the foyer", "in the lounge", "at the terrace", "in the balcony", "at the rooftop", "in the basement", "at the attic", "in the garage", "at the shed", "in the barn", "at the stable", "in the kennel", "at the coop", "in the pen", "at the enclosure", "in the compound", "at the complex", "in the facility", "at the venue", "in the location", "at the site", "in the spot", "at the destination"];
+                return `${times[i % 50]} ${subjects[Math.floor(i/50) % 50]} ${verbs[Math.floor(i/2500) % 50]} ${places[Math.floor(i/125000) % 50]}`;
+            },
+            // Template 5: Subject + Can + Verb + Object + Place (50 words each = 6.25M combinations)
+            (i) => {
+                const subjects = ["I", "You", "We", "She", "He", "They", "Everyone", "Someone", "Anyone", "Nobody", "Somebody", "Anybody", "One", "People", "Folks", "Individuals", "Students", "Children", "Adults", "Teachers", "Friends", "Family", "Neighbors", "Visitors", "Guests", "Citizens", "Members", "Participants", "Observers", "Learners", "Scholars", "Experts", "Professionals", "Specialists", "Practitioners", "Workers", "Employees", "Staff", "Personnel", "Crew", "Team", "Group", "Class", "Community", "Society", "Population", "Generation", "Youth", "Seniors", "Elders"];
+                const verbs = ["see", "hear", "feel", "smell", "taste", "touch", "sense", "notice", "observe", "perceive", "detect", "recognize", "identify", "spot", "find", "discover", "locate", "pinpoint", "distinguish", "discern", "understand", "comprehend", "grasp", "realize", "appreciate", "value", "enjoy", "experience", "witness", "watch", "view", "behold", "glimpse", "spy", "catch", "note", "mark", "register", "record", "remember", "recall", "recollect", "reminisce", "reflect", "ponder", "consider", "contemplate", "meditate", "think", "imagine"];
+                const objects = ["the beauty", "the music", "the warmth", "the fragrance", "the sweetness", "the softness", "the energy", "the difference", "the change", "the improvement", "the progress", "the development", "the growth", "the advancement", "the evolution", "the transformation", "the modification", "the alteration", "the variation", "the diversity", "the variety", "the richness", "the abundance", "the wealth", "the treasure", "the value", "the worth", "the significance", "the importance", "the meaning", "the purpose", "the essence", "the nature", "the quality", "the character", "the spirit", "the soul", "the heart", "the core", "the center", "the focus", "the point", "the detail", "the aspect", "the feature", "the element", "the component", "the part", "the piece", "the fragment"];
+                const places = ["around us", "everywhere", "nearby", "in nature", "in the air", "all around", "in the distance", "close by", "far away", "right here", "over there", "up above", "down below", "straight ahead", "behind us", "beside us", "next to us", "near us", "around here", "in this place", "at this spot", "in this area", "within reach", "at hand", "in sight", "in view", "on display", "in plain sight", "before us", "in front", "to the side", "on the left", "on the right", "in the middle", "at the center", "on the edge", "at the border", "on the boundary", "at the limit", "in the vicinity", "in the neighborhood", "in the region", "in the zone", "in the sector", "in the district", "in the quarter", "in the locality", "in the territory", "in the domain", "in the realm"];
+                return `${subjects[i % 50]} can ${verbs[Math.floor(i/50) % 50]} ${objects[Math.floor(i/2500) % 50]} ${places[Math.floor(i/125000) % 50]}`;
+            }
+        ],
+        intermediate: [
+            // Template 1: Subject + Verb + Object + Modifier
+            (i) => {
+                const subjects = ["Success", "Learning", "Practice", "Knowledge", "Experience", "Teamwork", "Patience", "Creativity", "Dedication", "Understanding"];
+                const verbs = ["requires", "develops", "improves", "enhances", "builds", "creates", "strengthens", "promotes", "encourages", "demonstrates"];
+                const objects = ["hard work", "time and effort", "consistent practice", "careful planning", "strong focus", "clear goals", "good habits", "positive thinking", "effective strategies", "continuous learning"];
+                const modifiers = ["and dedication", "and patience", "over time", "through practice", "every day", "gradually", "systematically", "effectively", "successfully", "remarkably"];
+                return `${subjects[i % 10]} ${verbs[Math.floor(i/10) % 10]} ${objects[Math.floor(i/100) % 10]} ${modifiers[Math.floor(i/1000) % 10]}`;
+            },
+            // Template 2: Gerund + Verb + Object + Result
+            (i) => {
+                const gerunds = ["Reading", "Writing", "Practicing", "Studying", "Exercising", "Planning", "Organizing", "Communicating", "Collaborating", "Reflecting"];
+                const verbs = ["helps", "enables", "allows", "supports", "facilitates", "encourages", "promotes", "fosters", "develops", "improves"];
+                const objects = ["us", "people", "students", "learners", "individuals", "teams", "everyone", "professionals", "beginners", "experts"];
+                const results = ["achieve goals", "gain knowledge", "build skills", "grow personally", "succeed professionally", "think critically", "solve problems", "make progress", "reach potential", "excel academically"];
+                return `${gerunds[i % 10]} ${verbs[Math.floor(i/10) % 10]} ${objects[Math.floor(i/100) % 10]} ${results[Math.floor(i/1000) % 10]}`;
+            },
+            // Template 3: Subject + Must + Verb + To + Infinitive
+            (i) => {
+                const subjects = ["We", "Students", "Learners", "People", "Everyone", "Individuals", "Teams", "Organizations", "Communities", "Societies"];
+                const verbs = ["work", "strive", "try", "aim", "endeavor", "attempt", "seek", "aspire", "commit", "dedicate"];
+                const adverbs = ["hard", "diligently", "consistently", "persistently", "continuously", "actively", "earnestly", "seriously", "carefully", "thoughtfully"];
+                const goals = ["to improve", "to succeed", "to excel", "to achieve", "to grow", "to develop", "to advance", "to progress", "to learn", "to master"];
+                return `${subjects[i % 10]} must ${verbs[Math.floor(i/10) % 10]} ${adverbs[Math.floor(i/100) % 10]} ${goals[Math.floor(i/1000) % 10]}`;
+            },
+            // Template 4: The key to + Noun + Is + Gerund
+            (i) => {
+                const concepts = ["success", "happiness", "growth", "improvement", "achievement", "excellence", "mastery", "wisdom", "fulfillment", "prosperity"];
+                const gerunds = ["practicing", "learning", "working", "studying", "planning", "organizing", "communicating", "collaborating", "persevering", "adapting"];
+                const adverbs = ["consistently", "regularly", "diligently", "carefully", "thoughtfully", "systematically", "effectively", "efficiently", "wisely", "strategically"];
+                const contexts = ["in all areas", "throughout life", "every single day", "with dedication", "with purpose", "with passion", "with focus", "with determination", "with commitment", "with enthusiasm"];
+                return `The key to ${concepts[i % 10]} is ${gerunds[Math.floor(i/10) % 10]} ${adverbs[Math.floor(i/100) % 10]} ${contexts[Math.floor(i/1000) % 10]}`;
+            },
+            // Template 5: By + Gerund + We Can + Verb
+            (i) => {
+                const gerunds = ["practicing", "studying", "working", "learning", "reading", "writing", "listening", "observing", "analyzing", "reflecting"];
+                const adverbs = ["regularly", "daily", "consistently", "carefully", "thoroughly", "actively", "attentively", "mindfully", "purposefully", "intentionally"];
+                const verbs = ["improve", "enhance", "develop", "strengthen", "build", "expand", "deepen", "refine", "perfect", "master"];
+                const objects = ["our skills", "our knowledge", "our abilities", "our understanding", "our expertise", "our competence", "our proficiency", "our capabilities", "our performance", "our potential"];
+                return `By ${gerunds[i % 10]} ${adverbs[Math.floor(i/10) % 10]} we can ${verbs[Math.floor(i/100) % 10]} ${objects[Math.floor(i/1000) % 10]}`;
+            }
+        ],
+        medium: [
+            // Template 1: Subject + Verb + Object + Context
+            (i) => {
+                const subjects = ["Effective communication", "Critical thinking", "Strategic planning", "Professional development", "Continuous improvement", "Innovation", "Collaboration", "Leadership", "Problem solving", "Decision making"];
+                const verbs = ["enhances", "develops", "requires", "promotes", "facilitates", "strengthens", "improves", "demonstrates", "encourages", "establishes"];
+                const objects = ["productivity and efficiency", "analytical skills", "careful analysis", "professional growth", "team performance", "organizational success", "creative solutions", "positive outcomes", "sustainable practices", "long-term goals"];
+                const contexts = ["in modern organizations", "through systematic approaches", "across diverse teams", "in complex environments", "for better results", "strategically", "comprehensively", "proactively", "consistently", "sustainably"];
+                return `${subjects[i % 10]} ${verbs[Math.floor(i/10) % 10]} ${objects[Math.floor(i/100) % 10]} ${contexts[Math.floor(i/1000) % 10]}`;
+            },
+            // Template 2: Organizations that + Verb + Object + Achieve + Result
+            (i) => {
+                const verbs = ["prioritize", "emphasize", "focus on", "invest in", "commit to", "embrace", "implement", "adopt", "integrate", "leverage"];
+                const objects = ["innovation", "collaboration", "quality", "excellence", "efficiency", "sustainability", "diversity", "transparency", "accountability", "agility"];
+                const adverbs = ["consistently", "effectively", "successfully", "strategically", "systematically", "proactively", "continuously", "comprehensively", "holistically", "dynamically"];
+                const results = ["achieve superior results", "gain competitive advantages", "drive organizational success", "create lasting value", "maximize performance", "optimize outcomes", "enhance capabilities", "build strong foundations", "foster growth", "ensure sustainability"];
+                return `Organizations that ${verbs[i % 10]} ${objects[Math.floor(i/10) % 10]} ${adverbs[Math.floor(i/100) % 10]} ${results[Math.floor(i/1000) % 10]}`;
+            },
+            // Template 3: The ability to + Verb + Is crucial for + Context
+            (i) => {
+                const verbs = ["adapt", "innovate", "collaborate", "communicate", "analyze", "strategize", "execute", "optimize", "integrate", "transform"];
+                const adverbs = ["quickly", "effectively", "efficiently", "successfully", "strategically", "systematically", "proactively", "continuously", "comprehensively", "dynamically"];
+                const contexts = ["organizational success", "competitive advantage", "sustainable growth", "market leadership", "operational excellence", "business transformation", "strategic objectives", "long-term viability", "continuous improvement", "stakeholder value"];
+                const environments = ["in today's business environment", "in rapidly changing markets", "in complex organizations", "in global contexts", "in competitive landscapes", "in modern enterprises", "in dynamic industries", "in evolving sectors", "in challenging conditions", "in uncertain times"];
+                return `The ability to ${verbs[i % 10]} ${adverbs[Math.floor(i/10) % 10]} is crucial for ${contexts[Math.floor(i/100) % 10]} ${environments[Math.floor(i/1000) % 10]}`;
+            },
+            // Template 4: Successful + Noun + Requires + Gerund + And + Gerund
+            (i) => {
+                const nouns = ["leadership", "management", "implementation", "execution", "transformation", "innovation", "collaboration", "communication", "development", "optimization"];
+                const gerund1 = ["understanding", "analyzing", "planning", "organizing", "coordinating", "integrating", "aligning", "balancing", "prioritizing", "managing"];
+                const gerund2 = ["implementing", "executing", "monitoring", "evaluating", "adjusting", "optimizing", "improving", "refining", "enhancing", "sustaining"];
+                const objects = ["complex systems", "diverse stakeholders", "strategic objectives", "organizational goals", "business processes", "team dynamics", "resource allocation", "performance metrics", "quality standards", "operational efficiency"];
+                return `Successful ${nouns[i % 10]} requires ${gerund1[Math.floor(i/10) % 10]} and ${gerund2[Math.floor(i/100) % 10]} ${objects[Math.floor(i/1000) % 10]}`;
+            },
+            // Template 5: In order to + Verb + Organizations must + Verb + Object
+            (i) => {
+                const goals = ["achieve excellence", "maintain competitiveness", "drive innovation", "ensure sustainability", "maximize value", "optimize performance", "enhance capabilities", "build resilience", "foster growth", "create impact"];
+                const verbs = ["develop", "implement", "establish", "maintain", "strengthen", "enhance", "optimize", "integrate", "leverage", "cultivate"];
+                const objects = ["robust strategies", "effective processes", "strong capabilities", "clear frameworks", "comprehensive systems", "dynamic approaches", "innovative solutions", "collaborative cultures", "agile methodologies", "sustainable practices"];
+                const contexts = ["across all levels", "throughout the organization", "in all departments", "at every stage", "in every function", "across diverse teams", "within all operations", "through all channels", "in all initiatives", "across the enterprise"];
+                return `In order to ${goals[i % 10]} organizations must ${verbs[Math.floor(i/10) % 10]} ${objects[Math.floor(i/100) % 10]} ${contexts[Math.floor(i/1000) % 10]}`;
+            }
+        ]
+    };
+    
+    const templates = sentenceTemplates[difficulty] || sentenceTemplates.basic;
+    
+    // Select template based on index to ensure variety
+    const templateIndex = index % templates.length;
+    const templateFunction = templates[templateIndex];
+    
+    // Generate sentence using selected template
+    const sentence = templateFunction(Math.floor(index / templates.length));
+    const words = sentence.split(' ');
+    
+    const baseExercise = {
+        words: words,
+        correct: sentence
+    };
+    
     return {
         words: baseExercise.words,
         correct: baseExercise.correct,
         fillBlank: {
-            sentence: baseExercise.correct.replace(baseExercise.words[1], "___"),
-            answer: baseExercise.words[1],
-            options: [baseExercise.words[1], "other", "word", "test"]
+            sentence: baseExercise.correct.replace(baseExercise.words[Math.floor(baseExercise.words.length / 2)], "___"),
+            answer: baseExercise.words[Math.floor(baseExercise.words.length / 2)],
+            options: [
+                baseExercise.words[Math.floor(baseExercise.words.length / 2)],
+                "other", "word", "test"
+            ].sort(() => Math.random() - 0.5)
         }
     };
 }
@@ -1104,16 +1273,121 @@ function getComparisonBadge(current, average) {
 // VOCABULARY SECTION
 // ============================================
 
+// Generate unlimited vocabulary words algorithmically
+function generateVocabularyWord(index, difficulty) {
+    const wordTemplates = {
+        basic: {
+            prefixes: ["", "un", "re", "pre", "dis"],
+            roots: ["happy", "kind", "clear", "bright", "quick", "soft", "warm", "cool", "fresh", "clean", "safe", "calm", "fair", "pure", "wise", "bold", "keen", "mild", "neat", "rich"],
+            suffixes: ["", "ly", "ness", "ful", "less"],
+            adjectives: ["joyful", "peaceful", "helpful", "careful", "cheerful", "grateful", "hopeful", "playful", "useful", "wonderful", "colorful", "powerful", "beautiful", "meaningful", "successful", "thoughtful", "respectful", "delightful", "graceful", "skillful"],
+            nouns: ["joy", "peace", "hope", "love", "trust", "faith", "care", "help", "light", "warmth", "smile", "dream", "gift", "friend", "home", "heart", "life", "time", "day", "way"],
+            verbs: ["help", "learn", "play", "work", "read", "write", "speak", "listen", "think", "know", "feel", "see", "hear", "touch", "taste", "smell", "walk", "run", "jump", "dance"]
+        },
+        intermediate: {
+            words: ["achieve", "believe", "create", "develop", "explore", "improve", "inspire", "motivate", "organize", "practice", "progress", "realize", "succeed", "understand", "accomplish", "contribute", "demonstrate", "encourage", "facilitate", "participate"],
+            concepts: ["achievement", "belief", "creation", "development", "exploration", "improvement", "inspiration", "motivation", "organization", "practice", "progress", "realization", "success", "understanding", "accomplishment", "contribution", "demonstration", "encouragement", "facilitation", "participation"]
+        },
+        medium: {
+            words: ["analyze", "collaborate", "demonstrate", "evaluate", "implement", "integrate", "optimize", "synthesize", "transform", "validate", "articulate", "conceptualize", "differentiate", "elaborate", "formulate", "hypothesize", "illustrate", "justify", "negotiate", "prioritize"],
+            abstract: ["analysis", "collaboration", "demonstration", "evaluation", "implementation", "integration", "optimization", "synthesis", "transformation", "validation", "articulation", "conceptualization", "differentiation", "elaboration", "formulation", "hypothesis", "illustration", "justification", "negotiation", "prioritization"]
+        }
+    };
+    
+    const templates = wordTemplates[difficulty];
+    let word, definition, example;
+    
+    if (difficulty === 'basic') {
+        const wordType = index % 3; // 0=adjective, 1=noun, 2=verb
+        if (wordType === 0) {
+            word = templates.adjectives[index % templates.adjectives.length];
+            definition = `Describing something in a positive way`;
+            example = `The ${word} person made everyone smile.`;
+        } else if (wordType === 1) {
+            word = templates.nouns[Math.floor(index / 3) % templates.nouns.length];
+            definition = `A concept or thing that is important in life`;
+            example = `${word.charAt(0).toUpperCase() + word.slice(1)} is something we all need.`;
+        } else {
+            word = templates.verbs[Math.floor(index / 3) % templates.verbs.length];
+            definition = `An action that people do regularly`;
+            example = `I ${word} every day to improve myself.`;
+        }
+    } else if (difficulty === 'intermediate') {
+        const wordType = index % 2;
+        if (wordType === 0) {
+            word = templates.words[index % templates.words.length];
+            definition = `To engage in an action that leads to growth or improvement`;
+            example = `When you ${word}, you become better at what you do.`;
+        } else {
+            word = templates.concepts[Math.floor(index / 2) % templates.concepts.length];
+            definition = `A concept related to personal or professional development`;
+            example = `${word.charAt(0).toUpperCase() + word.slice(1)} is key to success.`;
+        }
+    } else {
+        const wordType = index % 2;
+        if (wordType === 0) {
+            word = templates.words[index % templates.words.length];
+            definition = `To perform a complex action requiring skill and understanding`;
+            example = `Professionals ${word} strategies to achieve organizational goals.`;
+        } else {
+            word = templates.abstract[Math.floor(index / 2) % templates.abstract.length];
+            definition = `An abstract concept important in professional contexts`;
+            example = `${word.charAt(0).toUpperCase() + word.slice(1)} requires careful consideration and expertise.`;
+        }
+    }
+    
+    // Generate quiz options
+    const wrongOptions = ["Something unrelated", "The opposite meaning", "A different concept"];
+    const options = [definition, ...wrongOptions].sort(() => Math.random() - 0.5);
+    
+    return {
+        word: word.charAt(0).toUpperCase() + word.slice(1),
+        pronunciation: `/${word}/`,
+        definition: definition,
+        example: example,
+        quiz: {
+            question: `What does '${word}' mean?`,
+            options: options,
+            correct: options.indexOf(definition)
+        }
+    };
+}
+
 async function loadVocabularyWord() {
     const localWords = vocabularyData[state.currentDifficulty];
-    const currentWord = localWords[state.currentWordIndex % localWords.length];
+    const curatedCount = localWords.length;
+    
+    let currentWord;
+    
+    // Hybrid approach: use curated first, then alternate
+    if (state.currentWordIndex < curatedCount) {
+        currentWord = localWords[state.currentWordIndex];
+    } else {
+        const adjustedIndex = state.currentWordIndex - curatedCount;
+        const shouldUseCurated = adjustedIndex % 3 === 0;
+        
+        if (shouldUseCurated && curatedCount > 0) {
+            currentWord = localWords[adjustedIndex % curatedCount];
+        } else {
+            // Generate new vocabulary word
+            currentWord = generateVocabularyWord(state.currentWordIndex, state.currentDifficulty);
+        }
+    }
 
     // Show loading indicator
     LoadingIndicator.show('vocabulary', 'Loading word...');
     document.getElementById('currentWord').textContent = 'Loading...';
 
     try {
-        const wordData = await fetchWordData(currentWord.word);
+        // Try to fetch from API if it's a curated word
+        let wordData;
+        if (state.currentWordIndex < curatedCount) {
+            wordData = await fetchWordData(currentWord.word);
+        } else {
+            // Use generated word data directly
+            wordData = currentWord;
+        }
+        
         document.getElementById('currentWord').textContent = wordData.word;
         document.getElementById('pronunciation').textContent = wordData.pronunciation;
         document.getElementById('definition').textContent = wordData.definition;
@@ -1494,9 +1768,38 @@ function initializeSentenceButtons() {
     };
     
     document.getElementById('resetSentence').onclick = () => {
-        loadSentenceExercise();
+        // Reset the current exercise without changing to a new one
+        state.sentenceAttempts = 0;
+        state.sentenceHintUsed = false;
+        hideHintButton();
+        
+        // Clear feedback and hint
         document.getElementById('sentenceFeedback').classList.remove('visible');
         document.getElementById('hintDisplay').classList.remove('visible');
+        
+        // Reload the same exercise (don't increment index)
+        const difficulty = state.currentDifficulty;
+        const exercises = sentenceExercises[difficulty];
+        let exercise;
+        
+        if (state.currentSentenceIndex < exercises.length) {
+            exercise = exercises[state.currentSentenceIndex];
+        } else {
+            exercise = generateSentenceExercise(state.currentSentenceIndex);
+        }
+        
+        state.currentExercise = exercise;
+        
+        // Determine which exercise type is currently visible and reload it
+        if (document.getElementById('dragDropContainer').style.display === 'block') {
+            loadDragDropSentence(exercise);
+        } else if (document.getElementById('fillBlankExerciseContainer').style.display === 'block') {
+            loadFillBlankExercise(exercise.fillBlank);
+        } else if (document.getElementById('multipleChoiceContainer').style.display === 'block') {
+            loadMultipleChoiceSentence(exercise);
+        } else if (document.getElementById('reorderContainer').style.display === 'block') {
+            loadReorderSentence(exercise);
+        }
     };
     
     document.getElementById('prevSentence').onclick = () => {
@@ -1595,9 +1898,147 @@ function showSentenceHint() {
 // READING SECTION
 // ============================================
 
+// Generate algorithmic reading passages for unlimited content
+function generateReadingPassage(index, difficulty) {
+    const passageTemplates = {
+        basic: [
+            (i) => {
+                const subjects = ["The park", "My school", "Our garden", "The library", "The beach"];
+                const activities = ["is a wonderful place", "has many things", "is very special", "makes me happy", "is my favorite"];
+                const details = ["Children play there every day", "I visit it often", "Everyone enjoys it", "It is always clean", "People are friendly there"];
+                const feelings = ["I feel happy when I go there", "It makes me smile", "I love spending time there", "It is a peaceful place", "I always have fun there"];
+                
+                const subject = subjects[i % subjects.length];
+                const activity = activities[Math.floor(i / subjects.length) % activities.length];
+                const detail = details[Math.floor(i / (subjects.length * activities.length)) % details.length];
+                const feeling = feelings[Math.floor(i / (subjects.length * activities.length * details.length)) % feelings.length];
+                
+                return {
+                    title: subject,
+                    text: `${subject} ${activity}. ${detail}. ${feeling}. I go there whenever I can. It is a great place to be.`,
+                    questions: [
+                        {
+                            question: `What is special about ${subject.toLowerCase()}?`,
+                            options: ["Nothing", "It is wonderful", "It is boring", "It is far away"],
+                            correct: 1
+                        },
+                        {
+                            question: "How does the narrator feel?",
+                            options: ["Sad", "Happy", "Angry", "Tired"],
+                            correct: 1
+                        },
+                        {
+                            question: "Does the narrator visit often?",
+                            options: ["No", "Yes", "Never", "Sometimes"],
+                            correct: 1
+                        }
+                    ],
+                    dictation: feeling
+                };
+            }
+        ],
+        intermediate: [
+            (i) => {
+                const topics = ["Reading books", "Learning languages", "Helping others", "Staying healthy", "Being creative"];
+                const benefits = ["improves your mind", "opens new opportunities", "makes a difference", "keeps you strong", "develops your talents"];
+                const examples = ["Many successful people read daily", "Bilingual people have more job options", "Small acts of kindness matter", "Exercise and good food are key", "Artists practice their skills regularly"];
+                const conclusions = ["It is worth the effort", "You will see positive results", "Everyone can benefit from this", "Start today and be consistent", "The rewards are significant"];
+                
+                const topic = topics[i % topics.length];
+                const benefit = benefits[Math.floor(i / topics.length) % benefits.length];
+                const example = examples[Math.floor(i / (topics.length * benefits.length)) % examples.length];
+                const conclusion = conclusions[Math.floor(i / (topics.length * benefits.length * examples.length)) % conclusions.length];
+                
+                return {
+                    title: `The Value of ${topic}`,
+                    text: `${topic} ${benefit}. When you engage in this activity, you grow as a person. ${example}. This shows how important it is. ${conclusion}. Remember, consistent practice leads to improvement.`,
+                    questions: [
+                        {
+                            question: `What does ${topic.toLowerCase()} do?`,
+                            options: ["Nothing", "Improves you", "Wastes time", "Costs money"],
+                            correct: 1
+                        },
+                        {
+                            question: "What is needed for improvement?",
+                            options: ["Luck", "Consistent practice", "Money", "Talent only"],
+                            correct: 1
+                        },
+                        {
+                            question: "Who can benefit?",
+                            options: ["No one", "Everyone", "Only experts", "Only children"],
+                            correct: 1
+                        }
+                    ],
+                    dictation: conclusion
+                };
+            }
+        ],
+        medium: [
+            (i) => {
+                const concepts = ["Effective communication", "Strategic thinking", "Continuous learning", "Team collaboration", "Problem solving"];
+                const importance = ["is essential in professional environments", "drives organizational success", "ensures long-term growth", "creates competitive advantages", "leads to innovative solutions"];
+                const applications = ["Leaders who communicate well inspire their teams", "Strategic planners anticipate future challenges", "Lifelong learners adapt to change", "Collaborative teams achieve more together", "Analytical thinkers find creative solutions"];
+                const implications = ["Organizations that prioritize this succeed", "Individuals who develop this skill advance", "Companies that embrace this thrive", "Teams that practice this excel", "Professionals who master this lead"];
+                
+                const concept = concepts[i % concepts.length];
+                const imp = importance[Math.floor(i / concepts.length) % importance.length];
+                const app = applications[Math.floor(i / (concepts.length * importance.length)) % applications.length];
+                const impl = implications[Math.floor(i / (concepts.length * importance.length * applications.length)) % implications.length];
+                
+                return {
+                    title: concept,
+                    text: `${concept} ${imp}. In today's dynamic business landscape, this capability has become increasingly valuable. ${app}. This demonstrates the practical impact of developing such competencies. ${impl}. Therefore, investing time and resources in building these skills yields significant returns.`,
+                    questions: [
+                        {
+                            question: `Why is ${concept.toLowerCase()} important?`,
+                            options: ["It is not important", "It is essential for success", "It is optional", "It is outdated"],
+                            correct: 1
+                        },
+                        {
+                            question: "What happens to organizations that prioritize this?",
+                            options: ["They fail", "They succeed", "Nothing changes", "They struggle"],
+                            correct: 1
+                        },
+                        {
+                            question: "What does investing in these skills yield?",
+                            options: ["Nothing", "Significant returns", "Losses", "Confusion"],
+                            correct: 1
+                        }
+                    ],
+                    dictation: impl
+                };
+            }
+        ]
+    };
+    
+    const templates = passageTemplates[difficulty] || passageTemplates.basic;
+    const templateIndex = index % templates.length;
+    const templateFunction = templates[templateIndex];
+    
+    return templateFunction(Math.floor(index / templates.length));
+}
+
 function loadReadingPassage() {
-    const passages = readingPassages[state.currentDifficulty];
-    const passage = passages[state.currentPassageIndex % passages.length];
+    const curatedPassages = readingPassages[state.currentDifficulty];
+    const curatedCount = curatedPassages.length;
+    
+    let passage;
+    
+    // Strategy: Use curated for first N, then alternate between curated and generated
+    if (state.currentPassageIndex < curatedCount) {
+        passage = curatedPassages[state.currentPassageIndex];
+    } else {
+        const adjustedIndex = state.currentPassageIndex - curatedCount;
+        const shouldUseCurated = adjustedIndex % 3 === 0;
+        
+        if (shouldUseCurated && curatedCount > 0) {
+            passage = curatedPassages[adjustedIndex % curatedCount];
+        } else {
+            // Generate new reading passage
+            passage = generateReadingPassage(state.currentPassageIndex, state.currentDifficulty);
+        }
+    }
+    
     document.getElementById('passageTitle').textContent = passage.title;
     document.getElementById('passageText').textContent = passage.text;
     loadComprehensionQuestions(passage.questions);
@@ -1745,8 +2186,28 @@ function initializeReadingButtons() {
 // ============================================
 
 function loadListeningExercise() {
-    const exercises = listeningExercises[state.currentDifficulty];
-    const sentence = exercises[state.currentListeningIndex % exercises.length];
+    // Use hybrid approach: curated sentences + generated sentences
+    const curatedExercises = listeningExercises[state.currentDifficulty];
+    const curatedCount = curatedExercises.length;
+    
+    let sentence;
+    
+    // Strategy: Use curated for first N, then alternate between curated and generated
+    if (state.currentListeningIndex < curatedCount) {
+        sentence = curatedExercises[state.currentListeningIndex];
+    } else {
+        const adjustedIndex = state.currentListeningIndex - curatedCount;
+        const shouldUseCurated = adjustedIndex % 3 === 0;
+        
+        if (shouldUseCurated && curatedCount > 0) {
+            sentence = curatedExercises[adjustedIndex % curatedCount];
+        } else {
+            // Generate new listening sentence using sentence generation templates
+            const exercise = generateAlgorithmicSentence(state.currentListeningIndex, state.currentDifficulty);
+            sentence = exercise.correct;
+        }
+    }
+    
     document.getElementById('listenSentence').textContent = sentence;
     document.getElementById('playListening').dataset.text = sentence;
     const words = vocabularyData[state.currentDifficulty];
@@ -2068,8 +2529,87 @@ function initializeScrambleButtons() {
     document.getElementById('nextScramble').onclick = loadWordScramble;
 }
 
+// Generate unlimited matching pairs
+function generateMatchingPairs(index, difficulty) {
+    const pairPools = {
+        basic: [
+            { word: "Happy", meaning: "Feeling joyful" },
+            { word: "Friend", meaning: "Someone you like" },
+            { word: "Learn", meaning: "Gain knowledge" },
+            { word: "Beautiful", meaning: "Pleasing to look at" },
+            { word: "Family", meaning: "Related people" },
+            { word: "Kind", meaning: "Friendly and caring" },
+            { word: "Help", meaning: "Assist someone" },
+            { word: "Smile", meaning: "Happy expression" },
+            { word: "Play", meaning: "Have fun" },
+            { word: "Dream", meaning: "Hope or vision" },
+            { word: "Peace", meaning: "Calm state" },
+            { word: "Trust", meaning: "Belief in someone" },
+            { word: "Love", meaning: "Deep affection" },
+            { word: "Hope", meaning: "Positive expectation" },
+            { word: "Joy", meaning: "Great happiness" }
+        ],
+        intermediate: [
+            { word: "Achieve", meaning: "Reach a goal" },
+            { word: "Challenge", meaning: "Difficult task" },
+            { word: "Develop", meaning: "Grow and improve" },
+            { word: "Important", meaning: "Significant" },
+            { word: "Success", meaning: "Achievement" },
+            { word: "Knowledge", meaning: "Information and skills" },
+            { word: "Opportunity", meaning: "Favorable chance" },
+            { word: "Practice", meaning: "Repeated exercise" },
+            { word: "Understand", meaning: "Comprehend" },
+            { word: "Environment", meaning: "Surroundings" },
+            { word: "Improve", meaning: "Make better" },
+            { word: "Progress", meaning: "Forward movement" },
+            { word: "Creative", meaning: "Imaginative" },
+            { word: "Confident", meaning: "Self-assured" },
+            { word: "Motivate", meaning: "Inspire action" }
+        ],
+        medium: [
+            { word: "Collaborate", meaning: "Work together" },
+            { word: "Demonstrate", meaning: "Show clearly" },
+            { word: "Efficient", meaning: "Productive" },
+            { word: "Fundamental", meaning: "Basic and essential" },
+            { word: "Versatile", meaning: "Adaptable" },
+            { word: "Perspective", meaning: "Viewpoint" },
+            { word: "Significant", meaning: "Important" },
+            { word: "Accomplish", meaning: "Complete successfully" },
+            { word: "Beneficial", meaning: "Advantageous" },
+            { word: "Implement", meaning: "Put into action" },
+            { word: "Articulate", meaning: "Express clearly" },
+            { word: "Conceptualize", meaning: "Form an idea" },
+            { word: "Differentiate", meaning: "Distinguish" },
+            { word: "Elaborate", meaning: "Explain in detail" },
+            { word: "Formulate", meaning: "Create systematically" }
+        ]
+    };
+    
+    const pool = pairPools[difficulty];
+    const startIndex = (index * 5) % pool.length;
+    const pairs = [];
+    
+    for (let i = 0; i < 5; i++) {
+        pairs.push(pool[(startIndex + i) % pool.length]);
+    }
+    
+    return pairs;
+}
+
 function loadWordMatching() {
-    const pairs = puzzleData.matching[state.currentDifficulty];
+    const curatedPairs = puzzleData.matching[state.currentDifficulty];
+    const curatedCount = curatedPairs.length;
+    
+    // Use a random index for variety
+    const randomIndex = Math.floor(Math.random() * 100);
+    
+    let pairs;
+    if (randomIndex < 2) { // 2% chance to use curated
+        pairs = curatedPairs;
+    } else {
+        pairs = generateMatchingPairs(randomIndex, state.currentDifficulty);
+    }
+    
     const wordsCol = document.getElementById('wordsColumn');
     const meaningsCol = document.getElementById('meaningsColumn');
     wordsCol.innerHTML = '';
