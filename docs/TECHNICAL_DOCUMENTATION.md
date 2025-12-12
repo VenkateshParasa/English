@@ -581,4 +581,4 @@ The application can be deployed to any static hosting service:
 
 ---
 
-**For questions or contributions, refer to the main [`README.md`](README.md:1)**
+**For questions or contributions, refer to the main [`README.md`](README.md:1) in this docs folder**

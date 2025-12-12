@@ -18,6 +18,7 @@
     <!-- Stylesheets -->
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="performance.css">
+    <link rel="stylesheet" href="css/notifications.css">
 
     <!-- PWA Manifest -->
     <link rel="manifest" href="manifest.json">
@@ -325,6 +326,13 @@
         </section>
     </div>
 
+    <!-- Core Utilities (Load first) -->
+    <script src="js/core/error-handler.js"></script>
+    <script src="js/core/validator.js"></script>
+    <script src="js/core/storage.js"></script>
+    <script src="js/core/notification.js"></script>
+    
+    <!-- Application Data & Logic -->
     <script src="data.js"></script>
     <script src="app.js"></script>
 </body>

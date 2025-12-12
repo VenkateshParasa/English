@@ -1466,18 +1466,19 @@ function initializeSentenceButtons() {
             saveProgress();
             hideHintButton();
         } else {
-            // Increment attempts (but cap at 3)
-            if (state.sentenceAttempts < 3) {
-                state.sentenceAttempts++;
-            }
+            // Increment attempts
+            state.sentenceAttempts++;
             
-            // Show hint button after 3 attempts
-            if (state.sentenceAttempts >= 3 && !state.sentenceHintUsed) {
+            // Show hint button after 3 attempts and keep it visible
+            if (state.sentenceAttempts >= 3) {
                 showHintButton();
-                showFeedback('sentenceFeedback', '✗ Incorrect. Click the hint button for help!', 'error');
-            } else if (state.sentenceHintUsed) {
-                // After hint is used, show the hint content
-                showFeedback('sentenceFeedback', '✗ Incorrect. Check the hint above for help! (Attempt 3/3)', 'error');
+                if (state.sentenceHintUsed) {
+                    // After hint is used, remind user to check the hint
+                    showFeedback('sentenceFeedback', `✗ Incorrect. Check the hint above for help! (Attempt ${state.sentenceAttempts})`, 'error');
+                } else {
+                    // Before hint is used, prompt user to click hint button
+                    showFeedback('sentenceFeedback', `✗ Incorrect. Click the hint button for help! (Attempt ${state.sentenceAttempts})`, 'error');
+                }
             } else {
                 showFeedback('sentenceFeedback', `✗ Incorrect. Try again! (Attempt ${state.sentenceAttempts}/3)`, 'error');
             }
