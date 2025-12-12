@@ -294,8 +294,8 @@ All notable changes and features of this project are documented in this file.
 - ✅ Testing recommendations
 
 #### Additional Documentation
-- ✅ HINT_SYSTEM_DOCUMENTATION.md
 - ✅ CHANGELOG.md (this file)
+- ✅ FOLDER_STRUCTURE.md
 - ✅ Inline code comments
 - ✅ Function documentation
 
@@ -432,7 +432,7 @@ All notable changes and features of this project are documented in this file.
 - Review [`README.md`](README.md:1) for general information
 - Check [`USER_GUIDE.md`](USER_GUIDE.md:1) for usage instructions
 - Read [`TECHNICAL_DOCUMENTATION.md`](TECHNICAL_DOCUMENTATION.md:1) for technical details
-- Review [`HINT_SYSTEM_DOCUMENTATION.md`](HINT_SYSTEM_DOCUMENTATION.md:1) for hint system details
+- Check [`ERROR_HANDLING_GUIDE.md`](ERROR_HANDLING_GUIDE.md:1) for error handling details
 
 ### Contributing
 - Report bugs and issues

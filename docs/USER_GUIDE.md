@@ -458,4 +458,4 @@ A: Clear browser data to start fresh (this cannot be undone).
 
 Remember: Every expert was once a beginner. Keep practicing, stay consistent, and celebrate your progress!
 
-For technical details, see [`TECHNICAL_DOCUMENTATION.md`](TECHNICAL_DOCUMENTATION.md:1)
+For technical details, see [`TECHNICAL_DOCUMENTATION.md`](TECHNICAL_DOCUMENTATION.md:1) in this docs folder
