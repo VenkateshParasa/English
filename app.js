@@ -93,7 +93,7 @@ const cache = {
         try {
             localStorage.setItem(key, JSON.stringify({ value, timestamp: Date.now() }));
         } catch (e) {
-            ErrorHandler.logError(e, 'cache operation');
+            AppErrorHandler.logError(e, 'cache operation');
         }
     },
     get: (key) => {
@@ -124,7 +124,7 @@ function saveProgress() {
         };
         localStorage.setItem('learningProgress', JSON.stringify(toSave));
     } catch (e) {
-        ErrorHandler.logError(e, 'save progress');
+        AppErrorHandler.logError(e, 'save progress');
     }
 }
 
@@ -179,7 +179,7 @@ function loadProgress() {
             updateDashboard();
         }
     } catch (e) {
-        ErrorHandler.logError(e, 'load progress');
+        AppErrorHandler.logError(e, 'load progress');
     }
 }
 
@@ -559,7 +559,7 @@ window.retakeCurrentExercise = function(type) {
 // ERROR HANDLER WITH RETRY LOGIC
 // ============================================
 
-const ErrorHandler = {
+const AppErrorHandler = {
     // Error types
     ErrorTypes: {
         NETWORK: 'NETWORK_ERROR',
@@ -759,7 +759,7 @@ const Toast = {
 
         const toast = {
             id: Date.now() + Math.random(),
-            message: ErrorHandler.sanitizeInput(message),
+            message: AppErrorHandler.sanitizeInput(message),
             type,
             duration
         };
@@ -933,7 +933,7 @@ async function fetchWordData(word) {
     if (CONFIG.useAPIFirst && navigator.onLine) {
         try {
             // Use ErrorHandler with retry logic
-            const wordData = await ErrorHandler.retryWithBackoff(
+            const wordData = await AppErrorHandler.retryWithBackoff(
                 async () => {
                     const response = await fetch(`${CONFIG.dictionaryAPI}${word.toLowerCase()}`, {
                         signal: AbortSignal.timeout(5000)
@@ -953,7 +953,7 @@ async function fetchWordData(word) {
             return wordData;
         } catch (error) {
             // Use ErrorHandler to handle the error gracefully
-            ErrorHandler.handleError(error, `word "${word}"`, {
+            AppErrorHandler.handleError(error, `word "${word}"`, {
                 showToast: false, // Don't show toast for API fallback
                 fallback: null
             });
@@ -1063,19 +1063,19 @@ const speechAPI = {
             try {
                 const transcript = e.results[0][0].transcript;
                 // Validate and sanitize the speech recognition result
-                const validatedTranscript = ErrorHandler.validateInput(transcript, {
+                const validatedTranscript = AppErrorHandler.validateInput(transcript, {
                     required: true,
                     maxLength: 500,
                     pattern: /^[a-zA-Z0-9\s.,!?'\-]+$/
                 });
                 callback(validatedTranscript);
             } catch (error) {
-                ErrorHandler.handleError(error, 'speech recognition result');
+                AppErrorHandler.handleError(error, 'speech recognition result');
                 Toast.error('Invalid speech input detected');
             }
         };
         recognition.onerror = (e) => {
-            ErrorHandler.logError(new Error(e.error), 'speech recognition');
+            AppErrorHandler.logError(new Error(e.error), 'speech recognition');
             Toast.error('Speech recognition error. Please try again.');
         };
         recognition.start();
@@ -1395,7 +1395,7 @@ async function loadVocabularyWord() {
         displayVocabQuiz(wordData.quiz);
         document.getElementById('vocabProgress').textContent = `${state.vocabProgress}/10`;
     } catch (error) {
-        ErrorHandler.handleError(error, 'vocabulary word', {
+        AppErrorHandler.handleError(error, 'vocabulary word', {
             showToast: true,
             fallback: null
         });
@@ -1519,13 +1519,13 @@ function loadDragDropSentence(exercise) {
         const chip = document.createElement('div');
         chip.className = 'word-chip';
         // Sanitize word content before displaying
-        const sanitizedWord = ErrorHandler.sanitizeInput(word);
+        const sanitizedWord = AppErrorHandler.sanitizeInput(word);
         chip.textContent = sanitizedWord;
         chip.draggable = true;
         chip.ondragstart = (e) => {
             try {
                 // Validate word before allowing drag
-                const validatedWord = ErrorHandler.validateInput(sanitizedWord, {
+                const validatedWord = AppErrorHandler.validateInput(sanitizedWord, {
                     required: true,
                     maxLength: 100,
                     pattern: /^[a-zA-Z0-9\s.,!?'\-]+$/
@@ -1534,7 +1534,7 @@ function loadDragDropSentence(exercise) {
                 chip.classList.add('dragging');
             } catch (error) {
                 e.preventDefault();
-                ErrorHandler.handleError(error, 'drag operation');
+                AppErrorHandler.handleError(error, 'drag operation');
                 Toast.warning('Invalid word detected');
             }
         };
@@ -1546,13 +1546,13 @@ function loadDragDropSentence(exercise) {
                 sentenceBuilder.classList.add('has-words');
                 sentenceBuilder.appendChild(chip);
                 // Validate before adding to state
-                const validatedText = ErrorHandler.validateInput(chip.textContent, {
+                const validatedText = AppErrorHandler.validateInput(chip.textContent, {
                     required: true,
                     maxLength: 100
                 });
                 state.sentenceBuilderWords.push(validatedText);
             } catch (error) {
-                ErrorHandler.handleError(error, 'word selection');
+                AppErrorHandler.handleError(error, 'word selection');
                 Toast.warning('Invalid word selection');
             }
         };
@@ -1570,7 +1570,7 @@ function initializeSentenceBuilderDragDrop() {
             // Validate dropped data
             const droppedText = e.dataTransfer.getData('text');
             if (droppedText) {
-                const validatedText = ErrorHandler.validateInput(droppedText, {
+                const validatedText = AppErrorHandler.validateInput(droppedText, {
                     required: true,
                     maxLength: 100,
                     pattern: /^[a-zA-Z0-9\s.,!?'\-]+$/
@@ -1579,7 +1579,7 @@ function initializeSentenceBuilderDragDrop() {
             const chip = document.querySelector('.word-chip.dragging');
             if (chip) chip.click();
         } catch (error) {
-            ErrorHandler.handleError(error, 'drop operation');
+            AppErrorHandler.handleError(error, 'drop operation');
             Toast.warning('Invalid drop operation');
         }
     };
@@ -1771,11 +1771,21 @@ function initializeSentenceButtons() {
         // Reset the current exercise without changing to a new one
         state.sentenceAttempts = 0;
         state.sentenceHintUsed = false;
-        hideHintButton();
         
         // Clear feedback and hint
         document.getElementById('sentenceFeedback').classList.remove('visible');
         document.getElementById('hintDisplay').classList.remove('visible');
+        
+        // Reset hint button to initial state
+        const hintBtn = document.getElementById('sentenceHint');
+        if (hintBtn) {
+            hintBtn.style.display = 'none';
+            hintBtn.textContent = '💡 Get Hint';
+            hintBtn.disabled = false;
+            hintBtn.classList.remove('pulse');
+            hintBtn.style.opacity = '1';
+            hintBtn.style.cursor = 'pointer';
+        }
         
         // Reload the same exercise (don't increment index)
         const difficulty = state.currentDifficulty;
@@ -1846,29 +1856,47 @@ function hideHintButton() {
 }
 
 function showSentenceHint() {
-    console.log('showSentenceHint called');
-    console.log('currentExercise:', state.currentExercise);
-    
     if (!state.currentExercise) {
         console.error('No current exercise found!');
         return;
     }
     
     const hintDisplay = document.getElementById('hintDisplay');
-    console.log('hintDisplay element:', hintDisplay);
-    
     if (!hintDisplay) {
         console.error('hintDisplay element not found!');
         return;
     }
     
-    // Get a random word from the correct sentence as a hint
+    // Get words from the correct sentence
     const words = state.currentExercise.words || state.currentExercise.correct.split(' ');
-    const randomIndex = Math.floor(Math.random() * words.length);
-    const hintWord = words[randomIndex];
-    const position = randomIndex + 1;
     
-    console.log('Hint word:', hintWord, 'at position:', position);
+    // For fill-in-the-blank exercises, find words that are NOT already visible
+    const fillBlankContainer = document.getElementById('fillBlankExerciseContainer');
+    let availableWords = [...words];
+    
+    if (fillBlankContainer && fillBlankContainer.style.display === 'block') {
+        // Get the visible text from the fill blank instruction
+        const instruction = document.getElementById('fillBlankInstruction');
+        if (instruction) {
+            const visibleText = instruction.textContent.toLowerCase();
+            // Filter out words that are already visible in the sentence
+            availableWords = words.filter(word =>
+                !visibleText.includes(word.toLowerCase()) || word === '___'
+            );
+        }
+    }
+    
+    // If no available words (shouldn't happen), fall back to all words
+    if (availableWords.length === 0) {
+        availableWords = words;
+    }
+    
+    // Select a random word from available words
+    const randomIndex = Math.floor(Math.random() * availableWords.length);
+    const hintWord = availableWords[randomIndex];
+    
+    // Find the position of this word in the original sentence
+    const position = words.indexOf(hintWord) + 1;
     
     hintDisplay.innerHTML = `
         <div class="hint-content">
@@ -1877,9 +1905,6 @@ function showSentenceHint() {
         </div>
     `;
     hintDisplay.classList.add('visible');
-    
-    console.log('Hint display classes:', hintDisplay.className);
-    console.log('Hint display style:', window.getComputedStyle(hintDisplay).display);
     
     // Keep the hint button visible but disable it and change text
     const hintBtn = document.getElementById('sentenceHint');
@@ -1890,8 +1915,6 @@ function showSentenceHint() {
         hintBtn.style.opacity = '0.6';
         hintBtn.style.cursor = 'not-allowed';
     }
-    
-    console.log('Hint should now be visible');
 }
 
 // ============================================
@@ -2156,7 +2179,7 @@ function initializeReadingButtons() {
 
         // Validate input
         try {
-            const sanitizedInput = ErrorHandler.validateInput(input, {
+            const sanitizedInput = AppErrorHandler.validateInput(input, {
                 required: true,
                 minLength: 1,
                 maxLength: 500
@@ -2504,7 +2527,7 @@ function initializeScrambleButtons() {
         const input = document.getElementById('scrambleInput');
 
         try {
-            const sanitizedInput = ErrorHandler.validateInput(input.value, {
+            const sanitizedInput = AppErrorHandler.validateInput(input.value, {
                 required: true,
                 minLength: 1,
                 maxLength: 50
@@ -2525,7 +2548,12 @@ function initializeScrambleButtons() {
             Toast.error('Please enter your answer before checking');
         }
     };
-    document.getElementById('showHint').onclick = () => document.getElementById('scrambleHint').classList.add('visible');
+    document.getElementById('showHint').onclick = () => {
+        const answer = document.getElementById('scrambleInput').dataset.answer;
+        const hintElement = document.getElementById('scrambleHint');
+        hintElement.textContent = `Answer: ${answer}`;
+        hintElement.classList.add('visible');
+    };
     document.getElementById('nextScramble').onclick = loadWordScramble;
 }
 

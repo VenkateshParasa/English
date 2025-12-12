@@ -421,18 +421,7 @@ class StorageManager {
     }
 }
 
-/**
- * Storage Error class
- */
-class StorageError extends Error {
-    constructor(message, operation = null) {
-        super(message);
-        this.name = 'StorageError';
-        this.operation = operation;
-    }
-}
-
 // Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { StorageManager, StorageError };
+    module.exports = { StorageManager };
 }
