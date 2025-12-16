@@ -6,7 +6,8 @@
     <meta http-equiv="Content-Security-Policy"
           content="default-src 'self';
                    script-src 'self' 'unsafe-inline';
-                   style-src 'self' 'unsafe-inline';
+                   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+                   font-src 'self' https://fonts.gstatic.com;
                    connect-src 'self' https://api.dictionaryapi.dev;">
     <meta name="description" content="Interactive English Learning Portal with vocabulary, sentence formation, reading, listening, and puzzle exercises">
     <meta name="theme-color" content="#4CAF50">
@@ -15,8 +16,15 @@
     <meta name="apple-mobile-web-app-title" content="English Portal">
     <title>English Learning Portal</title>
 
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
     <!-- Stylesheets -->
     <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="css/animations.css">
+    <link rel="stylesheet" href="css/accessibility.css">
     <link rel="stylesheet" href="performance.css">
     <link rel="stylesheet" href="css/notifications.css">
 
@@ -33,9 +41,16 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
 </head>
 <body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+
     <div class="container">
         <header role="banner">
-            <h1>🎓 English Learning Portal</h1>
+            <div class="header-content">
+                <h1>🎓 English Learning Portal</h1>
+                <button id="themeToggle" class="theme-toggle" aria-label="Toggle dark/light theme">
+                    <span class="theme-icon">🌙</span>
+                </button>
+            </div>
             <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Overall learning progress">
                 <div class="progress-fill" id="overallProgress"></div>
             </div>
@@ -52,7 +67,8 @@
         </nav>
 
         <!-- Dashboard Section -->
-        <section id="dashboard" class="section active" role="region" aria-labelledby="dashboard-title">
+        <main id="main-content">
+            <section id="dashboard" class="section active" role="region" aria-labelledby="dashboard-title">
             <h2 id="dashboard-title">Welcome to Your Learning Journey!</h2>
             <div class="stats-grid" role="list" aria-label="Learning statistics">
                 <div class="stat-card" role="listitem">
@@ -322,8 +338,9 @@
                 <button class="btn-primary" id="checkMatching" aria-label="Check matches">Check Matches</button>
                 <button class="btn-secondary" id="resetMatching" aria-label="Reset matching game">Reset</button>
                 <div class="feedback" id="matchingFeedback" role="status" aria-live="polite"></div>
-            </div>
-        </section>
+                </div>
+            </section>
+        </main>
     </div>
 
     <!-- Core Utilities (Load first) -->
@@ -331,7 +348,9 @@
     <script src="js/core/validator.js"></script>
     <script src="js/core/storage.js"></script>
     <script src="js/core/notification.js"></script>
-    
+    <script src="js/theme-toggle.js"></script>
+    <script src="js/ui-enhancements.js"></script>
+
     <!-- Application Data & Logic -->
     <script src="data.js"></script>
     <script src="app.js"></script>
