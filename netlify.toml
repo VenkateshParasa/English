@@ -1,0 +1,78 @@
+# Netlify configuration for the English Learning Portal (static PWA, no build step)
+
+[build]
+  # Site is plain static files served from the repository root.
+  publish = "."
+  command = ""
+
+# Ignore folders that should never ship to production.
+# (node_modules / coverage are also covered by .gitignore.)
+
+# ---------------------------------------------------------------------------
+# Redirects
+# ---------------------------------------------------------------------------
+
+# Serve the 32x32 PNG for the implicit /favicon.ico request browsers make,
+# avoiding a 404 (we declare icons via <link> tags, so no .ico file exists).
+[[redirects]]
+  from = "/favicon.ico"
+  to = "/icons/icon-32x32.png"
+  status = 200
+
+# ---------------------------------------------------------------------------
+# Security headers (applied to every route)
+# ---------------------------------------------------------------------------
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "geolocation=(), camera=(), microphone=()"
+    X-XSS-Protection = "1; mode=block"
+
+# ---------------------------------------------------------------------------
+# Caching
+# ---------------------------------------------------------------------------
+
+# The service worker must never be cached, otherwise clients get stuck on an
+# old worker and stop receiving updates.
+[[headers]]
+  for = "/service-worker.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Keep the manifest fresh so PWA metadata updates propagate.
+[[headers]]
+  for = "/manifest.json"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# HTML should always be revalidated so deployments are picked up immediately.
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/offline.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Long-lived caching for immutable image assets.
+[[headers]]
+  for = "/icons/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# CSS/JS filenames are not content-hashed, so revalidate on each load
+# (cheap 304s via ETag) to guarantee new deploys are picked up immediately.
+[[headers]]
+  for = "*.css"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"

@@ -1,16 +1,21 @@
 // Service Worker for English Learning Portal
 // Provides offline functionality and caching
 
-const CACHE_NAME = 'english-portal-v1.0.0';
-const STATIC_CACHE = 'english-portal-static-v1';
-const DYNAMIC_CACHE = 'english-portal-dynamic-v1';
-const API_CACHE = 'english-portal-api-v1';
+const CACHE_NAME = 'english-portal-v1.0.1';
+const STATIC_CACHE = 'english-portal-static-v2';
+const DYNAMIC_CACHE = 'english-portal-dynamic-v2';
+const API_CACHE = 'english-portal-api-v2';
 
 // Files to cache immediately on install
 const STATIC_ASSETS = [
     '/',
     '/index.html',
+    '/offline.html',
     '/styles.css',
+    '/performance.css',
+    '/css/animations.css',
+    '/css/accessibility.css',
+    '/css/notifications.css',
     '/app.js',
     '/data.js',
     // Add any other static assets
@@ -85,7 +90,7 @@ self.addEventListener('fetch', (event) => {
     }
 
     // Handle HTML pages with network-first strategy
-    if (request.headers.get('accept').includes('text/html')) {
+    if (request.headers.get('accept')?.includes('text/html')) {
         event.respondWith(networkFirstStrategy(request, DYNAMIC_CACHE));
         return;
     }
@@ -159,6 +164,14 @@ async function networkFirstStrategy(request, cacheName) {
             });
         }
 
+        // For navigation/HTML requests, serve the offline fallback page
+        if (request.mode === 'navigate' || request.headers.get('accept')?.includes('text/html')) {
+            const offlineResponse = await caches.match('/offline.html');
+            if (offlineResponse) {
+                return offlineResponse;
+            }
+        }
+
         throw error;
     }
 }
@@ -192,7 +205,7 @@ self.addEventListener('push', (event) => {
     const title = data.title || 'English Learning Portal';
     const options = {
         body: data.body || 'You have a new notification',
-        icon: '/icon.png',
+        icon: '/icons/icon-192x192.png',
         badge: '/badge.png',
         data: data
     };

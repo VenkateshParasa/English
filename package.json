@@ -20,7 +20,7 @@
     "pwa",
     "offline"
   ],
-  "author": "Your Name",
+  "author": "Venkatesh Parasa",
   "license": "MIT",
   "devDependencies": {
     "http-server": "^14.1.1"

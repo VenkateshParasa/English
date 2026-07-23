@@ -6,6 +6,10 @@ package-lock.json
 coverage/
 .nyc_output/
 *.lcov
+__tests__/
+
+# Docs (not needed for the deployed site)
+docs/
 
 # IDE
 .vscode/
