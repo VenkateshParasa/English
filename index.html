@@ -125,6 +125,13 @@
                 <button class="diff-btn" data-level="intermediate" role="radio" aria-checked="false" aria-label="Intermediate difficulty">Intermediate</button>
                 <button class="diff-btn" data-level="medium" role="radio" aria-checked="false" aria-label="Medium difficulty">Medium</button>
             </div>
+            <div class="srs-review-bar" role="region" aria-label="Spaced repetition review">
+                <button class="btn-primary" id="startReview" aria-label="Start reviewing words that are due">
+                    🔁 Review Due (<span id="dueCount">0</span>)
+                </button>
+                <button class="btn-secondary" id="exitReview" style="display:none;" aria-label="Exit review mode">✕ Exit Review</button>
+                <span class="srs-status" id="reviewStatus" aria-live="polite"></span>
+            </div>
             <div class="vocab-container">
                 <div class="word-card" id="wordCard" role="article" aria-labelledby="currentWord">
                     <h3 class="word" id="currentWord" aria-live="polite">Loading...</h3>
@@ -348,6 +355,7 @@
     <script src="js/core/validator.js"></script>
     <script src="js/core/storage.js"></script>
     <script src="js/core/notification.js"></script>
+    <script src="js/core/srs.js"></script>
     <script src="js/theme-toggle.js"></script>
     <script src="js/ui-enhancements.js"></script>
 

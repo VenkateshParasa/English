@@ -221,6 +221,83 @@ const vocabularyData = {
                 options: ["Mean", "Friendly", "Angry", "Sad"],
                 correct: 1
             }
+        },
+        {
+            word: "Music",
+            pronunciation: "/ˈmjuːzɪk/",
+            definition: "Sounds arranged in a pleasing or expressive way",
+            example: "She listens to music every morning.",
+            quiz: {
+                question: "Music is made of...",
+                options: ["Colors", "Arranged sounds", "Flavors", "Shapes"],
+                correct: 1
+            }
+        },
+        {
+            word: "Garden",
+            pronunciation: "/ˈɡɑːrdn/",
+            definition: "A piece of ground where plants and flowers are grown",
+            example: "They grow vegetables in their garden.",
+            quiz: {
+                question: "A garden is a place for...",
+                options: ["Parking cars", "Growing plants", "Storing tools", "Cooking food"],
+                correct: 1
+            }
+        },
+        {
+            word: "Journey",
+            pronunciation: "/ˈdʒɜːrni/",
+            definition: "An act of travelling from one place to another",
+            example: "Our journey to the mountains took six hours.",
+            quiz: {
+                question: "A journey means...",
+                options: ["Staying home", "Travelling somewhere", "Sleeping", "Eating"],
+                correct: 1
+            }
+        },
+        {
+            word: "Honest",
+            pronunciation: "/ˈɒnɪst/",
+            definition: "Truthful and sincere; not lying or cheating",
+            example: "He gave an honest answer to the question.",
+            quiz: {
+                question: "An honest person is...",
+                options: ["A liar", "Truthful", "Rude", "Lazy"],
+                correct: 1
+            }
+        },
+        {
+            word: "Quiet",
+            pronunciation: "/ˈkwaɪət/",
+            definition: "Making little or no noise",
+            example: "The library was very quiet.",
+            quiz: {
+                question: "Quiet means...",
+                options: ["Loud", "Noiseless", "Colorful", "Fast"],
+                correct: 1
+            }
+        },
+        {
+            word: "Strong",
+            pronunciation: "/strɔːŋ/",
+            definition: "Having great physical power or force",
+            example: "The strong wind blew the leaves away.",
+            quiz: {
+                question: "Strong is the opposite of...",
+                options: ["Weak", "Tall", "Happy", "Fast"],
+                correct: 0
+            }
+        },
+        {
+            word: "Weather",
+            pronunciation: "/ˈweðər/",
+            definition: "The state of the atmosphere, such as rain or sunshine",
+            example: "The weather is sunny today.",
+            quiz: {
+                question: "Weather describes...",
+                options: ["The time", "Atmospheric conditions", "A person", "A book"],
+                correct: 1
+            }
         }
     ],
     intermediate: [
@@ -333,6 +410,83 @@ const vocabularyData = {
                 options: ["Be confused", "Comprehend", "Ignore", "Forget"],
                 correct: 1
             }
+        },
+        {
+            word: "Confident",
+            pronunciation: "/ˈkɒnfɪdənt/",
+            definition: "Feeling sure about your own abilities or qualities",
+            example: "She felt confident before the interview.",
+            quiz: {
+                question: "A confident person feels...",
+                options: ["Unsure", "Self-assured", "Afraid", "Bored"],
+                correct: 1
+            }
+        },
+        {
+            word: "Generous",
+            pronunciation: "/ˈdʒenərəs/",
+            definition: "Willing to give more of something than is necessary",
+            example: "He was generous with his time and money.",
+            quiz: {
+                question: "Generous means...",
+                options: ["Selfish", "Giving", "Angry", "Quiet"],
+                correct: 1
+            }
+        },
+        {
+            word: "Curious",
+            pronunciation: "/ˈkjʊəriəs/",
+            definition: "Eager to know or learn something",
+            example: "The curious child asked many questions.",
+            quiz: {
+                question: "A curious person wants to...",
+                options: ["Sleep", "Learn and know", "Argue", "Rest"],
+                correct: 1
+            }
+        },
+        {
+            word: "Determined",
+            pronunciation: "/dɪˈtɜːrmɪnd/",
+            definition: "Having made a firm decision and not changing it",
+            example: "She was determined to finish the marathon.",
+            quiz: {
+                question: "Determined means...",
+                options: ["Giving up easily", "Firmly resolved", "Confused", "Careless"],
+                correct: 1
+            }
+        },
+        {
+            word: "Reliable",
+            pronunciation: "/rɪˈlaɪəbl/",
+            definition: "Able to be trusted to do what is expected",
+            example: "He is a reliable friend who always helps.",
+            quiz: {
+                question: "A reliable person is...",
+                options: ["Untrustworthy", "Dependable", "Lazy", "Rude"],
+                correct: 1
+            }
+        },
+        {
+            word: "Accurate",
+            pronunciation: "/ˈækjərət/",
+            definition: "Correct in all details; exact",
+            example: "The report gave an accurate account of events.",
+            quiz: {
+                question: "Accurate means...",
+                options: ["Wrong", "Exact and correct", "Vague", "Slow"],
+                correct: 1
+            }
+        },
+        {
+            word: "Efficient",
+            pronunciation: "/ɪˈfɪʃnt/",
+            definition: "Working well without wasting time or energy",
+            example: "The new system is fast and efficient.",
+            quiz: {
+                question: "Efficient means working...",
+                options: ["Wastefully", "Without waste", "Slowly", "Carelessly"],
+                correct: 1
+            }
         }
     ],
     medium: [
@@ -443,6 +597,83 @@ const vocabularyData = {
             quiz: {
                 question: "Versatile means...",
                 options: ["Limited", "Adaptable", "Rigid", "Specialized"],
+                correct: 1
+            }
+        },
+        {
+            word: "Ambiguous",
+            pronunciation: "/æmˈbɪɡjuəs/",
+            definition: "Open to more than one interpretation; unclear",
+            example: "His ambiguous reply left everyone confused.",
+            quiz: {
+                question: "Ambiguous means...",
+                options: ["Very clear", "Open to interpretation", "Loud", "Bright"],
+                correct: 1
+            }
+        },
+        {
+            word: "Meticulous",
+            pronunciation: "/məˈtɪkjələs/",
+            definition: "Showing great attention to detail; very careful",
+            example: "She kept meticulous records of every expense.",
+            quiz: {
+                question: "A meticulous person is...",
+                options: ["Careless", "Extremely careful", "Forgetful", "Hasty"],
+                correct: 1
+            }
+        },
+        {
+            word: "Resilient",
+            pronunciation: "/rɪˈzɪliənt/",
+            definition: "Able to recover quickly from difficulties",
+            example: "The resilient community rebuilt after the storm.",
+            quiz: {
+                question: "Resilient means able to...",
+                options: ["Break easily", "Recover quickly", "Stay still", "Give up"],
+                correct: 1
+            }
+        },
+        {
+            word: "Pragmatic",
+            pronunciation: "/præɡˈmætɪk/",
+            definition: "Dealing with things sensibly and realistically",
+            example: "They took a pragmatic approach to the problem.",
+            quiz: {
+                question: "A pragmatic approach is...",
+                options: ["Impractical", "Practical and realistic", "Emotional", "Random"],
+                correct: 1
+            }
+        },
+        {
+            word: "Diligent",
+            pronunciation: "/ˈdɪlɪdʒənt/",
+            definition: "Showing careful and persistent effort in work",
+            example: "The diligent student studied every night.",
+            quiz: {
+                question: "Diligent means...",
+                options: ["Lazy", "Hard-working", "Careless", "Slow"],
+                correct: 1
+            }
+        },
+        {
+            word: "Coherent",
+            pronunciation: "/koʊˈhɪərənt/",
+            definition: "Logical and clearly connected; making sense",
+            example: "She presented a coherent argument.",
+            quiz: {
+                question: "Coherent means...",
+                options: ["Confusing", "Logical and clear", "Loud", "Short"],
+                correct: 1
+            }
+        },
+        {
+            word: "Inevitable",
+            pronunciation: "/ɪnˈevɪtəbl/",
+            definition: "Certain to happen; unavoidable",
+            example: "Change is an inevitable part of life.",
+            quiz: {
+                question: "Inevitable means...",
+                options: ["Avoidable", "Certain to happen", "Optional", "Rare"],
                 correct: 1
             }
         }

@@ -1,10 +1,10 @@
 // Service Worker for English Learning Portal
 // Provides offline functionality and caching
 
-const CACHE_NAME = 'english-portal-v1.0.1';
-const STATIC_CACHE = 'english-portal-static-v2';
-const DYNAMIC_CACHE = 'english-portal-dynamic-v2';
-const API_CACHE = 'english-portal-api-v2';
+const CACHE_NAME = 'english-portal-v1.0.2';
+const STATIC_CACHE = 'english-portal-static-v3';
+const DYNAMIC_CACHE = 'english-portal-dynamic-v3';
+const API_CACHE = 'english-portal-api-v3';
 
 // Files to cache immediately on install
 const STATIC_ASSETS = [
@@ -16,6 +16,7 @@ const STATIC_ASSETS = [
     '/css/animations.css',
     '/css/accessibility.css',
     '/css/notifications.css',
+    '/js/core/srs.js',
     '/app.js',
     '/data.js',
     // Add any other static assets

@@ -2019,3 +2019,27 @@ header h1 {
     border-radius: var(--radius-md);
     border: 2px dashed var(--warning-500);
 }
+/* ============================================
+   SPACED REPETITION REVIEW BAR
+   ============================================ */
+.srs-review-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3, 0.75rem);
+    margin: var(--space-4, 1rem) 0;
+    padding: var(--space-3, 0.75rem) var(--space-4, 1rem);
+    background: var(--background-card, #fff);
+    border-radius: var(--radius-md, 0.5rem);
+    box-shadow: var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.1));
+}
+
+.srs-review-bar .srs-status {
+    font-size: 0.9rem;
+    color: var(--text-secondary, #555);
+    font-weight: 600;
+}
+
+#dueCount {
+    font-weight: 800;
+}

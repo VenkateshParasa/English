@@ -39,6 +39,10 @@ const state = {
     sentenceBuilderWords: [],
     sentenceAttempts: 0,
     sentenceHintUsed: false,
+    // Spaced-repetition review state
+    reviewMode: false,
+    reviewQueue: [],
+    currentVocabWord: null,
     // Enhanced progress tracking
     completedExercises: {
         vocabulary: new Set(),
@@ -1392,6 +1396,8 @@ async function loadVocabularyWord() {
         document.getElementById('pronunciation').textContent = wordData.pronunciation;
         document.getElementById('definition').textContent = wordData.definition;
         document.getElementById('example').textContent = wordData.example;
+        wordData.difficulty = state.currentDifficulty;
+        state.currentVocabWord = wordData;
         displayVocabQuiz(wordData.quiz);
         document.getElementById('vocabProgress').textContent = `${state.vocabProgress}/10`;
     } catch (error) {
@@ -1409,15 +1415,18 @@ function displayVocabQuiz(quiz) {
     document.getElementById('quizQuestion').textContent = quiz.question;
     const container = document.getElementById('quizOptions');
     container.innerHTML = '';
-    
+
+    let answered = false;
+
     quiz.options.forEach((option, index) => {
         const div = document.createElement('div');
         div.className = 'quiz-option';
         div.textContent = option;
         div.onclick = () => {
             container.querySelectorAll('.quiz-option').forEach(o => o.classList.remove('selected', 'correct', 'incorrect'));
-            div.classList.add('selected', index === quiz.correct ? 'correct' : 'incorrect');
-            if (index === quiz.correct) {
+            const isCorrect = index === quiz.correct;
+            div.classList.add('selected', isCorrect ? 'correct' : 'incorrect');
+            if (isCorrect) {
                 state.vocabProgress++;
                 state.stats.wordsLearned++;
                 state.dailyGoals.vocab = true;
@@ -1426,6 +1435,18 @@ function displayVocabQuiz(quiz) {
                 saveProgress();
             } else {
                 container.children[quiz.correct].classList.add('correct');
+            }
+
+            // Feed the spaced-repetition scheduler once per word render.
+            if (!answered) {
+                answered = true;
+                if (window.SRS && state.currentVocabWord) {
+                    SRS.schedule(state.currentVocabWord, isCorrect);
+                    updateDueCount();
+                }
+                if (state.reviewMode) {
+                    onReviewAnswer(isCorrect);
+                }
             }
         };
         container.appendChild(div);
@@ -1451,6 +1472,87 @@ function initializeVocabularyButtons() {
         loadVocabularyWord();
         saveProgress();
     };
+
+    const startBtn = document.getElementById('startReview');
+    const exitBtn = document.getElementById('exitReview');
+    if (startBtn) startBtn.onclick = startReview;
+    if (exitBtn) exitBtn.onclick = exitReview;
+
+    updateDueCount();
+}
+
+// ============================================
+// SPACED REPETITION REVIEW MODE
+// ============================================
+
+// Refresh the "Review Due (N)" badge from the SRS scheduler.
+function updateDueCount() {
+    if (!window.SRS) return;
+    const el = document.getElementById('dueCount');
+    if (el) el.textContent = SRS.dueCount();
+}
+
+// Show/hide the parts of the vocab UI that don't apply during review.
+function setReviewUI(active) {
+    const startBtn = document.getElementById('startReview');
+    const exitBtn = document.getElementById('exitReview');
+    const nav = document.querySelector('#vocabulary .navigation-buttons');
+    const status = document.getElementById('reviewStatus');
+    if (startBtn) startBtn.style.display = active ? 'none' : '';
+    if (exitBtn) exitBtn.style.display = active ? '' : 'none';
+    if (nav) nav.style.display = active ? 'none' : '';
+    if (status) status.textContent = '';
+}
+
+function startReview() {
+    if (!window.SRS) return;
+    const queue = SRS.getDueWords();
+    if (queue.length === 0) {
+        if (window.Toast) Toast.info('Nothing to review right now — great job! Learn some new words to build your queue.');
+        return;
+    }
+    state.reviewMode = true;
+    state.reviewQueue = queue;
+    setReviewUI(true);
+    loadReviewWord();
+}
+
+function exitReview() {
+    state.reviewMode = false;
+    state.reviewQueue = [];
+    setReviewUI(false);
+    updateDueCount();
+    loadVocabularyWord();
+}
+
+// Render the word at the front of the review queue directly from SRS
+// data — no API call, so review works fully offline.
+function loadReviewWord() {
+    if (!state.reviewMode) return;
+    if (!state.reviewQueue || state.reviewQueue.length === 0) {
+        if (window.Toast) Toast.success('Review complete! 🎉');
+        exitReview();
+        return;
+    }
+    const wordData = state.reviewQueue[0];
+    document.getElementById('currentWord').textContent = wordData.word;
+    document.getElementById('pronunciation').textContent = wordData.pronunciation || '';
+    document.getElementById('definition').textContent = wordData.definition || '';
+    document.getElementById('example').textContent = wordData.example || '';
+    state.currentVocabWord = wordData;
+    displayVocabQuiz(wordData.quiz);
+
+    const status = document.getElementById('reviewStatus');
+    if (status) status.textContent = `${state.reviewQueue.length} word(s) left to review`;
+}
+
+// After an answer in review mode: drop the word if correct, otherwise
+// rotate it to the back of the queue to try again later this session.
+function onReviewAnswer(isCorrect) {
+    if (!state.reviewMode || !state.reviewQueue.length) return;
+    const word = state.reviewQueue.shift();
+    if (!isCorrect) state.reviewQueue.push(word);
+    setTimeout(loadReviewWord, 1100);
 }
 
 // ============================================
