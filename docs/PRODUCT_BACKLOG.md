@@ -107,29 +107,62 @@ behaviours that teach errors.
 
 | # | Story | FR | Pts | MoSCoW |
 |---|---|---|---|---|
-| **US-101** | Fix vocabulary quiz grading | `FR-VOC-1` | 2 | M |
+| ✅ **US-101** | Fix vocabulary quiz grading — **done 2026-09-08** | `FR-VOC-1` | 2 | M |
 | **US-102** | Delete fabricated IPA | `FR-VOC-3` | 1 | M |
 | **US-103** | Word-level read-aloud diff replacing the substring match | `FR-SPK-1` | 5 | M |
 | **US-104** | Stable, retryable speaking target | `FR-SPK-2` | 2 | M |
-| **US-105** | Real quiz distractors | `FR-VOC-2` | 2 | M |
+| ✅ **US-105** | Real quiz distractors — **done 2026-09-08** | `FR-VOC-2` | 2 | M |
 | **US-106** | Differentiated speech-recognition errors | `NFR-3` | 1 | M |
 | **US-107** | Remove the unverified WCAG compliance claim | `NFR-11` | 1 | M |
 | **US-108** | Deterministic sentence exercise mode | `FR-RDW-4` | 1 | M |
+| **US-109** | **Repair the statistics pipeline** — only vocabulary reaches `updateStatistics()`; sentences, reading and puzzles write a `state.stats` object nothing displays (D1) | `FR-DATA-3`, `BR-8` | 3 | M |
+| **US-110** | **Stop the crossword awarding the daily goal for a blank grid** (D2) | `BR-3` | 2 | M |
+| **US-111** | Guard the quiz counters against re-clicking a correct answer (D9) | `FR-VOC-1` | 1 | M |
+| **US-112** | Stop dictation marking the reading passage complete, double-counting (D10) | `FR-DATA-3` | 1 | M |
+| **US-113** | Correct `docs/README.md`'s false testing claims — "260+ tests", "70% coverage enforced" (D5) | `NFR-16` | 1 | M |
 
 ### Stories in full
 
 **US-101 — As Ravi, I want my vocabulary answers graded correctly, so my review queue reflects what
-I actually know.**
+I actually know.** ✅ **Done 2026-09-08.**
 - **Given** a quiz whose options were shuffled, **when** I select an option, **then** the verdict
   compares my selection against the correct definition's *current* index.
 - **Given** I answer correctly, **when** SRS is updated, **then** it records a success.
-- **Note:** `app.js:980-981` sets `correct: 0` after `.sort()`. The generated path at `app.js:1355`
-  is already correct — do not "fix" it.
-- **Also:** existing `srsData` is unreliable because of this bug. Pair with **US-205**.
+- **Implemented at** `app.js:970-986` — `correct: options.indexOf(correctDefinition)`, mirroring the
+  already-correct generated path at `app.js:1408`. Verified over 5000 renders: 0 index mismatches.
+- **Still outstanding:** review items already persisted to `srsData` carry the old `correct: 0` and
+  the placeholder distractors, because `js/core/srs.js:100` stores the whole `quiz` object and
+  `loadReviewWord` replays it. Those items will keep mis-grading until purged. Handled by **US-205**.
+
+**US-105 — As Anusha, I want distractors that test meaning, not absurdity.** ✅ **Done 2026-09-08.**
+- **Given** a vocabulary check, **then** all distractors are real definitions of *other* entries,
+  preferring the current level and falling back to other levels.
+- **Implemented at** `app.js:997-1042` as `getDistractorDefinitions(correctDefinition, count)`.
+  Wrapped in `try/catch` with `Array.isArray` guards and a generic top-up, so a missing
+  `vocabularyData` degrades instead of taking the section down.
+- Did **not** use the API's synonyms/antonyms, per the decision recorded in PROGRESS.md §6.
+
+**US-109 — As the maintainer, I want the dashboard to count what the learner actually did.**
+- **Given** I complete a sentence, reading or puzzle exercise, **when** the dashboard renders,
+  **then** the corresponding counter has increased.
+- **Given** the app loads saved progress, **then** historical counts are preserved.
+- **Note:** `updateStatistics()` (`app.js:236`) has exactly **one** call site, for `'vocabulary'`
+  (`app.js:1486`). Every other path increments `state.stats.*` (`app.js:1891`, `2316`, `2347`,
+  `2625`, `2660`, `2694`, `2836`) which is loaded at `app.js:140` and read by nothing.
+- **Blocks `FR-DATA-3`.** The success metrics assumed this data was already being collected.
+- ⚠️ Decide whether to migrate the orphaned `state.stats` values into `overallStats` or start the
+  repaired counters from zero. Migrating is kinder but the numbers are of unknown quality.
+
+**US-110 — As a learner, I don't want to be told I solved something I didn't attempt.**
+- **Given** an untouched crossword grid, **when** I press "Check Answers", **then** the daily puzzle
+  goal is **not** awarded and no `puzzlesSolved` increment occurs.
+- `generateCrossword` (`app.js:2641-2656`) has no answer key, so there is nothing to validate
+  against. Minimum honest fix: stop granting credit and label the section unfinished.
+- ⚠️ **Resolve `OQ-7` first.** If the crossword is being retired there is no point repairing it.
 
 **US-102 — As a learner, I want to never be shown invented pronunciation.**
 - **Given** an algorithmically generated word, **when** it renders, **then** it shows real IPA or
-  **no** pronunciation field — never `/word/` derived from spelling (`app.js:1349`).
+  **no** pronunciation field — never `/word/` derived from spelling (`app.js:1402`).
 
 **US-103 — As Ravi, I want to know which words the recogniser missed, so I can practise those
 sounds.**
@@ -144,29 +177,24 @@ sounds.**
 
 **US-104 — As Lakshmi, I want to retry the word I just failed.**
 - **Given** I failed a speaking target, **when** I navigate away and back, **then** the **same**
-  target is presented (fixes the `Math.random()` pick at `app.js:2339`).
+  target is presented (fixes the `Math.random()` pick at `app.js:2392`).
 - **Given** an active SRS queue, **then** the target is drawn from it, not at random.
-
-**US-105 — As Anusha, I want distractors that test meaning, not absurdity.**
-- **Given** a vocabulary check, **then** all distractors are real definitions of *other* entries at
-  the same level. `"Something different"` and friends never appear.
-- **Note:** do **not** use the API's synonyms — options are definitions, not words, and antonym
-  coverage is empty even for common verbs.
 
 **US-106 — As Lakshmi, I want to know whether the app broke or I did.**
 - **Given** `no-speech`, **then** "I didn't hear anything — try again". **Given** `not-allowed`,
   **then** microphone-permission guidance. **Given** `network`, **then** an offline explanation.
-- Replaces the single generic toast at `app.js:1081-1084`.
+- Replaces the single generic toast at `app.js:1134-1137`.
 
 **US-107 — As the maintainer, I want the app to stop asserting an unaudited standard.**
-- **Given** startup, **then** no log claims WCAG compliance (`app.js:3074`). The target is stated in
+- **Given** startup, **then** no log claims WCAG compliance (`app.js:3127`). The target is stated in
   `NFR-11` and claimed only after an audit.
 
 **US-108 — As Lakshmi, I want to retry an exercise in the mode I failed it in.**
 - **Given** exercise index *n*, **when** it renders twice, **then** the same mode appears both times
-  (fixes `Math.random()` at `app.js:1585`).
+  (fixes `Math.random()` at `app.js:1638`).
 
-**Sprint 1 total: 15 points.**
+**Sprint 1 total: 23 points** — 4 done (US-101, US-105), 19 remaining. Grew from 15 when the
+Wave 1 audit added US-109…US-113.
 
 ---
 
@@ -440,7 +468,13 @@ one with a spike attached.
 | **I-3** | `levels.js` and `migrations.js` have zero call sites — CEFR framework exists only on paper | Open → `US-003`, `US-004` |
 | **I-4** | Existing `srsData` substantially noise from the `correct: 0` bug | Open → `US-101`, `US-205` |
 | **I-5** | ~1,690 lines of never-instantiated modules load on every page | Open → `US-809` |
-| **I-6** | `docs/FOLDER_STRUCTURE.md` and `docs/ERROR_HANDLING_GUIDE.md` document an architecture never adopted | Open → doc fix |
+| **I-6** | `docs/FOLDER_STRUCTURE.md` and `docs/ERROR_HANDLING_GUIDE.md` document an architecture never adopted | ✅ Fixed 2026-09-08 |
+| **I-7** | Dashboard counters for sentences, reading and puzzles are permanently 0 — `updateStatistics()` is called only for vocabulary | Open → `US-109`. **Blocks `FR-DATA-3`** |
+| **I-8** | The crossword grants the daily puzzle goal for an untouched grid — a `BR-3` honesty defect, not just a missing feature | Open → `US-110` |
+| **I-9** | Word search is unwinnable: `.selected` is never cleared on a match, so no second word can ever match | Open → `OQ-7` decision, then fix or retire |
+| **I-10** | `docs/README.md:85-93` claims 260+ tests and 70% enforced coverage; `jest.config.js:33` says the opposite | Open → `US-113` |
+| **I-11** | `error-handler.js` is the app's **only** global error capture (`:332`, `:341`) — it must be preserved or replaced before the Phase 10 delete, not simply removed | Open → amends `US-809` |
+| **I-12** | Two `.toast-container` elements exist on every page: `notification.js` appends one at load, `app.js`'s `Toast` creates another with the same class | Open → resolve with `US-809` |
 
 ### Dependencies
 
@@ -462,15 +496,16 @@ one with a spike attached.
 | Sprint | Theme | Points | Cumulative |
 |---|---|---|---|
 | 0 | Unblock | 6 | 6 |
-| 1 | Honesty | 15 | 21 |
-| 2 | Data integrity | 19 | 40 |
-| 3 | Extensibility | 22 | 62 |
-| 4 | Pronunciation | 33 | 95 |
-| 5 | Grammar | 33 | 128 |
-| 6 | Speaking | 36 | 164 |
-| 7 | Listening & vocabulary | 40 | 204 |
-| 8 | Session & platform | 44 | 248 |
+| 1 | Honesty | 23 | 29 |
+| 2 | Data integrity | 19 | 48 |
+| 3 | Extensibility | 22 | 70 |
+| 4 | Pronunciation | 33 | 103 |
+| 5 | Grammar | 33 | 136 |
+| 6 | Speaking | 36 | 172 |
+| 7 | Listening & vocabulary | 40 | 212 |
+| 8 | Session & platform | 44 | 256 |
 
-**248 points total.** At 8–12 points a week of evenings that is roughly **5–7 months** for
-everything, or **about three weeks to R2** — the point at which the app stops misleading learners
-and their data is safe. If time runs out anywhere, it should run out after R2, not before.
+**256 points total, of which 4 are done.** At 8–12 points a week of evenings that is roughly
+**5–7 months** for everything, or **about three weeks to R2** — the point at which the app stops
+misleading learners and their data is safe. If time runs out anywhere, it should run out after R2,
+not before.

@@ -290,9 +290,9 @@ Per [CURRICULUM.md §6](CURRICULUM.md), each deferred item has a **substitute** 
 
 | # | Requirement | Acceptance criteria | Pri |
 |---|---|---|---|
-| **FR-VOC-1** | Vocabulary checks grade the **learner's chosen option** | Given shuffled options, when the learner picks option *n*, then the verdict compares *n* to the correct definition's current index. Fixes `correct: 0` after shuffle (`app.js:980-981`) | M |
+| **FR-VOC-1** | Vocabulary checks grade the **learner's chosen option** | Given shuffled options, when the learner picks option *n*, then the verdict compares *n* to the correct definition's current index. Fixes `correct: 0` after shuffle (`app.js:972-984`) | M |
 | **FR-VOC-2** | Distractors are **plausible definitions**, not placeholders | No option is `"Something different"` / `"Unrelated concept"` / `"Opposite meaning"`. Distractors are definitions of *other* entries at the same level | M |
-| **FR-VOC-3** | Pronunciation is **real IPA or absent** | No entry displays IPA that was mechanically derived from spelling. Removes `"/" + word + "/"` (`app.js:1349`) | M |
+| **FR-VOC-3** | Pronunciation is **real IPA or absent** | No entry displays IPA that was mechanically derived from spelling. Removes `"/" + word + "/"` (`app.js:1402`) | M |
 | **FR-VOC-4** | **Productive recall** card: definition + gap sentence, learner types or says the word | At least one produce-the-word item per session; recognition-only sessions are not possible | M |
 | **FR-VOC-5** | Entries carry **collocation**, **word family**, **register** | Schema has all three; a learner meeting *decide* also meets *decision/decisive/undecided* and *make a decision* | S |
 | **FR-VOC-6** | New vocabulary is introduced in roughly **frequency order** | Introduction order derives from a documented frequency source, not alphabetical or arbitrary | S |
@@ -337,8 +337,8 @@ Per [CURRICULUM.md §6](CURRICULUM.md), each deferred item has a **substitute** 
 
 | # | Requirement | Acceptance criteria | Pri |
 |---|---|---|---|
-| **FR-SPK-1** | Read-aloud reports a **word-level diff**, never a verdict | Output names which words the recogniser missed. Full match reads "the recogniser understood every word" — never "Perfect!" (fixes `app.js:2482`) | M |
-| **FR-SPK-2** | The speaking target is **stable and retryable** | The target derives from the current exercise or SRS queue, is not re-randomised on navigation, and can be retried (fixes `app.js:2339`) | M |
+| **FR-SPK-1** | Read-aloud reports a **word-level diff**, never a verdict | Output names which words the recogniser missed. Full match reads "the recogniser understood every word" — never "Perfect!" (fixes `app.js:2535`) | M |
+| **FR-SPK-2** | The speaking target is **stable and retryable** | The target derives from the current exercise or SRS queue, is not re-randomised on navigation, and can be retried (fixes `app.js:2392`) | M |
 | **FR-SPK-3** | **Free-production prompts** graded by tier, with a timer | Prompt, timer, record, self-review rubric, keep the recording. Includes 2-minute topic speaking and the 4/3/2 technique | M |
 | **FR-SPK-4** | **Functional dialogues** for real situations | Covers introductions, phone calls, shopping, directions, appointments, interviews, stand-ups/meetings, complaints, apologising, polite disagreement, status updates | M |
 | **FR-SPK-5** | **Fluency metrics** — words per minute, filler count, pause count, trended | Compared against the learner's own history, never a native baseline. Filler/pause counts may be `S` if timing data proves unreliable | S |
@@ -354,7 +354,7 @@ Per [CURRICULUM.md §6](CURRICULUM.md), each deferred item has a **substitute** 
 | **FR-RDW-1** | Comprehension questions go beyond **literal recall** | Each passage has ≥1 inference or vocabulary-in-context question | S |
 | **FR-RDW-2** | **Sentence transformation** exercises | "Rewrite in the passive", "make this polite" — drills the structural flexibility speaking needs | S |
 | **FR-RDW-3** | Existing word-ordering, fill-blank, multiple-choice and reorder modes are **retained as warm-ups** | All four remain available; none is the main event of a session | M |
-| **FR-RDW-4** | Exercise mode is **deterministic per item** | The same exercise index renders the same mode, so a failed item can be retried in the mode it was failed in (fixes `app.js:1585`) | M |
+| **FR-RDW-4** | Exercise mode is **deterministic per item** | The same exercise index renders the same mode, so a failed item can be retried in the mode it was failed in (fixes `app.js:1638`) | M |
 
 ### 6.7 Spaced repetition — `SRS`
 
