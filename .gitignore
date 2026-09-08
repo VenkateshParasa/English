@@ -6,10 +6,10 @@ package-lock.json
 coverage/
 .nyc_output/
 *.lcov
-__tests__/
 
-# Docs (not needed for the deployed site)
-docs/
+# Docs and tests are tracked deliberately:
+# - __tests__/ must be committed or CI has nothing to run
+# - docs/ holds the curriculum and methodology specs the app is built against
 
 # IDE
 .vscode/

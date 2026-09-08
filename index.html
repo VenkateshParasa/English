@@ -351,10 +351,14 @@
     </div>
 
     <!-- Core Utilities (Load first) -->
+    <!-- Order matters: levels.js defines the level vocabulary that
+         migrations.js and (from Phase 2) srs.js both depend on. -->
     <script src="js/core/error-handler.js"></script>
     <script src="js/core/validator.js"></script>
     <script src="js/core/storage.js"></script>
     <script src="js/core/notification.js"></script>
+    <script src="js/core/levels.js"></script>
+    <script src="js/core/migrations.js"></script>
     <script src="js/core/srs.js"></script>
     <script src="js/theme-toggle.js"></script>
     <script src="js/ui-enhancements.js"></script>

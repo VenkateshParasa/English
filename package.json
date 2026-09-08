@@ -9,7 +9,11 @@
     "serve": "http-server -p 8080 -c-1",
     "deploy:netlify": "netlify deploy --prod",
     "deploy:vercel": "vercel --prod",
-    "test": "http-server -p 8000"
+    "test": "jest --coverage",
+    "test:unit": "jest __tests__/unit",
+    "test:integration": "jest __tests__/integration --passWithNoTests",
+    "test:watch": "jest --watch",
+    "test:verbose": "jest --verbose"
   },
   "keywords": [
     "english",

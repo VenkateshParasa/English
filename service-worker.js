@@ -2,24 +2,45 @@
 // Provides offline functionality and caching
 
 const CACHE_NAME = 'english-portal-v1.0.2';
-const STATIC_CACHE = 'english-portal-static-v3';
+const STATIC_CACHE = 'english-portal-static-v4';
 const DYNAMIC_CACHE = 'english-portal-dynamic-v3';
 const API_CACHE = 'english-portal-api-v3';
 
-// Files to cache immediately on install
+// Files to cache immediately on install.
+//
+// KEEP THIS IN SYNC WITH index.html. cache.addAll() below is all-or-nothing:
+// one missing path rejects the whole install and the app silently loses
+// offline support. __tests__/unit/assets.test.js enforces the invariant that
+// every local <script>/<link> in index.html appears here and exists on disk.
 const STATIC_ASSETS = [
     '/',
     '/index.html',
     '/offline.html',
+    // Styles
     '/styles.css',
     '/performance.css',
     '/css/animations.css',
     '/css/accessibility.css',
     '/css/notifications.css',
+    // Core modules
+    '/js/core/error-handler.js',
+    '/js/core/validator.js',
+    '/js/core/storage.js',
+    '/js/core/notification.js',
+    '/js/core/levels.js',
+    '/js/core/migrations.js',
     '/js/core/srs.js',
-    '/app.js',
+    // UI
+    '/js/theme-toggle.js',
+    '/js/ui-enhancements.js',
+    // App
     '/data.js',
-    // Add any other static assets
+    '/app.js',
+    // Shell metadata and icons referenced directly by index.html
+    '/manifest.json',
+    '/icons/icon-16x16.png',
+    '/icons/icon-32x32.png',
+    '/icons/apple-touch-icon.png',
 ];
 
 // API URLs to cache
