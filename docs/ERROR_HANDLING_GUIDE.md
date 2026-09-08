@@ -2,11 +2,113 @@
 
 ## Overview
 
-This guide explains how to integrate the robust error handling utilities into your English Learning Portal.
+This guide explains how the `js/core/` error handling utilities were *intended* to be
+integrated into your English Learning Portal.
+
+> **⚠️ Status note — this integration never happened**
+>
+> **Everything from "Quick Start Integration" onwards is aspirational design, not
+> working code.** It is kept here on purpose — the design is worth recording — but do
+> not read it as a description of the running application.
+>
+> What is actually true today:
+>
+> - The four `js/core/` modules **are** loaded by [`index.html`](../index.html:356).
+> - **Nothing in the application calls them.** `app.js` contains no reference to
+>   `errorHandler`, `Validator`, `StorageManager`, `notificationManager` or
+>   `loadingManager` — only two stale comments naming `ErrorHandler`
+>   ([`app.js:939`](../app.js:939), [`app.js:959`](../app.js:959)).
+> - `class StorageManager` ([`js/core/storage.js:6`](../js/core/storage.js:6)) and
+>   `class Validator` ([`js/core/validator.js:6`](../js/core/validator.js:6)) are
+>   **never instantiated anywhere**.
+> - `errorHandler` ([`js/core/error-handler.js:326`](../js/core/error-handler.js:326)),
+>   `notificationManager` and `loadingManager`
+>   ([`js/core/notification.js:497`](../js/core/notification.js:497)) are constructed
+>   inside their own files, and no other file consumes them.
+> - `app.js` instead uses its own inline helpers — see
+>   [What `app.js` Actually Uses](#-what-appjs-actually-uses) below.
+>
+> **Pending harvest-then-delete.** These ~1,687 lines are parsed on every page load and
+> almost nothing in them runs. Do **not** wire them up as a "quick fix", and do **not**
+> delete the files wholesale: the backup / export / import code in `storage.js` and the
+> schema-validation code in `validator.js` are still wanted and will be lifted out
+> first. Only the class shells are being retired.
+>
+> **Two load-time side effects to preserve or replace, though — they are *not* dead:**
+>
+> 1. `js/core/error-handler.js:332` and `:341` register live `window` listeners for
+>    `error` and `unhandledrejection`. Every uncaught error and unhandled rejection in
+>    the app *is* captured by `errorHandler.logError()`
+>    ([`js/core/error-handler.js:151`](../js/core/error-handler.js:151)) and persisted to
+>    the `errorLog` localStorage key
+>    ([`js/core/error-handler.js:231`](../js/core/error-handler.js:231)). Deleting this
+>    file removes the app's only global error capture.
+> 2. `notificationManager`'s constructor injects DOM nodes — see the note under
+>    *Core Utilities* below.
 
 ---
 
-## 📦 Core Utilities Created
+## 🧭 What `app.js` Actually Uses
+
+The running application relies on three plain object literals declared inside
+[`app.js`](../app.js:1). They are objects, not classes — there is nothing to
+construct.
+
+### `AppErrorHandler` ([`app.js:566`](../app.js:566))
+
+The real error path, used at roughly 20 call sites in `app.js`.
+
+| Member | Notes |
+|--------|-------|
+| `ErrorTypes` | `NETWORK`, `TIMEOUT`, `API`, `VALIDATION`, `STORAGE`, `PERMISSION`, `UNKNOWN` |
+| `classifyError(error)` | Maps a thrown error to an `ErrorTypes` value |
+| `getUserMessage(errorType, context)` | User-facing copy for a type |
+| `logError(error, context)` | Logging |
+| `retryWithBackoff(fn, maxRetries, baseDelay, context)` | Async retry |
+| `handleError(error, context, options)` | Classify + log + optionally toast |
+| `wrapAsync(fn, context, options)` | Async wrapper |
+| `validateInput(input, rules)` | Input validation |
+| `sanitizeInput(input)` | Sanitisation |
+
+```javascript
+AppErrorHandler.logError(e, 'save progress');
+AppErrorHandler.handleError(error, `word "${word}"`, { showToast: true });
+const wordData = await AppErrorHandler.retryWithBackoff(fetchFn, 3, 1000, 'word lookup');
+```
+
+### `Toast` ([`app.js:741`](../app.js:741), exported as `window.Toast` at [`app.js:867`](../app.js:867))
+
+`init()`, `show(message, type, duration)`, `displayToast(toast)`, `dismiss(toastId)`,
+`success(message, duration)`, `error(...)`, `warning(...)`, `info(...)`, `clearAll()`.
+
+```javascript
+Toast.success('Progress saved');
+Toast.error('Failed to load word. Please try again.');
+Toast.warning('Invalid word detected');
+```
+
+### `LoadingIndicator` ([`app.js:873`](../app.js:873), exported as `window.LoadingIndicator` at [`app.js:927`](../app.js:927))
+
+`init()`, `show(operationId, message)`, `hide(operationId)`, `isLoading()`.
+
+```javascript
+LoadingIndicator.show('vocabulary', 'Loading word...');
+LoadingIndicator.hide('vocabulary');
+```
+
+Note that `js/core/notification.js` defines a *separate*, unused
+`NotificationManager` / `LoadingManager` / `ConfirmationManager` trio. The two systems
+are unrelated. They do overlap in CSS: the inline `Toast` and the unused
+`NotificationManager` both render the `.toast-*` classes from
+[`css/notifications.css`](../css/notifications.css:1), whereas the inline
+`LoadingIndicator` uses `.loading-overlay` / `.loading-spinner` / `.loading-text` from
+[`performance.css`](../performance.css:110) and the unused `LoadingManager` uses the
+`.loader-*` classes from `css/notifications.css`. The `.loader-*` and `.dialog-*`
+blocks in `css/notifications.css` are therefore dead styles today.
+
+---
+
+## 📦 Core Utilities Created (⚠️ none of them wired up)
 
 ### 1. **ErrorHandler** (`js/core/error-handler.js`)
 - Retry logic with exponential backoff
@@ -29,31 +131,64 @@ This guide explains how to integrate the robust error handling utilities into yo
 - Storage quota management
 - Import/export functionality
 
+### 4. **NotificationManager / LoadingManager / ConfirmationManager** (`js/core/notification.js`)
+- Toast notifications with a `maxToasts` cap and manual dismissal
+- Loading overlays attached to a target element (`overlay` / `spinner` / `blocking` options)
+- Confirmation dialogs (`ConfirmationManager.confirm()`)
+- Screen-reader announcements (`notificationManager.announce()`)
+
+Superseded in practice by the inline `Toast` and `LoadingIndicator` in `app.js`. There
+is no inline equivalent of `ConfirmationManager` — that capability exists here and
+nowhere else, and is unreachable as things stand.
+
+> **⚠️ Not entirely inert.** `notificationManager` is constructed at load time
+> ([`js/core/notification.js:497`](../js/core/notification.js:497)) and its constructor
+> calls `init()` ([`js/core/notification.js:17`](../js/core/notification.js:17)), which
+> appends `<div id="toast-container" class="toast-container">` and
+> `<div id="sr-announcer" class="sr-only">` to `document.body`. The app's own `Toast`
+> creates a *different* container, `<div id="toastContainer">`
+> ([`app.js:751`](../app.js:751)), also with class `toast-container`. So every page ends
+> up with two `.toast-container` elements and a spare `aria-live` region, one of each
+> permanently empty. Remove the `<script>` tag when doing the delete pass, not just the
+> call sites.
+
 ---
 
-## 🚀 Quick Start Integration
+## 🚀 Quick Start Integration (⚠️ aspirational — never carried out)
 
-### Step 1: Include the Utilities in HTML
+> Steps 1-2 and every "After" example below describe an integration that was
+> **planned but never done**. Treat them as a design record for the
+> harvest-then-delete pass, not as instructions to follow. Wiring these up now would
+> duplicate the working `AppErrorHandler` / `Toast` / `LoadingIndicator` helpers
+> described above.
 
-Add these script tags to [`index.html`](index.html:1) before [`app.js`](app.js:1):
+### Step 1: Include the Utilities in HTML — ✅ done
+
+[`index.html:356-359`](../index.html:356) already loads all four modules before
+[`app.js`](../app.js:1):
 
 ```html
 <!-- Error Handling Utilities -->
 <script src="js/core/error-handler.js"></script>
 <script src="js/core/validator.js"></script>
 <script src="js/core/storage.js"></script>
+<script src="js/core/notification.js"></script>
 
 <!-- Existing scripts -->
 <script src="data.js"></script>
 <script src="app.js"></script>
 ```
 
-### Step 2: Initialize in app.js
+This is the *only* step that happened — which is why the modules load on every page
+and then sit idle.
 
-Add this at the beginning of [`app.js`](app.js:1):
+### Step 2: Initialize in app.js — ⏭️ never done
+
+This code **does not exist in [`app.js`](../app.js:1) or anywhere else** in the
+codebase:
 
 ```javascript
-// Initialize error handling utilities
+// ⚠️ NOT PRESENT IN THE CODEBASE — aspirational design, do not copy as-is
 const validator = new Validator();
 const storage = new StorageManager(errorHandler, validator);
 
@@ -65,13 +200,41 @@ errorHandler.addListener((error, context) => {
 });
 ```
 
+Three problems to be aware of before anyone revives it:
+
+- Every member of `Validator` is `static`
+  ([`js/core/validator.js:12-392`](../js/core/validator.js:12)), so `new Validator()`
+  yields an object with no usable methods. `StorageManager` stores that instance as
+  `this.validator` ([`js/core/storage.js:9`](../js/core/storage.js:9)) and then calls
+  `this.validator.validateProgress(data)` from `validateData()`
+  ([`js/core/storage.js:333`](../js/core/storage.js:333)) — an instance call to a static
+  method, which would throw `TypeError: this.validator.validateProgress is not a
+  function`. **This wiring has never been executed, so the bug has never surfaced.**
+- `showErrorNotification()` is not defined anywhere in the project. The real
+  equivalent is `Toast.error(...)` ([`app.js:845`](../app.js:845)).
+- `StorageManager` namespaces every key with the prefix `englishLearning_`
+  ([`js/core/storage.js:10`](../js/core/storage.js:10)), whereas `app.js` reads and
+  writes the bare `learningProgress` key ([`app.js:129`](../app.js:129),
+  [`app.js:137`](../app.js:137)). Any future migration has to account for that mismatch.
+
 ---
 
-## 💡 Usage Examples
+## 💡 Usage Examples (⚠️ all "After" snippets are hypothetical)
+
+> The "Before" snippets are approximations of older `app.js` code; the "After" snippets
+> were **never merged**. `app.js` has since grown its own equivalents — e.g. the real
+> retry path for dictionary lookups is
+> `AppErrorHandler.retryWithBackoff(...)` at [`app.js:940`](../app.js:940), and the real
+> input validation is `AppErrorHandler.validateInput(...)` /
+> `AppErrorHandler.sanitizeInput(...)`. The method names used in the "After" snippets
+> (`errorHandler.withRetry`, `withTimeout`, `withErrorBoundary`, `logError`;
+> `Validator.validateUserAnswer`, `validateProgress`, `validateExercise`,
+> `sanitizeHTML`; `storage.save`, `load`, `restoreFromBackup`) *do* all exist in
+> `js/core/` — they are simply never called.
 
 ### Example 1: API Calls with Retry Logic
 
-**Before (Current Code):**
+**Before (approximation of older `app.js`):**
 ```javascript
 async function fetchWordData(word) {
     const cached = cache.get(`word_${word.toLowerCase()}`);
@@ -355,7 +518,14 @@ function loadVocabularyWord() {
 
 ---
 
-## 🎯 Best Practices
+## 🎯 Best Practices (⚠️ describe the unbuilt `js/core/` API)
+
+> These are the conventions the `js/core/` design was aiming for. They are **not** the
+> conventions the codebase follows: `app.js` uses `AppErrorHandler.validateInput()` /
+> `AppErrorHandler.sanitizeInput()` rather than `Validator.*`, and plain
+> `localStorage.setItem('learningProgress', ...)` ([`app.js:129`](../app.js:129)) rather
+> than a storage manager. Keep the *principles*; ignore the specific `storage.*` and
+> `Validator.*` call sites until something is actually wired up.
 
 ### 1. **Always Validate User Input**
 ```javascript
@@ -420,6 +590,15 @@ localStorage.setItem('key', JSON.stringify(data)); // No validation or backup
 
 ## 🔍 Monitoring & Debugging
 
+> **What works, what doesn't.** `errorHandler`, `notificationManager` and
+> `loadingManager` are top-level `const` declarations in classic scripts
+> ([`js/core/error-handler.js:326`](../js/core/error-handler.js:326),
+> [`js/core/notification.js:497-498`](../js/core/notification.js:497)), so they *are*
+> reachable from the devtools console even though the app never uses them — the error-log
+> snippets below will run. The `storage.*` snippets will **not**: no `StorageManager`
+> instance exists anywhere, so `storage` is undefined. To use them you would first have
+> to construct one by hand.
+
 ### View Error Log
 ```javascript
 // Get recent errors
@@ -445,17 +624,26 @@ console.log('Storage Usage:', storageInfo);
 
 ### Export/Import Data
 ```javascript
-// Export all data
+// Export all data — returns { version, exportDate, data } (storage.js:351)
 const exportedData = storage.exportData();
 console.log('Exported:', exportedData);
 
-// Import data
-const success = storage.importData(importedData);
+// Import data — note: importData() wraps its body in errorHandler.withErrorBoundary(),
+// so it returns a Promise, not a boolean (storage.js:384)
+const success = await storage.importData(importedData);
 ```
+
+> This backup / export / import code and `validator.js`'s schema validation are the
+> parts of `js/core/` worth **harvesting** before the class shells are deleted.
 
 ---
 
 ## 📊 Error Types Reference
+
+These four `Error` subclasses are defined in
+[`js/core/error-handler.js:289-319`](../js/core/error-handler.js:289) and are real, but
+**nothing throws them** outside `js/core/` itself. `app.js` classifies errors with the
+`AppErrorHandler.ErrorTypes` string constants ([`app.js:568`](../app.js:568)) instead.
 
 | Error Type | Use Case | Example |
 |------------|----------|---------|
@@ -510,21 +698,32 @@ const success = storage.importData(importedData);
 
 ## 📈 Next Steps
 
-1. ✅ **Error Handling Utilities Created**
-2. ⏭️ **Integrate into existing app.js** (see examples above)
-3. ⏭️ **Add user-friendly error notifications** (toast system)
-4. ⏭️ **Implement loading states** for async operations
+1. ✅ **Error Handling Utilities Created** — but never connected to anything
+2. ❌ **Integrate into existing app.js** — *abandoned*. `app.js` grew its own
+   `AppErrorHandler` instead ([`app.js:566`](../app.js:566))
+3. ✅ **Add user-friendly error notifications** — done via the inline `Toast`
+   ([`app.js:741`](../app.js:741)), **not** via `js/core/notification.js`
+4. ✅ **Implement loading states** — done via the inline `LoadingIndicator`
+   ([`app.js:873`](../app.js:873))
 5. ⏭️ **Add comprehensive testing** for error scenarios
+6. ⏭️ **Harvest-then-delete `js/core/`** — lift the backup / export / import code out of
+   `storage.js` and the schema validation out of `validator.js`, then remove the four
+   unused modules and their `<script>` tags from
+   [`index.html:356-359`](../index.html:356)
 
 ---
 
 ## 🔗 Related Files
 
-- [`js/core/error-handler.js`](js/core/error-handler.js:1) - Main error handling utility
-- [`js/core/validator.js`](js/core/validator.js:1) - Validation and sanitization
-- [`js/core/storage.js`](js/core/storage.js:1) - Safe storage operations
-- [`app.js`](app.js:1) - Main application file (to be updated)
+- [`js/core/error-handler.js`](../js/core/error-handler.js:1) - Error handling utility (⚠️ unused)
+- [`js/core/validator.js`](../js/core/validator.js:1) - Validation and sanitization (⚠️ unused)
+- [`js/core/storage.js`](../js/core/storage.js:1) - Safe storage operations (⚠️ unused)
+- [`js/core/notification.js`](../js/core/notification.js:1) - Toast / loading / dialog managers (⚠️ unused)
+- [`app.js`](../app.js:1) - Main application file; contains the helpers actually in use
+- [`docs/FOLDER_STRUCTURE.md`](FOLDER_STRUCTURE.md:1) - Same status note, from the file-layout angle
 
 ---
 
-**Ready to implement!** Start by adding the script tags to [`index.html`](index.html:1) and gradually refactor [`app.js`](app.js:1) using the examples above.
+**Not implemented.** This document is retained as a design record and as a warning: do
+not wire `js/core/` up on the strength of the examples above, and do not delete those
+files before the wanted code has been harvested out of them.

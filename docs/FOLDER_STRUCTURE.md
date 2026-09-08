@@ -20,10 +20,10 @@ English-Learning-Portal/
 │
 ├── 📂 js/                                  # JavaScript modules
 │   └── core/                               # Core utilities
-│       ├── error-handler.js                # Error handling with retry logic
-│       ├── validator.js                    # Input validation & sanitization
-│       ├── storage.js                      # Safe localStorage operations
-│       └── notification.js                 # Toast, loading, dialog managers
+│       ├── error-handler.js                # ⚠️ UNUSED - error handling with retry logic
+│       ├── validator.js                    # ⚠️ UNUSED - input validation & sanitization
+│       ├── storage.js                      # ⚠️ UNUSED - safe localStorage operations
+│       └── notification.js                 # ⚠️ UNUSED - toast, loading, dialog managers
 │
 ├── 📂 __tests__/                           # Test files
 │   ├── README.md                           # Testing documentation
@@ -65,14 +65,55 @@ English-Learning-Portal/
 ### JavaScript Files
 
 #### Core Application
-- **[`app.js`](../app.js:1)** - Main application logic (1689 lines)
+- **[`app.js`](../app.js:1)** - Main application logic (~3,160 lines)
 - **[`data.js`](../data.js:1)** - Learning content and curriculum data
 
-#### Core Utilities (New)
-- **[`js/core/error-handler.js`](../js/core/error-handler.js:1)** - Error handling (348 lines)
-- **[`js/core/validator.js`](../js/core/validator.js:1)** - Validation (385 lines)
-- **[`js/core/storage.js`](../js/core/storage.js:1)** - Storage management (429 lines)
-- **[`js/core/notification.js`](../js/core/notification.js:1)** - Notifications (485 lines)
+App-level helpers live *inside* `app.js` and are what the running application
+actually uses:
+
+| Helper | Defined at | Purpose |
+|--------|-----------|---------|
+| `AppErrorHandler` | [`app.js:566`](../app.js:566) | Error classification, logging, retry-with-backoff |
+| `Toast` | [`app.js:741`](../app.js:741) | Toast notifications (`success` / `error` / `warning` / `info`) |
+| `LoadingIndicator` | [`app.js:873`](../app.js:873) | Full-screen loading overlay |
+
+#### Core Utilities (⚠️ loaded but NOT wired up)
+- **[`js/core/error-handler.js`](../js/core/error-handler.js:1)** - Error handling (357 lines)
+- **[`js/core/validator.js`](../js/core/validator.js:1)** - Validation (396 lines)
+- **[`js/core/storage.js`](../js/core/storage.js:1)** - Storage management (426 lines)
+- **[`js/core/notification.js`](../js/core/notification.js:1)** - Notifications (508 lines)
+
+> **⚠️ Status note — read before touching these four files**
+>
+> These modules are loaded by [`index.html`](../index.html:356) on every page load but
+> **nothing in the application calls them**. `app.js` contains no reference to
+> `errorHandler`, `notificationManager`, `loadingManager`, `Validator` or
+> `StorageManager` — only two stale comments that mention `ErrorHandler` by name
+> ([`app.js:939`](../app.js:939), [`app.js:959`](../app.js:959)).
+>
+> - `class StorageManager` and `class Validator` are **never instantiated anywhere**.
+> - `js/core/error-handler.js:326` and `js/core/notification.js:497-498` create the
+>   singletons `errorHandler`, `notificationManager` and `loadingManager` inside
+>   their own files, but no other file consumes them.
+>
+> **Do not wire them up** as a "fix", and **do not delete them wholesale** either.
+> They are scheduled for a *harvest-then-delete*: the backup/export/import code in
+> `storage.js` and the schema-validation code in `validator.js` are wanted and will
+> be lifted out first; the surrounding class shells are not. Roughly 1,687 lines are
+> currently downloaded and parsed on every page load, with almost nothing in them running.
+>
+> **Two exceptions that do run at load time** — preserve or replace these before deleting:
+>
+> 1. `js/core/error-handler.js:332` / `:341` register live `window` listeners for `error`
+>    and `unhandledrejection`, so uncaught errors *are* captured and persisted to the
+>    `errorLog` localStorage key. This is the app's only global error capture.
+> 2. `notificationManager`'s constructor calls `init()`
+>    ([`js/core/notification.js:17`](../js/core/notification.js:17)), which appends
+>    `<div id="toast-container">` and `<div id="sr-announcer">` to `document.body` —
+>    duplicating the `toast-container` class already used by `app.js`'s own
+>    `<div id="toastContainer">` ([`app.js:751`](../app.js:751)).
+>
+> See [`ERROR_HANDLING_GUIDE.md`](ERROR_HANDLING_GUIDE.md:1) for the full design record.
 
 #### PWA Files
 - **[`service-worker.js`](../service-worker.js:1)** - Service worker for offline support
@@ -94,6 +135,8 @@ English-Learning-Portal/
     
     <!-- Stylesheets -->
     <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="css/animations.css">
+    <link rel="stylesheet" href="css/accessibility.css">
     <link rel="stylesheet" href="performance.css">
     <link rel="stylesheet" href="css/notifications.css">
     
@@ -103,11 +146,17 @@ English-Learning-Portal/
 <body>
     <!-- Application content -->
     
-    <!-- Core Utilities (Load first) -->
+    <!-- Core Utilities (loaded first — but see the status note above:
+         the first four are currently unused by the application) -->
     <script src="js/core/error-handler.js"></script>
     <script src="js/core/validator.js"></script>
     <script src="js/core/storage.js"></script>
     <script src="js/core/notification.js"></script>
+    <script src="js/core/levels.js"></script>
+    <script src="js/core/migrations.js"></script>
+    <script src="js/core/srs.js"></script>
+    <script src="js/theme-toggle.js"></script>
+    <script src="js/ui-enhancements.js"></script>
     
     <!-- Application Data & Logic -->
     <script src="data.js"></script>
@@ -118,28 +167,57 @@ English-Learning-Portal/
 
 ### In JavaScript
 
-```javascript
-// Importing utilities (they're globally available after script load)
-const validator = new Validator();
-const storage = new StorageManager(errorHandler, validator);
+**What the app actually does today.** All three helpers are plain object literals
+declared inside [`app.js`](../app.js:1) — there is nothing to construct:
 
-// Using notification system
-notificationManager.success('Operation completed!');
-loadingManager.show('#container', 'Loading...');
+```javascript
+// Error handling (AppErrorHandler, app.js:566)
+AppErrorHandler.logError(e, 'save progress');
+AppErrorHandler.handleError(error, `word "${word}"`, { showToast: true });
+const data = await AppErrorHandler.retryWithBackoff(fetchFn, 3, 1000, 'word lookup');
+
+// Toasts (Toast, app.js:741 — also exported as window.Toast at app.js:867)
+Toast.success('Progress saved');
+Toast.error('Failed to load word. Please try again.');
+
+// Loading overlay (LoadingIndicator, app.js:873 — window.LoadingIndicator at app.js:927)
+LoadingIndicator.show('vocabulary', 'Loading word...');
+LoadingIndicator.hide('vocabulary');
 ```
+
+> **⚠️ Aspirational only — not currently wired up.** The design below was the
+> original intent for `js/core/`. It is recorded here for whoever does the
+> harvest-then-delete pass, **not as working usage** — no file in the app performs
+> this wiring. Note also that every `Validator` member is `static`
+> ([`js/core/validator.js:12-392`](../js/core/validator.js:12)), so `new Validator()`
+> would produce an object with no usable methods.
+>
+> ```javascript
+> // ⚠️ DOES NOT EXIST IN THE CODEBASE — aspirational design, do not copy as-is
+> const validator = new Validator();
+> const storage = new StorageManager(errorHandler, validator);
+>
+> notificationManager.success('Operation completed!');
+> loadingManager.show('#container', 'Loading...');
+> ```
 
 ---
 
 ## 📊 File Size Summary
 
+Measured 2026-09-08. The previous figures in this table were badly out of date.
+
 | Category | Files | Total Lines | Size |
 |----------|-------|-------------|------|
-| **Core Utilities** | 4 | 1,647 | ~65 KB |
-| **Styles** | 3 | ~2,400 | ~80 KB |
-| **Application** | 2 | ~2,400 | ~95 KB |
-| **Documentation** | 6 | ~2,500 | ~100 KB |
-| **Tests** | 5 | ~500 | ~20 KB |
-| **Total** | 20 | ~11,000 | ~380 KB |
+| **Application** (`app.js`, `data.js`) | 2 | 4,235 | ~188 KB |
+| **Core Utilities** (⚠️ unused) | 4 | 1,687 | ~60 KB |
+| **Other `js/` modules** (`levels`, `migrations`, `srs`, `theme-toggle`, `ui-enhancements`) | 5 | 646 | ~32 KB |
+| **Styles** | 5 | 3,646 | ~80 KB |
+| **Documentation** (`docs/*.md`) | 14 | 6,528 | ~328 KB |
+| **Tests** (`__tests__/**/*.js`) | 10 | 2,995 | ~124 KB |
+| **Total** | 40 | 19,737 | ~812 KB |
+
+The ⚠️ unused row is ~60 KB of dead JavaScript shipped and parsed on every page load.
 
 ---
 
@@ -222,10 +300,10 @@ English-Learning-Portal/
 | Notifications CSS | `css/notifications.css` |
 | Main App JS | `app.js` |
 | Data JS | `data.js` |
-| Error Handler | `js/core/error-handler.js` |
-| Validator | `js/core/validator.js` |
-| Storage Manager | `js/core/storage.js` |
-| Notification Manager | `js/core/notification.js` |
+| Error Handler | `js/core/error-handler.js` (⚠️ unused) |
+| Validator | `js/core/validator.js` (⚠️ unused) |
+| Storage Manager | `js/core/storage.js` (⚠️ unused) |
+| Notification Manager | `js/core/notification.js` (⚠️ unused) |
 | Service Worker | `service-worker.js` |
 | PWA Manifest | `manifest.json` |
 
@@ -261,9 +339,12 @@ All paths in the documentation have been updated to reflect the current structur
    ```bash
    npx http-server -p 3000 -o
    ```
-3. **Check** [`ERROR_HANDLING_GUIDE.md`](ERROR_HANDLING_GUIDE.md:1) for integration steps
+3. **Check** [`ERROR_HANDLING_GUIDE.md`](ERROR_HANDLING_GUIDE.md:1) for the `js/core/`
+   design record — note that its integration steps were **never carried out**; the
+   guide's own status banner explains what the app really does
 
 ---
 
-**Last Updated:** 2025-12-12
-**Structure Version:** 2.1 (Streamlined documentation - essential files only)
+**Last Updated:** 2026-09-08 (corrected the `js/core/` wiring claims — see the status
+note under *Core Utilities*)
+**Structure Version:** 2.2 (Streamlined documentation - essential files only)
