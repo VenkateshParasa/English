@@ -970,23 +970,76 @@ async function fetchWordData(word) {
 function parseAPIResponse(apiData) {
     const meaning = apiData.meanings[0];
     const definition = meaning.definitions[0];
+    const correctDefinition = definition.definition;
+    const options = [correctDefinition, ...getDistractorDefinitions(correctDefinition, 3)].sort(() => Math.random() - 0.5);
     return {
         word: apiData.word,
         pronunciation: apiData.phonetic || apiData.phonetics[0]?.text || '',
-        definition: definition.definition,
+        definition: correctDefinition,
         example: definition.example || `Example: ${apiData.word} is commonly used.`,
         quiz: {
             question: `What does '${apiData.word}' mean?`,
-            options: [definition.definition, "Something different", "Unrelated concept", "Opposite meaning"].sort(() => Math.random() - 0.5),
-            correct: 0
+            options: options,
+            correct: options.indexOf(correctDefinition)
         }
     };
 }
 
 function getLocalWordData(word) {
     const localWords = vocabularyData[state.currentDifficulty] || vocabularyData.basic;
-    return localWords.find(w => w.word.toLowerCase() === word.toLowerCase()) || 
+    return localWords.find(w => w.word.toLowerCase() === word.toLowerCase()) ||
            localWords[state.currentWordIndex % localWords.length];
+}
+
+// Build plausible quiz distractors from the real definitions of OTHER vocabulary
+// entries, so the quiz tests meaning instead of absurdity-spotting. Prefers the
+// learner's current difficulty level and falls back to the remaining levels when
+// that level does not have enough entries.
+function getDistractorDefinitions(correctDefinition, count) {
+    const wanted = typeof count === 'number' && count > 0 ? count : 3;
+    const genericFallbacks = [
+        'A word with an entirely different meaning',
+        'A term used in an unrelated context',
+        'A phrase that means roughly the opposite'
+    ];
+    const preferred = [];
+    const others = [];
+    const seen = [correctDefinition];
+
+    function collect(entries, target) {
+        if (!Array.isArray(entries)) return;
+        entries.forEach(entry => {
+            const definition = entry && entry.definition;
+            if (typeof definition !== 'string' || definition.length === 0) return;
+            if (seen.indexOf(definition) !== -1) return;
+            seen.push(definition);
+            target.push(definition);
+        });
+    }
+
+    try {
+        const allLevels = typeof vocabularyData !== 'undefined' && vocabularyData ? vocabularyData : {};
+        const currentLevel = state && state.currentDifficulty ? state.currentDifficulty : 'basic';
+        collect(allLevels[currentLevel], preferred);
+        Object.keys(allLevels).forEach(level => {
+            if (level !== currentLevel) collect(allLevels[level], others);
+        });
+    } catch (error) {
+        console.warn('Vocabulary distractors unavailable, using generic options', error);
+    }
+
+    const pool = preferred.sort(() => Math.random() - 0.5).concat(others.sort(() => Math.random() - 0.5));
+    const distractors = pool.slice(0, wanted);
+
+    // Degrade gracefully: top up with generic options if the curated set is too small.
+    genericFallbacks.forEach(fallback => {
+        if (distractors.length >= wanted) return;
+        if (seen.indexOf(fallback) !== -1) return;
+        seen.push(fallback);
+        distractors.push(fallback);
+    });
+
+    return distractors;
 }
 
 // ============================================
