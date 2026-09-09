@@ -10,7 +10,9 @@ const Levels = require('../../js/core/levels.js');
 const Migrations = require('../../js/core/migrations.js');
 
 const { canonicalLevel, isKnownLevel, levelIds, levelLabel, DEFAULT_LEVEL } = Levels;
-const { migrateExerciseId, migrateProgress, backupOnce, SCHEMA_VERSION, PROGRESS_KEY } = Migrations;
+const { migrateExerciseId, migrateProgress, backupOnce, isFutureVersion, SCHEMA_VERSION, PROGRESS_KEY } = Migrations;
+
+const FUTURE_VERSION = SCHEMA_VERSION + 1;
 
 describe('canonicalLevel', () => {
     it('maps every legacy key to its CEFR replacement', () => {
@@ -174,5 +176,81 @@ describe('migrateProgress', () => {
         // Must not throw or skip the chain on garbage input.
         const out = migrateProgress({ schemaVersion: 'banana' });
         expect(out.schemaVersion).toBe(SCHEMA_VERSION);
+    });
+
+    // A record from a NEWER release is the one case where stamping is wrong.
+    // The old code stamped anything `>= SCHEMA_VERSION` back down to
+    // SCHEMA_VERSION, so an older client silently relabelled newer-shaped data
+    // as current and the version field stopped describing the data.
+    it('does not downgrade a record written by a newer release', () => {
+        const out = migrateProgress({ schemaVersion: FUTURE_VERSION, foo: 'bar' });
+        expect(out.schemaVersion).toBe(FUTURE_VERSION);
+        expect(out.foo).toBe('bar');
+    });
+
+    it('does not downgrade a far-future version either', () => {
+        expect(migrateProgress({ schemaVersion: 99 }).schemaVersion).toBe(99);
+    });
+
+    it('returns the future record itself, with nothing added or removed', () => {
+        // Fails closed: no upgrade step can be correct for a shape this build
+        // has never seen, so the record is handed back exactly as found.
+        const input = { schemaVersion: FUTURE_VERSION, currentWordIndex: 7, newShape: { x: 1 } };
+        const before = JSON.stringify(input);
+        const out = migrateProgress(input);
+        expect(out).toBe(input);
+        expect(JSON.stringify(out)).toBe(before);
+    });
+
+    it('does not back up a future record — it is not being rewritten', () => {
+        localStorage.setItem(PROGRESS_KEY, '{"schemaVersion":' + FUTURE_VERSION + '}');
+        migrateProgress({ schemaVersion: FUTURE_VERSION });
+        expect(localStorage.getItem(PROGRESS_KEY + '.bak.v' + FUTURE_VERSION)).toBeNull();
+    });
+
+    it('run twice equals run once for a future record', () => {
+        const input = { schemaVersion: FUTURE_VERSION, completedExercises: { vocabulary: ['vocabulary_foundation_0'] } };
+        const once = JSON.parse(JSON.stringify(migrateProgress(input)));
+        const twice = JSON.parse(JSON.stringify(migrateProgress(JSON.parse(JSON.stringify(once)))));
+        expect(twice).toEqual(once);
+        expect(twice.schemaVersion).toBe(FUTURE_VERSION);
+    });
+
+    it('still treats a version older than current as a migration candidate', () => {
+        // Guards the boundary from the other side: only `> SCHEMA_VERSION` is
+        // left alone; anything below it goes through the chain and is stamped.
+        localStorage.setItem(PROGRESS_KEY, '{"schemaVersion":-1}');
+        const out = migrateProgress({ schemaVersion: -1 });
+        expect(out.schemaVersion).toBe(SCHEMA_VERSION);
+        expect(localStorage.getItem(PROGRESS_KEY + '.bak.v-1')).toBe('{"schemaVersion":-1}');
+    });
+});
+
+describe('isFutureVersion', () => {
+    it('flags a record written by a newer release', () => {
+        expect(isFutureVersion({ schemaVersion: FUTURE_VERSION })).toBe(true);
+        expect(isFutureVersion({ schemaVersion: 99 })).toBe(true);
+    });
+
+    it('does not flag current, missing or corrupt versions', () => {
+        // Anything unusable reads as version 1, the pre-version shape — which
+        // is a migration candidate, not something from the future.
+        expect(isFutureVersion({ schemaVersion: SCHEMA_VERSION })).toBe(false);
+        expect(isFutureVersion({})).toBe(false);
+        expect(isFutureVersion({ schemaVersion: 'banana' })).toBe(false);
+        expect(isFutureVersion({ schemaVersion: 0 })).toBe(false);
+        expect(isFutureVersion({ schemaVersion: -1 })).toBe(false);
+    });
+
+    it('tolerates non-objects, like migrateProgress does', () => {
+        [null, undefined, 'garbage', 0, -1, [], 42].forEach(bad => {
+            expect(isFutureVersion(bad)).toBe(false);
+        });
+    });
+
+    it('does not modify the record it inspects', () => {
+        const record = { schemaVersion: FUTURE_VERSION, foo: 'bar' };
+        isFutureVersion(record);
+        expect(record).toEqual({ schemaVersion: FUTURE_VERSION, foo: 'bar' });
     });
 });

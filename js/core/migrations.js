@@ -18,6 +18,7 @@
  *   backupOnce(storageKey, fromVersion)
  *   migrateExerciseId(id)
  *   migrateProgress(loadedObject) -> migrated object (mutates in place)
+ *   isFutureVersion(loadedObject) -> true if written by a newer release
  */
 (function (global) {
     'use strict';
@@ -87,6 +88,51 @@
     // Phase 2 will add: { to: 2, run: migrateV1toV2 }
     const STEPS = [];
 
+    // Noisy once, not on every load: the condition does not change while the
+    // page is open, and this is a developer signal, never learner-facing text.
+    let warnedAboutFuture = false;
+    function warnAboutFutureVersion(from) {
+        if (warnedAboutFuture) return;
+        warnedAboutFuture = true;
+        try {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[migrations] stored progress is schemaVersion ' + from +
+                    ', newer than this build (' + SCHEMA_VERSION +
+                    '). Leaving it untouched; some sections may look incomplete.');
+            }
+        } catch (e) {
+            // A missing/hostile console must never break a load.
+        }
+    }
+
+    /**
+     * The version a stored record claims to be, as a number.
+     *
+     * Anything unusable — missing, `'banana'`, `null`, `0` — reads as 1, which
+     * is the pre-version shape: that is the oldest thing this chain knows how
+     * to handle, and it is the safe assumption because every upgrade step is
+     * written to be a no-op on data that has already had it applied.
+     */
+    function storedVersion(loaded) {
+        return Number(loaded && loaded.schemaVersion) || 1;
+    }
+
+    /**
+     * True when a record claims a version this build has never heard of, i.e.
+     * it was written by a newer release of the app (the learner used a newer
+     * client on another device, or the deployed bundle was rolled back but the
+     * browser's localStorage was not).
+     *
+     * Exposed so a caller can tell the learner something honest about why a
+     * section may look incomplete, instead of the app quietly deciding the
+     * data is current. Pure and side-effect free, so it stays safe to call on
+     * every load.
+     */
+    function isFutureVersion(loaded) {
+        if (!loaded || typeof loaded !== 'object') return false;
+        return storedVersion(loaded) > SCHEMA_VERSION;
+    }
+
     /**
      * Bring a parsed `learningProgress` object up to SCHEMA_VERSION.
      * Mutates and returns the same object (callers pass the result of
@@ -95,9 +141,25 @@
     function migrateProgress(loaded) {
         if (!loaded || typeof loaded !== 'object') return loaded;
 
-        const from = Number(loaded.schemaVersion) || 1;
+        const from = storedVersion(loaded);
 
-        if (from >= SCHEMA_VERSION) {
+        if (from > SCHEMA_VERSION) {
+            // From the future. There is no downgrade path — this build does not
+            // know what a version-N record contains, so it cannot rewrite it
+            // and must not relabel it either. Stamping SCHEMA_VERSION here (the
+            // old behaviour) made the version field lie about the shape of the
+            // data: the next load would take newer-shaped data for current, and
+            // the newer client that wrote it would then read its own record as
+            // if it had never been upgraded. Both are unrecoverable in the way
+            // this module exists to prevent, so leave the record exactly as
+            // found and return it untouched. The learner may see a section as
+            // incomplete; that is recoverable, and callers can ask
+            // isFutureVersion() to say so honestly.
+            warnAboutFutureVersion(from);
+            return loaded;
+        }
+
+        if (from === SCHEMA_VERSION) {
             // Already current. Stamp it anyway so data written before the
             // version field existed stops looking like a migration candidate.
             loaded.schemaVersion = SCHEMA_VERSION;
@@ -120,7 +182,8 @@
         PROGRESS_KEY: PROGRESS_KEY,
         backupOnce: backupOnce,
         migrateExerciseId: migrateExerciseId,
-        migrateProgress: migrateProgress
+        migrateProgress: migrateProgress,
+        isFutureVersion: isFutureVersion
     };
 
     global.Migrations = Migrations;

@@ -185,9 +185,18 @@ function saveProgress() {
             // Stamp the schema version on every write so a later save cannot
             // silently un-version data that loadProgress() already migrated,
             // which would make the migration chain re-run on every load.
-            schemaVersion: typeof Migrations !== 'undefined' && Migrations
-                ? Migrations.SCHEMA_VERSION
-                : state.schemaVersion,
+            //
+            // Never stamp DOWNWARDS. If this record was written by a newer
+            // release, state.schemaVersion holds that higher number and we must
+            // preserve it: migrateProgress() deliberately leaves a future
+            // version alone, and stamping SCHEMA_VERSION here would undo that
+            // on the very next save, relabelling newer-shaped data as current.
+            schemaVersion: Math.max(
+                Number(state.schemaVersion) || 0,
+                typeof Migrations !== 'undefined' && Migrations
+                    ? Migrations.SCHEMA_VERSION
+                    : 0
+            ) || undefined,
             completedExercises: {
                 vocabulary: Array.from(state.completedExercises.vocabulary),
                 sentences: Array.from(state.completedExercises.sentences),
@@ -815,38 +824,108 @@ const AppErrorHandler = {
         }
     },
 
-    // Validate and sanitize input
+    // Absolute ceiling on any validated string, whatever the caller asks for.
+    // A learner's answer is a sentence, not a document; anything past this is a
+    // paste accident or an attempt to fill localStorage.
+    HARD_MAX_LENGTH: 2000,
+
+    // The denylist: characters that are dangerous rather than merely
+    // unexpected, and are never part of anything a learner says or types.
+    //   U+0000-U+0008, U+000B, U+000C, U+000E-U+001F
+    //       C0 controls except tab, newline and carriage return. NUL
+    //       truncates strings in some storage layers and any of them can
+    //       break the console line written by logError().
+    //   U+007F-U+009F
+    //       DEL and the C1 controls.
+    //   U+200E, U+200F, U+202A-U+202E, U+2066-U+2069
+    //       Bidi marks and overrides, which can make a string render in an
+    //       order that is not the order it is stored in.
+    UNSAFE_CHARS: /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g,
+
+    /**
+     * Validate and sanitize a learner-supplied string.
+     *
+     * What this is actually for (US-121). Every caller passes free-form text a
+     * learner produced: a speech transcript (`speechAPI.startRecognition`), a
+     * word chip's text and the drag/drop payload built from it, a dictation
+     * answer, a word-scramble answer. None of it is a structured field, and
+     * none of it reaches an HTML sink — the read-aloud feedback is built with
+     * createElement/textContent in renderSpeechDiff(), the chips and the
+     * feedback lines are set with .textContent, and the rest is only compared
+     * against an expected answer. So the job here is: cap the length, drop
+     * characters that are genuinely dangerous, and reject nothing that a
+     * learner could legitimately say or type.
+     *
+     * Denylist, not allowlist. Callers used to pass the allowlist
+     * `/^[a-zA-Z0-9\s.,!?'\-]+$/`, which rejected the curly apostrophe most
+     * recognisers emit for "don't", every accented word (café, naïve, résumé),
+     * ampersands, en/em dashes and ellipses — and the app then told the learner
+     * their speech was invalid, which is the app blaming a learner for the
+     * app's own narrow pattern (BR-3, and the tone rules in
+     * docs/TEACHING_METHODOLOGY.md §5). Widening that allowlist only moves the
+     * same trap: written English keeps borrowing punctuation, and a recogniser
+     * set to en-US still emits names and loanwords from most of Latin-1 and
+     * beyond. The threat model here is unbounded input and control/bidi
+     * characters, not spelling, so an allowlist of *permitted* characters buys
+     * no safety it does not already have from the length cap, the denylist,
+     * and textContent at the point of use — while guaranteeing false
+     * accusations. Hence: denylist.
+     *
+     * `pattern` is still honoured for a genuinely structured field (an email,
+     * a date), but only when the caller opts in with `strictPattern: true`.
+     * Without that flag a passed pattern is ignored, because every pattern in
+     * this codebase today is the free-text allowlist described above.
+     * (`type` was accepted and never used; it is gone.)
+     */
     validateInput(input, rules = {}) {
         const {
             required = false,
             minLength = 0,
-            maxLength = Infinity,
+            maxLength = this.HARD_MAX_LENGTH,
             pattern = null,
-            type = 'text'
+            strictPattern = false
         } = rules;
 
-        // Check if required
-        if (required && (!input || input.trim() === '')) {
-            throw new Error('This field is required');
+        const text = (input === null || input === undefined) ? '' : String(input);
+
+        // Nothing supplied. Phrased as a state of the exercise, not a verdict
+        // on the learner: an empty transcript usually means the mic heard
+        // nothing, which is not a mistake.
+        if (required && text.trim() === '') {
+            throw new Error('There is nothing to check yet. Say or type your answer, then try again.');
         }
 
-        // If not required and empty, return sanitized empty string
-        if (!input) return '';
+        if (text === '') return '';
 
-        // Sanitize input
-        const sanitized = this.sanitizeInput(input);
+        // Sanitize. Deliberately NOT via sanitizeInput(): that one round-trips
+        // through .innerHTML, so it entity-encodes — "fish & chips" comes back
+        // as "fish &amp; chips". That encoding is correct for Toast, which
+        // renders its message with innerHTML, and wrong here, where the result
+        // is shown with textContent and compared against an expected answer;
+        // the learner would see the entity and be marked wrong for an
+        // ampersand. Strip the dangerous characters and the markup delimiters
+        // instead, and leave the learner's own punctuation alone.
+        const sanitized = text
+            .replace(this.UNSAFE_CHARS, '')
+            .replace(/[<>]/g, '')
+            .trim();
 
-        // Check length
+        if (required && sanitized === '') {
+            throw new Error('There is nothing to check yet. Say or type your answer, then try again.');
+        }
+
+        // Length. The caller's cap applies, but never above the hard ceiling.
+        const cap = Math.min(Number(maxLength) || this.HARD_MAX_LENGTH, this.HARD_MAX_LENGTH);
         if (sanitized.length < minLength) {
-            throw new Error(`Minimum length is ${minLength} characters`);
+            throw new Error(`This needs at least ${minLength} characters. Add a little more and try again.`);
         }
-        if (sanitized.length > maxLength) {
-            throw new Error(`Maximum length is ${maxLength} characters`);
+        if (sanitized.length > cap) {
+            throw new Error(`This exercise can only check ${cap} characters at a time. Shorten it and try again.`);
         }
 
-        // Check pattern
-        if (pattern && !pattern.test(sanitized)) {
-            throw new Error('Invalid format');
+        // Format, for structured fields only — see the note above.
+        if (strictPattern && pattern && !pattern.test(sanitized)) {
+            throw new Error('That is not the format this field expects.');
         }
 
         return sanitized;
@@ -1279,16 +1358,22 @@ const speechAPI = {
         recognition.onresult = (e) => {
             try {
                 const transcript = e.results[0][0].transcript;
-                // Validate and sanitize the speech recognition result
+                // Length-cap and strip control characters. No `pattern` here:
+                // an allowlist of "acceptable" characters rejected ordinary
+                // speech output (curly apostrophes, accented letters, "&") and
+                // then told the learner their input was invalid, which blamed
+                // them for the app's own narrowness. Escaping happens at the
+                // point of use — renderSpeechDiff() builds with textContent only.
                 const validatedTranscript = AppErrorHandler.validateInput(transcript, {
                     required: true,
-                    maxLength: 500,
-                    pattern: /^[a-zA-Z0-9\s.,!?'\-]+$/
+                    maxLength: 500
                 });
                 callback(validatedTranscript);
             } catch (error) {
                 AppErrorHandler.handleError(error, 'speech recognition result');
-                Toast.error('Invalid speech input detected');
+                // Not "Invalid speech input detected" — that accused the learner
+                // of the app's own failure to read what the recogniser returned.
+                Toast.info('The recogniser did not return anything to check that time. Press the button and try again.');
             }
         };
         recognition.onerror = (e) => {
@@ -1976,8 +2061,21 @@ function loadSentenceExercise() {
             document.getElementById('dragDropContainer').style.display = 'block';
             break;
         case 'fillblank':
-            loadFillBlankExercise(exercise.fillBlank);
-            document.getElementById('fillBlankExerciseContainer').style.display = 'block';
+            // exercise.fillBlank is not guaranteed to be usable, so only show
+            // the fill-in-the-blank screen if one could actually be rendered.
+            // loadFillBlankExercise() rebuilds the prompt from the exercise's
+            // own words when the supplied one is missing or malformed, and
+            // returns false only when there is nothing at all to blank out.
+            // In that case drop to drag-and-drop, which needs just words and
+            // correct. The choice is data-driven, not random, so the same
+            // index always lands on the same mode and a failed item can be
+            // retried exactly as it was first seen.
+            if (loadFillBlankExercise(exercise.fillBlank)) {
+                document.getElementById('fillBlankExerciseContainer').style.display = 'block';
+            } else {
+                loadDragDropSentence(exercise);
+                document.getElementById('dragDropContainer').style.display = 'block';
+            }
             break;
         case 'multiplechoice':
             loadMultipleChoiceSentence(exercise);
@@ -2069,20 +2167,77 @@ function initializeSentenceBuilderDragDrop() {
     };
 }
 
+// A fill-in-the-blank prompt is only usable if rendering it actually produces a
+// gradable blank: a sentence string holding a whole-word "___", plus an answer
+// to compare the typed value against.
+//
+// Two ways the data breaks this. Curated entries in data.js carry fillBlank by
+// hand, so nothing stops a new entry from shipping without one. Generated
+// exercises build the blank with a plain String.replace of the middle word,
+// which happily lands inside a longer word earlier in the sentence - "and" in
+// "Successful leadership requires understanding and implementing..." blanks out
+// as "underst___ing", a blank no learner can answer. Both are rejected here.
+function isUsableFillBlank(fillBlank) {
+    if (!fillBlank || typeof fillBlank.sentence !== 'string') return false;
+    if (typeof fillBlank.answer !== 'string' || !fillBlank.answer.trim()) return false;
+
+    const blankAt = fillBlank.sentence.indexOf('___');
+    if (blankAt === -1) return false;
+
+    // The blank must stand on its own rather than sitting mid-word.
+    const isBoundary = (character) => character === undefined || !/[A-Za-z0-9]/.test(character);
+    return isBoundary(fillBlank.sentence[blankAt - 1]) && isBoundary(fillBlank.sentence[blankAt + 3]);
+}
+
+// Build a fill-in-the-blank prompt out of the exercise's own words, for
+// exercises whose supplied fillBlank is missing or unusable.
+//
+// Blanking a token by position rather than by String.replace guarantees exactly
+// one "___" and an answer that grades correctly, and always taking the middle
+// token keeps the result deterministic: the same exercise yields the same blank
+// on every render, so a learner can retry an item they failed.
+function deriveFillBlank(exercise) {
+    if (!exercise) return null;
+
+    const source = Array.isArray(exercise.words) && exercise.words.length
+        ? exercise.words
+        : (typeof exercise.correct === 'string' ? exercise.correct.split(' ') : []);
+    const words = source.filter(word => typeof word === 'string' && word.trim());
+
+    // One word alone would blank the whole sentence away, leaving no context.
+    if (words.length < 2) return null;
+
+    const blankIndex = Math.floor(words.length / 2);
+    return {
+        sentence: words.map((word, i) => (i === blankIndex ? '___' : word)).join(' '),
+        answer: words[blankIndex],
+        options: [words[blankIndex]]
+    };
+}
+
+// Returns true when a blank was rendered, false when this exercise cannot
+// support the mode at all, so the caller can show a different one instead.
 function loadFillBlankExercise(fillBlank) {
-    document.getElementById('fillBlankInstruction').textContent = fillBlank.sentence;
+    // Do not trust the caller: reading .sentence off a missing prompt used to
+    // throw and leave the learner staring at an empty exercise. Fall back to a
+    // blank derived from the exercise currently on screen.
+    let prompt = isUsableFillBlank(fillBlank) ? fillBlank : deriveFillBlank(state.currentExercise);
+    if (!isUsableFillBlank(prompt)) return false;
+
+    document.getElementById('fillBlankInstruction').textContent = prompt.sentence;
     const container = document.getElementById('fillBlankContainer');
     container.innerHTML = '';
-    fillBlank.sentence.split('___').forEach((part, i, arr) => {
+    prompt.sentence.split('___').forEach((part, i, arr) => {
         container.appendChild(document.createTextNode(part));
         if (i < arr.length - 1) {
             const input = document.createElement('input');
             input.type = 'text';
             input.className = 'blank-input';
-            input.dataset.answer = fillBlank.answer;
+            input.dataset.answer = prompt.answer;
             container.appendChild(input);
         }
     });
+    return true;
 }
 
 // Multiple Choice Sentence Exercise
@@ -2702,34 +2857,95 @@ function initializeReadingButtons() {
 // LISTENING SECTION
 // ============================================
 
-function loadListeningExercise() {
-    // Use hybrid approach: curated sentences + generated sentences
-    const curatedExercises = listeningExercises[state.currentDifficulty];
+// The one place a listening sentence is chosen. Pure in (index, difficulty) and
+// free of Math.random, which is what makes the exercise retryable: a learner who
+// fails, navigates away and comes back gets the same sentence, not a new one.
+// Use hybrid approach: curated sentences + generated sentences.
+function getListeningSentence(index, difficulty) {
+    const level = difficulty || state.currentDifficulty;
+    const curatedExercises = listeningExercises[level] || [];
     const curatedCount = curatedExercises.length;
-    
-    let sentence;
-    
+
     // Strategy: Use curated for first N, then alternate between curated and generated
-    if (state.currentListeningIndex < curatedCount) {
-        sentence = curatedExercises[state.currentListeningIndex];
-    } else {
-        const adjustedIndex = state.currentListeningIndex - curatedCount;
-        const shouldUseCurated = adjustedIndex % 3 === 0;
-        
-        if (shouldUseCurated && curatedCount > 0) {
-            sentence = curatedExercises[adjustedIndex % curatedCount];
-        } else {
-            // Generate new listening sentence using sentence generation templates
-            const exercise = generateAlgorithmicSentence(state.currentListeningIndex, state.currentDifficulty);
-            sentence = exercise.correct;
-        }
+    if (index < curatedCount) {
+        return curatedExercises[index];
     }
-    
+
+    const adjustedIndex = index - curatedCount;
+    const shouldUseCurated = adjustedIndex % 3 === 0;
+
+    if (shouldUseCurated && curatedCount > 0) {
+        return curatedExercises[adjustedIndex % curatedCount];
+    }
+
+    // Generated listening sentence. generateAlgorithmicSentence picks its template
+    // and its slot words from the index alone, so `.correct` is stable for a given
+    // (index, difficulty); only its unused fillBlank.options shuffles.
+    return generateAlgorithmicSentence(index, level).correct;
+}
+
+function loadListeningExercise() {
+    const sentence = getListeningSentence(state.currentListeningIndex, state.currentDifficulty);
+
+    // One string drives all three: what is shown, what is spoken, and what the
+    // learner is asked to say back. Read-aloud means reading *this* sentence, so
+    // the target cannot drift from the audio. It used to be a random vocabulary
+    // word, which made the task "say an unrelated word" and made a full match
+    // trivial — a one-word target is matched by any sentence containing it.
     document.getElementById('listenSentence').textContent = sentence;
     document.getElementById('playListening').dataset.text = sentence;
-    const words = vocabularyData[state.currentDifficulty];
-    document.getElementById('targetWord').textContent = words[Math.floor(Math.random() * words.length)].word;
+    document.getElementById('targetWord').textContent = sentence;
     updateNavigationButtons('listening');
+}
+
+// Vocabulary items for the current level that the recogniser failed to match in a
+// read-aloud attempt. Returns full word objects, not strings: SRS.getDueWords()
+// only surfaces records that carry a word payload with a quiz, so lapsing a bare
+// string would write a record the review queue can never show.
+function missedVocabularyWords(diff) {
+    const words = vocabularyData[state.currentDifficulty] || [];
+    const missedKeys = new Set(diff.missed.map(normalizeSpeechWord).filter(key => key.length > 0));
+    return words.filter(entry => missedKeys.has(normalizeSpeechWord(entry.word)));
+}
+
+// TEACHING_METHODOLOGY.md §3 lists "read-aloud failure" as a reset trigger for a
+// vocabulary item. The sentence itself is not an SRS item, so what we lapse is the
+// vocabulary words inside it that the recogniser did not match. Three deliberate
+// limits, because a recogniser miss is weak evidence:
+//  - Only words in the level's vocabulary list. Function words ("a", "the") are
+//    what the recogniser drops most and are not items we teach.
+//  - Only when the recogniser matched more than half the sentence. If most of the
+//    sentence failed, the evidence is about the microphone, the noise floor or the
+//    recogniser, not about particular words, and lapsing on it would corrupt the
+//    schedule with false lapses.
+//  - Lapse only, never success. A recogniser match is not evidence the learner
+//    knows the word (principle 3), so it must never extend an interval.
+// A lapse here means "due for review again", not "you mispronounced this" — which
+// is the honest response to "we could not verify you produced this word".
+function recordReadAloudLapses(diff) {
+    if (!window.SRS || diff.totalCount === 0) return [];
+    if (diff.matchedCount * 2 <= diff.totalCount) return [];
+
+    const lapsed = missedVocabularyWords(diff);
+    lapsed.forEach(wordObj => SRS.schedule(wordObj, false));
+    if (lapsed.length > 0) {
+        updateDueCount();
+    }
+    return lapsed;
+}
+
+// Tell the learner which words went back into the review queue. Appended to the
+// diff rather than replacing it, and built with textContent for the same reason
+// renderSpeechDiff is.
+function appendLapseNote(id, lapsed) {
+    if (lapsed.length === 0) return;
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    const note = document.createElement('div');
+    note.style.marginTop = '8px';
+    note.textContent = `Added back to your review queue: ${lapsed.map(entry => entry.word).join(', ')}.`;
+    el.appendChild(note);
 }
 
 function initializeListeningButtons() {
@@ -2872,13 +3088,21 @@ function initializeListeningButtons() {
     };
     
     document.getElementById('startSpeech').onclick = () => {
-        const target = document.getElementById('targetWord').textContent;
+        // The target is the sentence that gets played, read from the same element
+        // that feeds speechAPI.speak. Anything else could go stale against the
+        // audio; this is the audio.
+        const target = document.getElementById('playListening').dataset.text || '';
         speechAPI.startRecognition((transcript) => {
             // textContent, not innerHTML: the transcript is user-derived.
             document.getElementById('recognizedText').textContent = `The recogniser heard: "${transcript}"`;
 
             const diff = diffSpeechAttempt(target, transcript);
             renderSpeechDiff('speechFeedback', diff);
+
+            // A read-aloud miss re-queues the vocabulary words involved. Done before
+            // the completion check so a full match, which lapses nothing, still
+            // costs the same call.
+            appendLapseNote('speechFeedback', recordReadAloudLapses(diff));
 
             // Completion requires every target word to be matched. The old check
             // passed on a substring, so reading a whole paragraph that happened to
@@ -3027,6 +3251,10 @@ function loadWordScramble() {
     document.getElementById('scrambledWord').textContent = current.scrambled;
     document.getElementById('scrambleInput').value = '';
     document.getElementById('scrambleInput').dataset.answer = current.word;
+    // Each rendered scramble may be counted as one solved puzzle. The flag
+    // rides on the input alongside this puzzle's answer because the Check
+    // handler is wired once at startup and cannot see a local declared here.
+    document.getElementById('scrambleInput').dataset.counted = 'false';
     document.getElementById('scrambleHint').textContent = `Hint: ${current.hint}`;
     document.getElementById('scrambleHint').classList.remove('visible');
     document.getElementById('scrambleFeedback').classList.remove('visible');
@@ -3046,10 +3274,17 @@ function initializeScrambleButtons() {
             if (sanitizedInput.toUpperCase() === input.dataset.answer) {
                 showFeedback('scrambleFeedback', '✓ Correct!', 'success');
                 Toast.success('Word unscrambled correctly!');
-                state.dailyGoals.puzzle = true;
-                updateStatistics('puzzles');
-                updateDashboard();
-                saveProgress();
+                // Count the solve once per rendered scramble, so pressing
+                // Check again with the answer still in the box cannot inflate
+                // puzzlesSolved. loadWordScramble() clears the flag, so the
+                // next puzzle counts again.
+                if (input.dataset.counted !== 'true') {
+                    input.dataset.counted = 'true';
+                    state.dailyGoals.puzzle = true;
+                    updateStatistics('puzzles');
+                    updateDashboard();
+                    saveProgress();
+                }
             } else {
                 showFeedback('scrambleFeedback', '✗ Incorrect', 'error');
             }
