@@ -91,6 +91,68 @@ const state = {
 };
 
 // ============================================
+// LEVEL RESOLUTION
+// ============================================
+//
+// js/core/levels.js owns the canonical tier ids (foundation / everyday /
+// confident / fluent). data.js still keys all of its content by the LEGACY
+// names (basic / intermediate / medium) and renaming those keys is a separate,
+// riskier phase. So state.currentDifficulty deliberately keeps holding a DATA
+// KEY rather than a canonical id: every existing lookup - vocabularyData[...],
+// sentenceExercises[...], getExerciseId() - keeps working untouched.
+//
+// resolveDifficulty() is the single boundary where the two vocabularies meet.
+// It normalises anything level-ish through canonicalLevel() (which never
+// returns undefined) and then maps that canonical id back to the key the
+// content is actually stored under, so a corrupted localStorage value or a
+// stale value from an old release can no longer produce
+// vocabularyData[undefined] and take a whole section down with it.
+
+// Canonical id -> legacy data key, derived from LEVEL_ALIASES instead of being
+// hardcoded so it cannot drift from levels.js. Only the non-identity aliases
+// are reversed: those are exactly the legacy spellings data.js uses.
+function levelDataKeyMap() {
+    const map = {};
+    if (typeof LEVEL_ALIASES === 'undefined' || !LEVEL_ALIASES) return map;
+    Object.keys(LEVEL_ALIASES).forEach(alias => {
+        const canonical = LEVEL_ALIASES[alias];
+        if (alias !== canonical) map[canonical] = alias;
+    });
+    return map;
+}
+
+// vocabularyData is the widest of the content maps and every other content map
+// (sentenceExercises, readingPassages, listeningExercises, puzzleData.*) uses
+// the same key set, so it is a fair probe for "is there content under this key".
+function hasContentForLevel(key) {
+    if (typeof key !== 'string' || key.length === 0) return false;
+    return typeof vocabularyData !== 'undefined' && !!vocabularyData &&
+           Object.prototype.hasOwnProperty.call(vocabularyData, key);
+}
+
+function resolveDifficulty(value) {
+    // Guard for levels.js being absent (script-order mistake). Degrade to the
+    // previous behaviour of trusting the value, but still never hand back a key
+    // that has no content behind it.
+    if (typeof canonicalLevel !== 'function') {
+        return hasContentForLevel(value) ? value : 'basic';
+    }
+
+    const canonical = canonicalLevel(value);
+    const keyMap = levelDataKeyMap();
+
+    // Legacy key first, because that is what data.js has today. Then the
+    // canonical id itself, so this keeps working the day the content keys are
+    // renamed. Then the default tier, so the return value is always usable.
+    const legacyKey = keyMap[canonical];
+    if (hasContentForLevel(legacyKey)) return legacyKey;
+    if (hasContentForLevel(canonical)) return canonical;
+
+    const fallback = keyMap[DEFAULT_LEVEL] || DEFAULT_LEVEL;
+    return hasContentForLevel(fallback) ? fallback : 'basic';
+}
+
+// ============================================
 // UTILITY FUNCTIONS
 // ============================================
 
@@ -120,6 +182,12 @@ function saveProgress() {
     try {
         const toSave = {
             ...state,
+            // Stamp the schema version on every write so a later save cannot
+            // silently un-version data that loadProgress() already migrated,
+            // which would make the migration chain re-run on every load.
+            schemaVersion: typeof Migrations !== 'undefined' && Migrations
+                ? Migrations.SCHEMA_VERSION
+                : state.schemaVersion,
             completedExercises: {
                 vocabulary: Array.from(state.completedExercises.vocabulary),
                 sentences: Array.from(state.completedExercises.sentences),
@@ -134,11 +202,67 @@ function saveProgress() {
     }
 }
 
+/**
+ * Bring a parsed `learningProgress` object up to the current schema version
+ * before anything is merged into `state`, so state only ever sees current-shape
+ * data.
+ *
+ * Fails soft in three ways, because a throwing loadProgress() bricks the whole
+ * app while stale-but-readable data costs the learner nothing:
+ *   - js/core/migrations.js missing (script-order mistake) -> pass through
+ *   - migration throws -> log and use the data as-is
+ *   - backup write fails (quota / private mode) -> backupOnce() returns false
+ *     and the migration still proceeds, since it is idempotent
+ */
+function migrateStoredProgress(loaded) {
+    if (!loaded || typeof loaded !== 'object') return loaded;
+    if (typeof Migrations === 'undefined' || !Migrations) return loaded;
+
+    try {
+        const from = Number(loaded.schemaVersion) || 1;
+        // Nothing to do on a second load: the stamp is already current, so skip
+        // both the backup and the rewrite. This is what makes the whole call
+        // site idempotent, not just Migrations.migrateProgress() itself.
+        const alreadyStamped = loaded.schemaVersion === Migrations.SCHEMA_VERSION;
+
+        if (!alreadyStamped) {
+            // Copy the pristine record aside BEFORE the rewrite below. This is
+            // the manual recovery path if a migration turns out to be wrong in
+            // the field; backupOnce never overwrites an existing backup.
+            Migrations.backupOnce(Migrations.PROGRESS_KEY, from);
+        }
+
+        const migrated = Migrations.migrateProgress(loaded);
+
+        if (!alreadyStamped) {
+            // Persist the migrated record so the chain runs once rather than on
+            // every load. Written directly rather than via saveProgress() so
+            // that fields state does not track survive untouched.
+            localStorage.setItem(Migrations.PROGRESS_KEY, JSON.stringify(migrated));
+        }
+
+        return migrated;
+    } catch (e) {
+        AppErrorHandler.logError(e, 'migrate progress');
+        return loaded;
+    }
+}
+
 function loadProgress() {
     try {
+        // Normalise the level key before anything reads it. Note that
+        // currentDifficulty is deliberately NOT restored from storage here -
+        // that has never been the behaviour, and the difficulty buttons in
+        // index.html hardcode Basic as active, so restoring a stored level would
+        // desync the visible selector from the content being shown.
+        state.currentDifficulty = resolveDifficulty(state.currentDifficulty);
+
         const saved = localStorage.getItem('learningProgress');
         if (saved) {
-            const loaded = JSON.parse(saved);
+            const loaded = migrateStoredProgress(JSON.parse(saved));
+            if (loaded && loaded.schemaVersion) {
+                state.schemaVersion = loaded.schemaVersion;
+            }
             // Legacy counters: kept only so old saves keep loading. They are no longer
             // authoritative and are not displayed anywhere - state.dailyStats and
             // state.overallStats (written by updateStatistics) are the source of truth.
@@ -1056,6 +1180,32 @@ function getDistractorDefinitions(correctDefinition, count) {
 // WEB SPEECH API
 // ============================================
 
+// Speech recognition failures the browser reports, each with the one thing the
+// learner can actually do about it. `aborted` is handled separately in
+// startRecognition because it is normal cancellation, not an error.
+const speechRecognitionErrors = {
+    'no-speech': {
+        message: 'The microphone did not pick up any speech. Press the button again and start speaking after a short pause.',
+        level: 'info'
+    },
+    'not-allowed': {
+        message: 'Your browser is blocking microphone access for this site. Allow the microphone in the site permissions, then press the button again.',
+        level: 'warning'
+    },
+    'service-not-allowed': {
+        message: 'Your browser or system is blocking its speech recognition service. Check the speech or privacy settings, then press the button again.',
+        level: 'warning'
+    },
+    'audio-capture': {
+        message: 'No working microphone was found. Check that one is connected and chosen as the input device, then press the button again.',
+        level: 'warning'
+    },
+    'network': {
+        message: 'Speech recognition needs an internet connection and could not reach the service. The rest of this exercise still works offline.',
+        level: 'warning'
+    }
+};
+
 const speechAPI = {
     currentUtterance: null,
     isPaused: false,
@@ -1142,13 +1292,155 @@ const speechAPI = {
             }
         };
         recognition.onerror = (e) => {
-            AppErrorHandler.logError(new Error(e.error), 'speech recognition');
-            Toast.error('Speech recognition error. Please try again.');
+            const code = (e && e.error) ? e.error : 'unknown';
+
+            // `aborted` is what the browser reports when the learner stops the mic,
+            // switches exercise, or a new recognition run replaces this one. That is
+            // ordinary use, not a failure, so it gets no toast and no error log.
+            if (code === 'aborted') return;
+
+            AppErrorHandler.logError(new Error(code), 'speech recognition');
+
+            const known = speechRecognitionErrors[code];
+            const message = known ? known.message : 'Speech recognition stopped before it could finish. You can press the button and try again, or skip this one and come back to it.';
+            const level = known ? known.level : 'warning';
+            Toast[level](message);
         };
         recognition.start();
         return recognition;
     }
 };
+
+// ============================================
+// READ-ALOUD WORD COMPARISON
+// ============================================
+// The browser recogniser tells us which words it guessed, never whether a human
+// would understand the learner. Everything below reports the former only.
+
+// Split text into display tokens. Comparison keys are derived separately so the
+// learner always sees their target with its original casing and punctuation.
+function splitSpeechWords(text) {
+    return String(text == null ? '' : text).trim().split(/\s+/).filter(word => word.length > 0);
+}
+
+// Comparison key: lowercase, punctuation stripped, internal apostrophes kept so
+// "don't" and "dont" still differ from "do". Returns '' for punctuation-only tokens.
+function normalizeSpeechWord(word) {
+    return String(word).toLowerCase().replace(/[^a-z0-9']+/g, '').replace(/^'+|'+$/g, '');
+}
+
+// Compare a target string with a recogniser transcript, word by word.
+// Returns { words: [{ word, matched }], missed: [word], matchedCount, totalCount, allMatched }.
+//
+// Alignment is done with a longest common subsequence over the normalised word
+// lists rather than comparing index by index. Index-by-index breaks as soon as
+// the recogniser drops or inserts a single word: everything after the shift is
+// reported wrong, which tells the learner their whole sentence failed when only
+// one word did. LCS finds the largest in-order set of target words the recogniser
+// produced, so one drop or insertion costs exactly one word. It is O(n*m) on word
+// counts of a sentence, which is nothing.
+function diffSpeechAttempt(target, transcript) {
+    const targetWords = splitSpeechWords(target);
+    const heardWords = splitSpeechWords(transcript);
+    const targetKeys = targetWords.map(normalizeSpeechWord);
+    const heardKeys = heardWords.map(normalizeSpeechWord).filter(key => key.length > 0);
+
+    const n = targetKeys.length;
+    const m = heardKeys.length;
+
+    // lcs[i][j] = length of the longest common subsequence of targetKeys[i..] and heardKeys[j..]
+    const lcs = [];
+    for (let i = 0; i <= n; i++) {
+        lcs.push(new Array(m + 1).fill(0));
+    }
+    for (let i = n - 1; i >= 0; i--) {
+        for (let j = m - 1; j >= 0; j--) {
+            if (targetKeys[i] && targetKeys[i] === heardKeys[j]) {
+                lcs[i][j] = lcs[i + 1][j + 1] + 1;
+            } else {
+                lcs[i][j] = Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+            }
+        }
+    }
+
+    // A token that normalises to nothing (a stray dash, say) carries no sound, so
+    // it is never something the recogniser could have missed.
+    const words = targetWords.map((word, i) => ({ word, matched: targetKeys[i].length === 0 }));
+
+    // Walk the table forwards, taking a match whenever the keys agree and
+    // otherwise stepping down whichever side keeps the subsequence longest.
+    let i = 0;
+    let j = 0;
+    while (i < n && j < m) {
+        if (targetKeys[i] && targetKeys[i] === heardKeys[j]) {
+            words[i].matched = true;
+            i++;
+            j++;
+        } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+            i++;
+        } else {
+            j++;
+        }
+    }
+
+    const missed = words.filter(entry => !entry.matched).map(entry => entry.word);
+    return {
+        words,
+        missed,
+        matchedCount: words.length - missed.length,
+        totalCount: words.length,
+        allMatched: words.length > 0 && missed.length === 0
+    };
+}
+
+// Wording rule: we only ever report what the recogniser did. A full match is
+// "understood every word", never "Perfect!" — we have no evidence for that.
+function speechAttemptMessage(diff) {
+    if (diff.allMatched) {
+        return 'The recogniser understood every word.';
+    }
+    const noun = diff.totalCount === 1 ? 'word' : 'words';
+    return `The recogniser missed ${diff.missed.length} of ${diff.totalCount} ${noun}: ${diff.missed.join(', ')}.`;
+}
+
+// Render the diff into a feedback element. Built with createElement/textContent
+// rather than innerHTML: the transcript is user-derived, and target words are
+// echoed back next to it, so no string here is ever parsed as HTML.
+function renderSpeechDiff(id, diff) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    if (diff.totalCount === 0) {
+        showFeedback(id, 'There is no target word to compare with yet.', 'info');
+        return;
+    }
+
+    el.textContent = '';
+
+    const summary = document.createElement('div');
+    summary.textContent = speechAttemptMessage(diff);
+    el.appendChild(summary);
+
+    const line = document.createElement('div');
+    line.style.marginTop = '8px';
+    diff.words.forEach((entry, index) => {
+        const span = document.createElement('span');
+        span.textContent = entry.word;
+        if (!entry.matched) {
+            span.style.fontWeight = '700';
+            span.style.textDecoration = 'underline';
+            span.style.textDecorationStyle = 'wavy';
+            span.title = 'The recogniser did not match this word';
+        }
+        line.appendChild(span);
+        if (index < diff.words.length - 1) {
+            line.appendChild(document.createTextNode(' '));
+        }
+    });
+    el.appendChild(line);
+
+    el.className = `feedback ${diff.allMatched ? 'success' : 'info'} visible`;
+}
 
 function updateReadingControls(state) {
     const playBtn = document.getElementById('readAloud');
@@ -1213,7 +1505,10 @@ function switchSection(sectionName) {
 function initializeDifficultySelectors() {
     document.querySelectorAll('.diff-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            const level = btn.dataset.level;
+            // Normalise the DOM attribute through levels.js rather than trusting
+            // it: a data-level typo or a level the content no longer has would
+            // otherwise be written straight into state and crash every lookup.
+            const level = resolveDifficulty(btn.dataset.level);
             btn.parentElement.querySelectorAll('.diff-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             state.currentDifficulty = level;
@@ -2579,9 +2874,17 @@ function initializeListeningButtons() {
     document.getElementById('startSpeech').onclick = () => {
         const target = document.getElementById('targetWord').textContent;
         speechAPI.startRecognition((transcript) => {
-            document.getElementById('recognizedText').textContent = `You said: "${transcript}"`;
-            if (transcript.toLowerCase().includes(target.toLowerCase())) {
-                showFeedback('speechFeedback', '✓ Perfect!', 'success');
+            // textContent, not innerHTML: the transcript is user-derived.
+            document.getElementById('recognizedText').textContent = `The recogniser heard: "${transcript}"`;
+
+            const diff = diffSpeechAttempt(target, transcript);
+            renderSpeechDiff('speechFeedback', diff);
+
+            // Completion requires every target word to be matched. The old check
+            // passed on a substring, so reading a whole paragraph that happened to
+            // contain the word counted as done; a partial match now leaves the
+            // exercise open so the learner can try it again.
+            if (diff.allMatched) {
                 state.dailyGoals.listening = true;
                 if (!isExerciseCompleted('listening', state.currentListeningIndex)) {
                     markExerciseComplete('listening', state.currentListeningIndex);
@@ -2589,8 +2892,6 @@ function initializeListeningButtons() {
                 }
                 updateDashboard();
                 saveProgress();
-            } else {
-                showFeedback('speechFeedback', `Try: "${target}"`, 'info');
             }
         });
     };
