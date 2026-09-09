@@ -52,6 +52,7 @@ const state = {
     currentSentenceIndex: 0,
     currentPassageIndex: 0,
     currentListeningIndex: 0,
+    currentGrammarIndex: 0,
     currentPuzzle: 'wordsearch',
     vocabProgress: 0,
     // Legacy counters kept for backwards-compatible loading of old saves only.
@@ -1837,6 +1838,10 @@ function updateDashboard() {
     document.getElementById('sentencesCompleted').textContent = state.overallStats.totalSentences;
     document.getElementById('readingCompleted').textContent = state.overallStats.totalReading;
     document.getElementById('puzzlesSolved').textContent = state.overallStats.totalPuzzles;
+    // Guarded, unlike the four above: this card arrived with the Grammar section
+    // (US-501) and an older cached index.html would not have it.
+    const grammarCard = document.getElementById('grammarCompleted');
+    if (grammarCard) grammarCard.textContent = state.overallStats.totalGrammar || 0;
     
     // Daily goals
     Object.keys(state.dailyGoals).forEach(key => {
@@ -1881,6 +1886,10 @@ function updateStatisticsDisplay() {
                 <span>Puzzles:</span> <strong>${state.dailyStats.puzzlesSolved}</strong>
                 ${getComparisonBadge(state.dailyStats.puzzlesSolved, state.overallStats.averageDaily.puzzles)}
             </div>
+            <div class="stat-row">
+                <span>Grammar:</span> <strong>${state.dailyStats.grammarCompleted || 0}</strong>
+                ${getComparisonBadge(state.dailyStats.grammarCompleted || 0, state.overallStats.averageDaily.grammar || 0)}
+            </div>
         `;
     }
     
@@ -1902,7 +1911,7 @@ function updateStatisticsDisplay() {
                 <span>Total Words:</span> <strong>${state.overallStats.totalWords}</strong>
             </div>
             <div class="stat-row">
-                <span>Total Exercises:</span> <strong>${state.overallStats.totalSentences + state.overallStats.totalReading + state.overallStats.totalListening + state.overallStats.totalPuzzles}</strong>
+                <span>Total Exercises:</span> <strong>${state.overallStats.totalSentences + state.overallStats.totalReading + state.overallStats.totalListening + state.overallStats.totalPuzzles + (state.overallStats.totalGrammar || 0)}</strong>
             </div>
         `;
     }
@@ -1926,6 +1935,9 @@ function updateStatisticsDisplay() {
             </div>
             <div class="stat-row">
                 <span>Puzzles:</span> <strong>${state.overallStats.averageDaily.puzzles}</strong>
+            </div>
+            <div class="stat-row">
+                <span>Grammar:</span> <strong>${state.overallStats.averageDaily.grammar || 0}</strong>
             </div>
         `;
     }
@@ -3683,6 +3695,845 @@ function showFeedback(id, msg, type) {
 }
 
 // ============================================
+// GRAMMAR SECTION (US-501 / US-149)
+// ============================================
+//
+// One grammar point per screen, rendered from data/grammar.js. The point of this
+// section is FR-GRM-2 / TEACHING_METHODOLOGY.md §2: every wrong answer returns a
+// REASON, a CONTRAST and a RETRY. All three come out of the authored content
+// (`feedback[].reason`, `feedback[].contrast`, `feedback[].retryCue`) — nothing
+// here writes generic copy, because generic copy is the worthless "Wrong" the
+// methodology exists to forbid. The rule (`lesson.rule`) is shown alongside,
+// which is the other half of that paragraph, and the options stay live so the
+// retry is on the same screen as the ✗ (FR-A11Y-5).
+//
+// ⚠️ data/grammar.js is a classic script declaring LEXICAL globals, so
+// `window.grammarLessons` is permanently undefined. Every access below goes
+// through a bare `typeof grammarLessons` check, as that file's header requires.
+//
+// Only `mode: 'gap'` is implemented. The schema reserves 'choose', 'repair' and
+// 'order'; an item in one of those modes is skipped with a visible note rather
+// than mis-rendered as a gap.
+
+/** The authored points for a tier, always an array. */
+function grammarLessonsFor(level) {
+    if (typeof grammarLessons === 'undefined' || !grammarLessons) return [];
+    const list = grammarLessons[level];
+    return Array.isArray(list) ? list : [];
+}
+
+/**
+ * The tier whose grammar points the learner will actually be shown, or null when
+ * no tier has any.
+ *
+ * Grammar cannot use resolveDifficulty(): that probes `vocabularyData`, which has
+ * content for three tiers, while grammar today has content for one. Asking it
+ * would return 'confident' and render an empty section. Same policy as
+ * resolveDifficulty otherwise — step DOWN first, because easier content the
+ * learner can use beats an empty screen and never shows them something above the
+ * level they asked for.
+ */
+function resolveGrammarLevel(requested) {
+    const canonical = (typeof canonicalLevel === 'function')
+        ? canonicalLevel(requested)
+        : requested;
+    if (grammarLessonsFor(canonical).length > 0) return canonical;
+
+    const ordered = (typeof LEVELS !== 'undefined' && Array.isArray(LEVELS))
+        ? LEVELS.slice().sort((a, b) => a.order - b.order).map(l => l.id)
+        : ['foundation', 'everyday', 'confident', 'fluent'];
+    const authored = ordered.filter(id => grammarLessonsFor(id).length > 0);
+    if (authored.length === 0) return null;
+
+    const wanted = ordered.indexOf(canonical);
+    const lower = authored.filter(id => ordered.indexOf(id) < wanted);
+    return lower.length > 0 ? lower[lower.length - 1] : authored[0];
+}
+
+/**
+ * Append authored text to `el`, honouring the content markup convention:
+ * `**double asterisks**` for the target form, `*single*` for a cited word.
+ *
+ * Built node by node, never with innerHTML (US-127). This is our own content, so
+ * the risk today is low — but it is *content*, the thing most likely to grow a
+ * stray angle bracket, and index.html's CSP still allows 'unsafe-inline'.
+ */
+function appendGrammarText(el, text) {
+    const raw = text == null ? '' : String(text);
+    raw.split(/(\*\*[^*]+\*\*)/).forEach(chunk => {
+        if (!chunk) return;
+        if (chunk.length > 4 && chunk.startsWith('**') && chunk.endsWith('**')) {
+            const strong = document.createElement('strong');
+            strong.textContent = chunk.slice(2, -2);
+            el.appendChild(strong);
+            return;
+        }
+        chunk.split(/(\*[^*]+\*)/).forEach(part => {
+            if (!part) return;
+            if (part.length > 2 && part.startsWith('*') && part.endsWith('*')) {
+                const em = document.createElement('em');
+                em.textContent = part.slice(1, -1);
+                el.appendChild(em);
+                return;
+            }
+            el.appendChild(document.createTextNode(part));
+        });
+    });
+    return el;
+}
+
+/** `<p class=…>` with the content markup rendered. */
+function grammarParagraph(text, className) {
+    const p = document.createElement('p');
+    if (className) p.className = className;
+    return appendGrammarText(p, text);
+}
+
+/**
+ * A collapsed extra, as a native <details>/<summary> — which is keyboard
+ * operable without a line of JavaScript (FR-A11Y-1). Used for the honest-limits
+ * material the methodology insists on carrying but which would bury the rule if
+ * it were all open at once.
+ */
+function grammarDisclosure(summaryText, fill) {
+    const details = document.createElement('details');
+    details.className = 'grammar-more';
+    const summary = document.createElement('summary');
+    summary.textContent = summaryText;
+    details.appendChild(summary);
+    const body = document.createElement('div');
+    details.appendChild(body);
+    fill(body);
+    return details;
+}
+
+/** How an answer is displayed: `rendersAs` if the item has one, else the value. */
+function grammarAnswerLabel(item, answer) {
+    if (item && item.rendersAs && Object.prototype.hasOwnProperty.call(item.rendersAs, answer)) {
+        return item.rendersAs[answer];
+    }
+    if (answer === '' || answer === null || answer === undefined) {
+        return typeof ZERO_ARTICLE_LABEL !== 'undefined' ? ZERO_ARTICLE_LABEL : '— (nothing)';
+    }
+    return String(answer);
+}
+
+/** The prompt with the gap filled by `answer`, for showing the finished sentence. */
+function grammarFilledPrompt(item, answer) {
+    const shown = (answer === '' || answer === null || answer === undefined)
+        ? ''
+        : grammarAnswerLabel(item, answer);
+    return String(item.prompt || '')
+        // Function form, not a string: a replacement string would treat `$&` and
+        // friends as backreferences, and this text comes from content.
+        .replace('___', () => shown)
+        // A zero-article answer leaves a double space behind it.
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+}
+
+/** True when `answer` is one of the item's defensible answers (FR-GRM-5). */
+function isAcceptedGrammarAnswer(item, answer) {
+    return Array.isArray(item.accept) &&
+        item.accept.some(a => a && a.answer === answer);
+}
+
+/**
+ * Per-render state for the point on screen. Rebuilt by loadGrammarPoint(), so
+ * moving to another point or another tier cannot carry an outcome across.
+ *
+ *   solved      ids of practice items the learner has got right
+ *   wrongSeen   any wrong answer on this point since it was loaded
+ *   scheduled   the SRS lapse has already been recorded (record it once)
+ */
+let grammarSession = null;
+
+/**
+ * The lapse half of FR-GRM-3: "Wrong → that point's interval resets to 1 day."
+ *
+ * Recorded on the FIRST wrong answer, not at the end, so a learner who abandons
+ * the point still has the evidence that they got it wrong. Recorded once per
+ * render: six wrong answers on one point are one point to review, not six.
+ */
+function scheduleGrammarLapse(lesson) {
+    if (!grammarSession || grammarSession.scheduled) return;
+    grammarSession.scheduled = true;
+    if (window.SRS && typeof SRS.scheduleItem === 'function') {
+        SRS.scheduleItem('gram', lesson.id, lesson, false);
+    }
+}
+
+/**
+ * The success half: "Right first time → interval extends."
+ *
+ * Only when the whole point was answered with no wrong answer at all. If the
+ * learner lapsed, `scheduled` is already true and this is a no-op — a point the
+ * learner got wrong and then fixed must not buy a longer interval, which is the
+ * same reasoning as SRS.selfReport not being allowed to.
+ */
+function scheduleGrammarSuccess(lesson) {
+    if (!grammarSession || grammarSession.scheduled || grammarSession.wrongSeen) return;
+    grammarSession.scheduled = true;
+    if (window.SRS && typeof SRS.scheduleItem === 'function') {
+        SRS.scheduleItem('gram', lesson.id, lesson, true);
+    }
+}
+
+/** Log a wrong answer by type, so it can be resurfaced (FR-SRS-3, principle 4). */
+function recordGrammarMistake(lesson, item, feedback, given) {
+    if (typeof Mistakes === 'undefined' || !Mistakes || typeof Mistakes.record !== 'function') return;
+    const category = (feedback && feedback.logAs) || lesson.mistakeCategory;
+    if (!category) return;
+    const expected = (item.accept || []).map(a => grammarAnswerLabel(item, a.answer)).join(' / ');
+    Mistakes.record(category, {
+        item: item.id,
+        given: grammarAnswerLabel(item, given),
+        expected: expected,
+        source: 'grammarPractice'
+    });
+}
+
+/**
+ * Everything the learner sees on a wrong answer, in the order the methodology
+ * lists it: the reason, the contrast, the rule, the retry.
+ *
+ * `feedback[]` carries one entry per wrong option, so the normal path is entirely
+ * authored. The two fallbacks exist because a bare verdict is not an acceptable
+ * degraded mode: an option with no authored entry falls back to
+ * `fallbackFeedback` (written for exactly this), and if that is missing too the
+ * last resort is still a reason (the rule), a contrast (the authored pair) and a
+ * retry (the first `decide` question) — never "✗ Wrong".
+ */
+function grammarFeedbackFor(lesson, item, answer) {
+    const authored = (item.feedback || []).find(f => f && f.forAnswer === answer);
+    if (authored) return authored;
+    if (item.fallbackFeedback) return item.fallbackFeedback;
+    return {
+        reason: lesson.rule,
+        contrast: [
+            grammarFilledPrompt(item, (item.accept && item.accept[0] || {}).answer),
+            item.prompt
+        ],
+        retryCue: (lesson.decide && lesson.decide[0]) || 'Read the sentence again and ask who knows which one.'
+    };
+}
+
+/** Render one 'gap' practice item, with its own feedback area. */
+function renderGrammarPracticeItem(lesson, item, number) {
+    const wrap = document.createElement('div');
+    wrap.className = 'grammar-item';
+    wrap.setAttribute('role', 'group');
+
+    const promptId = `grammarPrompt-${item.id}`;
+    const prompt = grammarParagraph(item.prompt, 'grammar-prompt');
+    prompt.id = promptId;
+    const label = document.createElement('span');
+    label.className = 'grammar-item-number';
+    label.textContent = `${number}. `;
+    prompt.insertBefore(label, prompt.firstChild);
+    wrap.setAttribute('aria-labelledby', promptId);
+    wrap.appendChild(prompt);
+
+    // Real <button>s, so Tab reaches them and Enter/Space activate them with no
+    // key handling of our own (FR-A11Y-1). The vocabulary quiz uses clickable
+    // <div>s, which is the bug this section deliberately does not copy.
+    const options = document.createElement('div');
+    options.className = 'grammar-options';
+    options.setAttribute('role', 'group');
+    options.setAttribute('aria-label', 'Answer options');
+
+    const feedback = document.createElement('div');
+    feedback.className = 'grammar-feedback';
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+
+    (item.options || []).forEach(option => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'grammar-option';
+        btn.textContent = grammarAnswerLabel(item, option);
+        // The value is held in the closure, not in a data attribute: the
+        // zero-article answer IS the empty string, and dataset would hand back
+        // '' for "missing" too.
+        btn.addEventListener('click', () => {
+            answerGrammarItem(lesson, item, option, btn, options, feedback);
+        });
+        options.appendChild(btn);
+    });
+
+    wrap.appendChild(options);
+    wrap.appendChild(feedback);
+    return wrap;
+}
+
+/** Handle one answer: grade against `accept`, then teach. */
+function answerGrammarItem(lesson, item, answer, button, optionsHost, feedbackHost) {
+    if (!grammarSession) return;
+    const correct = isAcceptedGrammarAnswer(item, answer);
+
+    optionsHost.querySelectorAll('.grammar-option').forEach(b => {
+        b.classList.remove('selected');
+    });
+    button.classList.add('selected');
+    button.classList.toggle('correct', correct);
+    button.classList.toggle('incorrect', !correct);
+
+    feedbackHost.textContent = '';
+    feedbackHost.className = 'grammar-feedback visible ' + (correct ? 'is-correct' : 'is-wrong');
+
+    if (correct) {
+        renderGrammarCorrect(lesson, item, answer, optionsHost, feedbackHost);
+    } else {
+        renderGrammarWrong(lesson, item, answer, feedbackHost);
+    }
+}
+
+/**
+ * A right answer. Methodology §2: "Right on first try: say nothing more." So this
+ * shows the finished sentence and nothing that reads as praise — plus the two
+ * things the content explicitly authored to appear after an answer: `alsoNotice`,
+ * and, when `showDifferenceOnCorrect` is set, what each accepted answer means.
+ * That flag only exists on items with more than one right answer, where the
+ * learner has to be told the two are not interchangeable.
+ */
+function renderGrammarCorrect(lesson, item, answer, optionsHost, feedbackHost) {
+    const heading = document.createElement('p');
+    heading.className = 'grammar-verdict';
+    heading.textContent = '✓ ';
+    const sentence = document.createElement('strong');
+    sentence.textContent = grammarFilledPrompt(item, answer);
+    heading.appendChild(sentence);
+    feedbackHost.appendChild(heading);
+
+    if (item.showDifferenceOnCorrect && (item.accept || []).length > 1) {
+        const note = document.createElement('div');
+        note.className = 'grammar-both-right';
+        note.appendChild(grammarParagraph(
+            'Both answers here are right, and they do not mean the same thing:'
+        ));
+        const list = document.createElement('ul');
+        item.accept.forEach(a => {
+            const li = document.createElement('li');
+            const form = document.createElement('strong');
+            form.textContent = grammarAnswerLabel(item, a.answer);
+            li.appendChild(form);
+            li.appendChild(document.createTextNode(' — '));
+            appendGrammarText(li, a.means);
+            list.appendChild(li);
+        });
+        note.appendChild(list);
+        feedbackHost.appendChild(note);
+    }
+
+    if (item.spoken) feedbackHost.appendChild(grammarParagraph(item.spoken, 'grammar-spoken'));
+    if (item.alsoNotice) feedbackHost.appendChild(grammarParagraph(item.alsoNotice, 'grammar-also'));
+
+    // Answered correctly: lock this item so a second click cannot re-count it,
+    // and leave the chosen answer visible.
+    optionsHost.querySelectorAll('.grammar-option').forEach(b => { b.disabled = true; });
+
+    grammarSession.solved.add(item.id);
+    if (grammarSession.solved.size >= grammarSession.itemsTotal) {
+        completeGrammarPoint(lesson);
+    }
+}
+
+/**
+ * A wrong answer — the acceptance bar for this whole section.
+ *
+ * Reason, contrast, rule, retry, in that order, all from the content. The option
+ * buttons are deliberately NOT disabled: the retry has to be on the same screen
+ * as the ✗ (FR-A11Y-5), so the learner answers again in place.
+ */
+function renderGrammarWrong(lesson, item, answer, feedbackHost) {
+    const fb = grammarFeedbackFor(lesson, item, answer);
+
+    const verdict = document.createElement('p');
+    verdict.className = 'grammar-verdict';
+    verdict.textContent = '✗ ';
+    const chosen = document.createElement('strong');
+    chosen.textContent = grammarFilledPrompt(item, answer);
+    verdict.appendChild(chosen);
+    feedbackHost.appendChild(verdict);
+
+    // 1. WHY. Never a verdict — see the schema note on `reason`.
+    feedbackHost.appendChild(grammarParagraph(fb.reason, 'grammar-reason'));
+
+    // Real English that simply means something else here. Saying so is the
+    // difference between teaching and scolding (data/grammar.js on
+    // `grammaticalButDifferent`).
+    if (fb.grammaticalButDifferent) {
+        feedbackHost.appendChild(grammarParagraph(
+            'That is correct English — it just says something different here.',
+            'grammar-butdifferent'
+        ));
+    }
+
+    // 2. THE CONTRAST: a minimal pair, so the learner sees what their choice
+    //    would have meant instead of only what was wanted.
+    const pair = Array.isArray(fb.contrast) ? fb.contrast : [];
+    if (pair.length) {
+        const list = document.createElement('ul');
+        list.className = 'grammar-contrast-pair';
+        pair.forEach(line => {
+            const li = document.createElement('li');
+            appendGrammarText(li, line);
+            list.appendChild(li);
+        });
+        feedbackHost.appendChild(list);
+    }
+
+    // 3. THE RULE, in one sentence (methodology §2).
+    const rule = grammarParagraph(lesson.rule, 'grammar-rule-reminder');
+    rule.insertBefore(document.createTextNode('The rule: '), rule.firstChild);
+    feedbackHost.appendChild(rule);
+
+    // 4. THE RETRY. The cue is a question the learner can run before answering
+    //    again; the buttons above are still live.
+    const retry = grammarParagraph(fb.retryCue, 'grammar-retry');
+    retry.insertBefore(document.createTextNode('Try again — '), retry.firstChild);
+    feedbackHost.appendChild(retry);
+
+    grammarSession.wrongSeen = true;
+    scheduleGrammarLapse(lesson);
+    recordGrammarMistake(lesson, item, fb, answer);
+    if (typeof updateDueCount === 'function') updateDueCount();
+}
+
+/**
+ * Every practice item on this point answered correctly.
+ *
+ * This is the call that makes the section count: updateStatistics('grammar')
+ * reads the registry row, so `grammarCompleted` / `totalGrammar` / the
+ * `grammar` daily average all move without a line of section-specific code.
+ * Guarded by isExerciseCompleted so redoing a point cannot inflate the counters.
+ */
+function completeGrammarPoint(lesson) {
+    const index = grammarSession.index;
+    const alreadyDone = isExerciseCompleted('grammar', index);
+
+    scheduleGrammarSuccess(lesson);
+    if (typeof updateDueCount === 'function') updateDueCount();
+
+    if (!alreadyDone) {
+        state.dailyGoals.grammar = true;
+        updateStatistics('grammar');
+    }
+    markExerciseComplete('grammar', index);
+    updateDashboard();
+    saveProgress();
+
+    const done = document.getElementById('grammarFeedback');
+    if (done) {
+        showFeedback(
+            'grammarFeedback',
+            grammarSession.wrongSeen
+                ? 'All six done. The ones you had to think about are the ones worth saying out loud below — this point will come back for review tomorrow.'
+                : 'All six right first time. This point will come back for review later, at a longer gap.',
+            'success'
+        );
+    }
+
+    // The error forms this learner actually produces — shown only now. The
+    // schema is explicit: "Shown after practice, never before (do not prime
+    // errors)."
+    renderGrammarCommonErrors(lesson);
+}
+
+/** `commonErrors`, appended after the practice block once the point is done. */
+function renderGrammarCommonErrors(lesson) {
+    const host = document.getElementById('grammarPractice');
+    if (!host || !Array.isArray(lesson.commonErrors) || !lesson.commonErrors.length) return;
+    if (host.querySelector('.grammar-common-errors')) return;
+
+    const block = document.createElement('div');
+    block.className = 'grammar-common-errors';
+    block.appendChild(grammarDisclosure(
+        'What most learners say instead, and the fix',
+        body => {
+            lesson.commonErrors.forEach(err => {
+                const entry = document.createElement('div');
+                entry.className = 'grammar-common-error';
+                entry.appendChild(grammarParagraph('Often heard: ' + err.heard, 'grammar-heard'));
+                entry.appendChild(grammarParagraph('Instead: ' + err.fix, 'grammar-fix'));
+                if (err.why) entry.appendChild(grammarParagraph(err.why));
+                body.appendChild(entry);
+            });
+        }
+    ));
+    host.appendChild(block);
+}
+
+/**
+ * The "notice" half of the arc (methodology principle 7): the rule, how to decide
+ * in real time, the pattern in a short exchange, and the three contrast pairs.
+ *
+ * The honest-limits material — the mechanism, why it matters, how it actually
+ * sounds, the caveats, the L1 note — goes in <details> blocks. It is all required
+ * reading by the methodology and all of it would bury the one-sentence rule if it
+ * were open at once.
+ */
+function renderGrammarTeaching(lesson, shownLevel, requestedLevel) {
+    const title = document.getElementById('grammarPointTitle');
+    if (title) title.textContent = lesson.title;
+
+    const host = document.getElementById('grammarTeaching');
+    if (!host) return;
+    host.textContent = '';
+
+    if (shownLevel !== requestedLevel) {
+        // Honest about what happened, rather than silently showing another tier's
+        // content under the selected button.
+        const note = grammarParagraph(
+            `No grammar points are written for ${grammarLevelLabel(requestedLevel)} yet, so this is a ${grammarLevelLabel(shownLevel)} point.`,
+            'grammar-level-note'
+        );
+        host.appendChild(note);
+    }
+
+    const meta = document.createElement('p');
+    meta.className = 'grammar-meta';
+    meta.textContent = [
+        lesson.cefr ? `CEFR ${lesson.cefr}` : '',
+        `Point ${grammarSession.index + 1} of ${grammarSession.total}`
+    ].filter(Boolean).join(' · ');
+    host.appendChild(meta);
+
+    host.appendChild(grammarParagraph(lesson.rule, 'grammar-rule'));
+
+    if (Array.isArray(lesson.decide) && lesson.decide.length) {
+        const h = document.createElement('h4');
+        h.textContent = 'How to decide, while you are speaking';
+        host.appendChild(h);
+        const ol = document.createElement('ol');
+        ol.className = 'grammar-decide';
+        lesson.decide.forEach(step => {
+            const li = document.createElement('li');
+            appendGrammarText(li, step);
+            ol.appendChild(li);
+        });
+        host.appendChild(ol);
+    }
+
+    if (lesson.notice && Array.isArray(lesson.notice.lines)) {
+        const h = document.createElement('h4');
+        h.textContent = 'Notice it here';
+        host.appendChild(h);
+        const dialogue = document.createElement('div');
+        dialogue.className = 'grammar-notice';
+        lesson.notice.lines.forEach(line => {
+            const p = document.createElement('p');
+            const who = document.createElement('span');
+            who.className = 'grammar-speaker';
+            who.textContent = line.speaker + ': ';
+            p.appendChild(who);
+            appendGrammarText(p, line.text);
+            dialogue.appendChild(p);
+        });
+        host.appendChild(dialogue);
+
+        if (lesson.notice.question) {
+            host.appendChild(grammarDisclosure(lesson.notice.question, body => {
+                body.appendChild(grammarParagraph(lesson.notice.answer));
+            }));
+        }
+    }
+
+    if (Array.isArray(lesson.contrast) && lesson.contrast.length) {
+        const h = document.createElement('h4');
+        h.textContent = 'Same sentence, different meaning';
+        host.appendChild(h);
+        lesson.contrast.forEach(c => {
+            const card = document.createElement('div');
+            card.className = 'grammar-contrast';
+            (c.pair || []).forEach(member => {
+                const line = document.createElement('p');
+                line.className = 'grammar-contrast-line';
+                const text = document.createElement('strong');
+                text.textContent = member.text;
+                line.appendChild(text);
+                line.appendChild(document.createElement('br'));
+                appendGrammarText(line, member.means);
+                card.appendChild(line);
+            });
+            if (c.takeaway) card.appendChild(grammarParagraph(c.takeaway, 'grammar-takeaway'));
+            host.appendChild(card);
+        });
+    }
+
+    if (lesson.explain || lesson.whyItMatters) {
+        host.appendChild(grammarDisclosure('Why English works this way', body => {
+            if (lesson.explain) body.appendChild(grammarParagraph(lesson.explain));
+            if (lesson.whyItMatters) {
+                body.appendChild(grammarParagraph(lesson.whyItMatters, 'grammar-why'));
+            }
+        }));
+    }
+
+    if (lesson.spokenNote) {
+        host.appendChild(grammarDisclosure('How it actually sounds', body => {
+            body.appendChild(grammarParagraph(lesson.spokenNote));
+        }));
+    }
+
+    if (Array.isArray(lesson.caveats) && lesson.caveats.length) {
+        host.appendChild(grammarDisclosure('Where the rule does not hold', body => {
+            const ul = document.createElement('ul');
+            lesson.caveats.forEach(c => {
+                const li = document.createElement('li');
+                appendGrammarText(li, c);
+                ul.appendChild(li);
+            });
+            body.appendChild(ul);
+        }));
+    }
+
+    const l1 = grammarL1Note(lesson);
+    if (l1) {
+        host.appendChild(grammarDisclosure('If your first language has no articles like this', body => {
+            if (l1.note) body.appendChild(grammarParagraph(l1.note));
+            if (l1.bridge) body.appendChild(grammarParagraph(l1.bridge, 'grammar-bridge'));
+        }));
+    }
+}
+
+/** A tier's display label, from levels.js, falling back to the raw id. */
+function grammarLevelLabel(level) {
+    if (typeof Levels !== 'undefined' && Levels && typeof Levels.levelLabel === 'function') {
+        return Levels.levelLabel(level) || level;
+    }
+    return level;
+}
+
+/**
+ * The L1 note for this learner (FR-GRM-4), or null.
+ *
+ * There is no learner L1 profile in `state` yet, so there is nothing to key on.
+ * Rather than hardcode 'telugu' — which would be a guess dressed up as a
+ * setting — this shows the note only when the content offers exactly one, which
+ * is unambiguous, and shows nothing once a point carries several. A real profile
+ * field replaces the `keys.length === 1` line and nothing else.
+ */
+function grammarL1Note(lesson) {
+    const notes = lesson && lesson.l1Notes;
+    if (!notes || typeof notes !== 'object') return null;
+    const chosen = state.learnerL1 && notes[state.learnerL1];
+    if (chosen) return chosen;
+    const keys = Object.keys(notes);
+    return keys.length === 1 ? notes[keys[0]] : null;
+}
+
+/**
+ * The "use" half of the arc: one say-it-aloud task with a self-check list.
+ *
+ * Never graded and never gated — `skippable` is FR-SPK-9 / FR-A11Y-4, so both
+ * buttons complete the task and neither needs a microphone. "I could not do it
+ * yet" goes through SRS as a SELF-REPORT, which per FR-SRS-5 may bring the point
+ * back sooner but can never certify it; "I said it" is deliberately not sent at
+ * all, because a learner marking their own speaking right is not evidence and
+ * srs.js would ignore it anyway.
+ */
+function renderGrammarProduce(lesson) {
+    const host = document.getElementById('grammarProduce');
+    if (!host) return;
+    host.textContent = '';
+
+    const produce = lesson.produce;
+    if (!produce) {
+        host.appendChild(grammarParagraph('No speaking task is written for this point yet.'));
+        return;
+    }
+
+    host.appendChild(grammarParagraph(produce.task, 'grammar-task'));
+    if (produce.targetSeconds) {
+        host.appendChild(grammarParagraph(`About ${produce.targetSeconds} seconds. Nobody is recording — this is for you.`, 'grammar-task-meta'));
+    }
+
+    if (Array.isArray(produce.selfCheck) && produce.selfCheck.length) {
+        const h = document.createElement('h4');
+        h.textContent = 'Check yourself';
+        host.appendChild(h);
+        const ul = document.createElement('ul');
+        ul.className = 'grammar-selfcheck';
+        produce.selfCheck.forEach(q => {
+            const li = document.createElement('li');
+            appendGrammarText(li, q);
+            ul.appendChild(li);
+        });
+        host.appendChild(ul);
+    }
+
+    if (produce.model && produce.model.text) {
+        host.appendChild(grammarDisclosure('Show an example (then look away)', body => {
+            body.appendChild(grammarParagraph(produce.model.text, 'grammar-model'));
+            if (produce.model.note) {
+                body.appendChild(grammarParagraph(produce.model.note, 'grammar-model-note'));
+            }
+        }));
+    }
+
+    const buttons = document.createElement('div');
+    buttons.className = 'button-group';
+    buttons.setAttribute('role', 'group');
+    buttons.setAttribute('aria-label', 'Speaking task');
+
+    const status = document.createElement('div');
+    status.className = 'grammar-feedback';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+
+    const done = document.createElement('button');
+    done.type = 'button';
+    done.className = 'btn-primary';
+    done.textContent = 'I said it';
+    done.addEventListener('click', () => {
+        status.className = 'grammar-feedback visible is-correct';
+        status.textContent = 'Noted. Saying it is the part that transfers to real conversation.';
+    });
+
+    const notYet = document.createElement('button');
+    notYet.type = 'button';
+    notYet.className = 'btn-secondary';
+    notYet.textContent = produce.skippable ? 'Skip for now' : 'Not yet';
+    notYet.addEventListener('click', () => {
+        if (produce.srsSelfReport && window.SRS && typeof SRS.scheduleItem === 'function') {
+            SRS.scheduleItem('gram', lesson.id, lesson, false, { selfReported: true });
+            if (typeof updateDueCount === 'function') updateDueCount();
+        }
+        status.className = 'grammar-feedback visible';
+        status.textContent = 'Fine — skipping it costs you nothing. This point will come back sooner so you can try again.';
+    });
+
+    buttons.appendChild(done);
+    buttons.appendChild(notYet);
+    host.appendChild(buttons);
+    host.appendChild(status);
+}
+
+/**
+ * The section loader, registered as `grammar` in Sections.registerRuntime().
+ *
+ * Renders exactly one point: whichever `state.currentGrammarIndex` points at,
+ * clamped to what is authored. Deliberately synchronous and content-only — there
+ * is no API call to make here, so there is nothing to fail.
+ */
+function loadGrammarPoint() {
+    const requested = (typeof canonicalLevel === 'function')
+        ? canonicalLevel(state.currentDifficulty)
+        : state.currentDifficulty;
+    const level = resolveGrammarLevel(state.currentDifficulty);
+    const lessons = level ? grammarLessonsFor(level) : [];
+
+    const feedbackEl = document.getElementById('grammarFeedback');
+    if (feedbackEl) feedbackEl.className = 'feedback';
+
+    if (!lessons.length) {
+        // No content anywhere: say so plainly rather than render an empty card.
+        // Reachable if data/grammar.js fails to load, which is the one failure
+        // mode this section has.
+        const title = document.getElementById('grammarPointTitle');
+        if (title) title.textContent = 'No grammar points yet';
+        ['grammarTeaching', 'grammarPractice', 'grammarProduce'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = '';
+        });
+        const host = document.getElementById('grammarTeaching');
+        if (host) {
+            host.appendChild(grammarParagraph(
+                'The grammar content could not be loaded on this device. Everything else still works — try reloading the page.'
+            ));
+        }
+        grammarSession = null;
+        updateGrammarNavigationState(0);
+        return;
+    }
+
+    // Clamp rather than wrap: with one authored point, wrapping would make Next
+    // look like it did nothing. Also repairs an index restored from a save made
+    // when more points existed.
+    const index = Math.min(Math.max(0, state.currentGrammarIndex || 0), lessons.length - 1);
+    state.currentGrammarIndex = index;
+    const lesson = lessons[index];
+
+    const gapItems = (lesson.practice || []).filter(p => p && p.mode === 'gap');
+
+    grammarSession = {
+        lessonId: lesson.id,
+        level: level,
+        index: index,
+        total: lessons.length,
+        itemsTotal: gapItems.length,
+        solved: new Set(),
+        wrongSeen: false,
+        scheduled: false
+    };
+
+    renderGrammarTeaching(lesson, level, requested);
+
+    const practiceHost = document.getElementById('grammarPractice');
+    if (practiceHost) {
+        practiceHost.textContent = '';
+        gapItems.forEach((item, i) => {
+            practiceHost.appendChild(renderGrammarPracticeItem(lesson, item, i + 1));
+        });
+
+        // Modes the schema reserves but this section does not implement yet.
+        // Named rather than dropped: a silently missing practice item is how a
+        // section starts teaching less than its content says it does.
+        const otherModes = (lesson.practice || []).filter(p => p && p.mode !== 'gap');
+        if (otherModes.length) {
+            practiceHost.appendChild(grammarParagraph(
+                `${otherModes.length} more practice item(s) on this point use an exercise type this version cannot show yet.`,
+                'grammar-unsupported'
+            ));
+        }
+    }
+
+    renderGrammarProduce(lesson);
+
+    // Paints #grammarStatus (created after the h2 on first use) and is the reason
+    // the section's h2 must stay a direct child.
+    updateNavigationButtons('grammar');
+    updateGrammarNavigationState(lessons.length);
+}
+
+/** Disable the ends of the walk, rather than letting Next look broken. */
+function updateGrammarNavigationState(total) {
+    const prev = document.getElementById('prevGrammar');
+    const next = document.getElementById('nextGrammar');
+    const index = state.currentGrammarIndex || 0;
+    if (prev) prev.disabled = total === 0 || index <= 0;
+    if (next) next.disabled = total === 0 || index >= total - 1;
+}
+
+function initializeGrammarButtons() {
+    const prev = document.getElementById('prevGrammar');
+    const next = document.getElementById('nextGrammar');
+
+    if (prev) {
+        prev.onclick = () => {
+            if ((state.currentGrammarIndex || 0) > 0) {
+                state.currentGrammarIndex--;
+                loadGrammarPoint();
+                saveProgress();
+            }
+        };
+    }
+
+    if (next) {
+        next.onclick = () => {
+            const level = resolveGrammarLevel(state.currentDifficulty);
+            const total = level ? grammarLessonsFor(level).length : 0;
+            if ((state.currentGrammarIndex || 0) < total - 1) {
+                state.currentGrammarIndex++;
+                loadGrammarPoint();
+                saveProgress();
+            }
+        };
+    }
+}
+
+// ============================================
 // SECTION LOADER REGISTRATION
 // ============================================
 //
@@ -3704,6 +4555,7 @@ Sections.registerRuntime({
     sentences: loadSentenceExercise,
     reading: loadReadingPassage,
     listening: loadListeningExercise,
+    grammar: loadGrammarPoint,
     // Wrapped, not bare: puzzles reload whichever sub-puzzle is selected.
     puzzles: () => loadPuzzle(state.currentPuzzle)
 });
@@ -3940,6 +4792,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeSentenceBuilderDragDrop();
     initializeReadingButtons();
     initializeListeningButtons();
+    initializeGrammarButtons();
     initializePuzzleSelector();
     initializeWordSearchButton();
     initializeCrosswordButtons();

@@ -184,7 +184,7 @@ describe('schedule — identity and payload', () => {
 describe('typed items — grammar, phonemes, collocations (US-302 / US-303)', () => {
     it('keys each of the four types from TEACHING_METHODOLOGY.md §3', () => {
         SRS.scheduleItem('vocab', 'Happy', { word: 'Happy', quiz: {} }, true);
-        SRS.scheduleItem('gram', 'present perfect', { id: 'pp', explanation: 'x' }, false);
+        SRS.scheduleItem('gram', 'present perfect', { id: 'pp', explain: 'x' }, false);
         SRS.scheduleItem('phon', 'iː-ɪ', { id: 'iː-ɪ', pair: ['sheep', 'ship'] }, false);
         SRS.scheduleItem('coll', 'make a decision', { chunk: 'make a decision' }, false);
         expect(Object.keys(SRS.records).sort()).toEqual([
@@ -199,15 +199,19 @@ describe('typed items — grammar, phonemes, collocations (US-302 / US-303)', ()
     });
 
     it('accepts an inline { srsType, srsRef } item through plain schedule()', () => {
-        const rec = SRS.schedule({ srsType: 'gram', srsRef: 'articles', explanation: 'a/an/the' }, false);
+        // `explain`, not `explanation`: the authored field name in data/grammar.js.
+        // This assertion said `explanation` until US-148 — it was left behind when
+        // PROJECTORS.gram was corrected, so it was asserting that a field no
+        // grammar point has survives projection, and it could not have passed.
+        const rec = SRS.schedule({ srsType: 'gram', srsRef: 'articles', explain: 'a/an/the' }, false);
         expect(rec.key).toBe('gram:articles');
-        expect(rec.data.explanation).toBe('a/an/the');
+        expect(rec.data.explain).toBe('a/an/the');
     });
 
     it('projects non-vocab payloads per type, dropping absent fields', () => {
         const rec = SRS.scheduleItem('gram', 'articles',
-            { id: 'articles', title: 'Articles', explanation: 'x', junk: 'dropped' }, false);
-        expect(Object.keys(rec.data).sort()).toEqual(['explanation', 'id', 'title']);
+            { id: 'articles', title: 'Articles', explain: 'x', junk: 'dropped' }, false);
+        expect(Object.keys(rec.data).sort()).toEqual(['explain', 'id', 'title']);
         expect(rec.data.junk).toBeUndefined();
     });
 
@@ -272,9 +276,10 @@ describe('getDueWords', () => {
         // was KNOWN CONSEQUENCE (srs.js:139): a grammar point could be scheduled
         // but never surfaced and was never counted, because the filter demanded a
         // quiz. RENDERABLE.gram only asks for a payload.
-        SRS.scheduleItem('gram', 'articles', { id: 'articles', explanation: 'a/an/the' }, false);
+        // `explain`, not `explanation` — see the note in the typed-items block.
+        SRS.scheduleItem('gram', 'articles', { id: 'articles', explain: 'a/an/the' }, false);
         expect(SRS.getDue('gram')).toHaveLength(1);
-        expect(SRS.getDue('gram')[0].data.explanation).toBe('a/an/the');
+        expect(SRS.getDue('gram')[0].data.explain).toBe('a/an/the');
         expect(SRS.countDue('gram')).toBe(1);
         // ...and it does not leak into the vocabulary review flow.
         expect(SRS.getDueWords()).toHaveLength(0);
@@ -762,5 +767,263 @@ describe('persistence and the legacy-key migration (US-302)', () => {
         SRS.reset();
         expect(SRS.records).toEqual({});
         expect(localStorage.getItem('srsData')).toBeNull();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// US-148 — what a grammar review card actually receives
+// ---------------------------------------------------------------------------
+describe('PROJECTORS.gram — against the authored schema, not a guess (US-148)', () => {
+    // Requiring the real content is the whole point: a projector checked against
+    // an invented item proves nothing, and every defect in this list so far has
+    // been a divergence between the list and data/grammar.js. If this require
+    // ever fails, the projector's contract has lost its counterparty.
+    const { grammarLessons } = require('../../data/grammar.js');
+    const lesson = grammarLessons.foundation[0];
+
+    beforeEach(() => {
+        SRS.records = {};
+        SRS._resetProjectionWarnings();
+    });
+
+    it('has real content to check against', () => {
+        expect(lesson).toBeDefined();
+        expect(lesson.id).toBe('articles');
+    });
+
+    it('round-trips `rule` through localStorage — the field a wrong answer must show', () => {
+        // TEACHING_METHODOLOGY.md §2: state the rule in one sentence on a wrong
+        // answer. An earlier list dropped `rule` and projected `explanation`,
+        // which does not exist on a grammar point, so the card had nothing.
+        SRS.scheduleItem('gram', lesson.id, lesson, false);
+        const stored = JSON.parse(localStorage.getItem('srsData'))['gram:articles'];
+        expect(stored.data.rule).toBe(lesson.rule);
+        expect(typeof stored.data.rule).toBe('string');
+        expect(stored.data.rule.length).toBeGreaterThan(0);
+    });
+
+    it('round-trips `review` — without it FR-GRM-3 has no review card (US-148)', () => {
+        // was KNOWN DEFECT: `review` was not projected, so a due grammar point
+        // could only be re-taught, not reviewed. `review.itemIds` indexes into
+        // `practice`, which is why the two must be projected together.
+        SRS.scheduleItem('gram', lesson.id, lesson, false);
+        const stored = JSON.parse(localStorage.getItem('srsData'))['gram:articles'];
+        expect(stored.data.review).toEqual(lesson.review);
+        expect(typeof stored.data.review.rulePrompt).toBe('string');
+        expect(Array.isArray(stored.data.review.itemIds)).toBe(true);
+        expect(stored.data.review.itemIds.length).toBeGreaterThan(0);
+    });
+
+    it('round-trips `cefr` (US-148)', () => {
+        SRS.scheduleItem('gram', lesson.id, lesson, false);
+        const stored = JSON.parse(localStorage.getItem('srsData'))['gram:articles'];
+        expect(stored.data.cefr).toBe(lesson.cefr);
+    });
+
+    it('keeps review.itemIds resolvable from the stored practice array', () => {
+        // The specific way projecting `review` without `practice` (or the other
+        // way round) would fail: ids on the record that point at nothing.
+        SRS.scheduleItem('gram', lesson.id, lesson, false);
+        const data = JSON.parse(localStorage.getItem('srsData'))['gram:articles'].data;
+        const practiceIds = data.practice.map(p => p.id);
+        data.review.itemIds.forEach(id => expect(practiceIds).toContain(id));
+    });
+
+    it('declares no field the authored schema does not have', () => {
+        // The `explanation` / `example` / `difficulty` class of mistake: a list
+        // edited against a sketch instead of against content. `phantom` is the
+        // audit's name for it.
+        expect(SRS.auditProjection('gram', lesson).phantom).toEqual([]);
+    });
+
+    it('drops only first-teaching and authoring-metadata fields', () => {
+        // Pinned so that shrinking this list is a deliberate act. A review is
+        // not the first teaching, so `notice` / `decide` / `whyItMatters` /
+        // `spokenNote` / `commonErrors` / `prerequisites` stay in content; the
+        // rest is authoring metadata. Everything here is still readable from
+        // data/grammar.js by id — it is absent from the RECORD, not from the app.
+        expect(SRS.auditProjection('gram', lesson).dropped.sort()).toEqual([
+            'commonErrors', 'decide', 'notice', 'prerequisites', 'spokenNote',
+            'syllabusNumber', 'tags', 'whyItMatters'
+        ]);
+    });
+
+    it('does not treat the item\'s own srs identity fields as lost content', () => {
+        // srsType / srsRef / srsKey are on the record as type / ref / key, so a
+        // projector that omits them is complete, not lossy.
+        expect(SRS.auditProjection('gram', lesson).ignored.sort())
+            .toEqual(['srsKey', 'srsRef', 'srsType']);
+        const rec = SRS.scheduleItem('gram', lesson.id, lesson, false);
+        expect(rec.key).toBe(lesson.srsKey);
+        expect(rec.ref).toBe(lesson.srsRef);
+        expect(rec.type).toBe(lesson.srsType);
+    });
+
+    it('leaves PROJECTORS.phon alone while data/pronunciation.js does not exist', () => {
+        // Deliberately NOT re-guessed. The list below is the original guess and
+        // is pinned only so that whoever lands data/pronunciation.js sees this
+        // test and checks it against the real schema rather than inheriting a
+        // guess silently. Change this list and the projector together.
+        expect(SRS.PROJECTORS.phon)
+            .toEqual(['id', 'pair', 'label', 'examples', 'minimalPairs', 'difficulty']);
+        expect(require('fs').existsSync(
+            require('path').join(__dirname, '../../data/pronunciation.js'))).toBe(false);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// US-148 — preventing the class of bug, not the two instances of it
+// ---------------------------------------------------------------------------
+describe('the projection audit (US-148)', () => {
+    let warn;
+
+    beforeEach(() => {
+        SRS.records = {};
+        SRS._resetProjectionWarnings();
+        warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+    afterEach(() => {
+        warn.mockRestore();
+        delete global.SRS_PROJECTION_WARNINGS;
+    });
+
+    it('warns when an author writes a field the projector drops', () => {
+        SRS.scheduleItem('gram', 'articles', { id: 'articles', rule: 'r', spokenNote: 'x' }, false);
+        expect(warn).toHaveBeenCalledTimes(1);
+        const msg = warn.mock.calls[0][0];
+        expect(msg).toContain('PROJECTORS.gram');
+        expect(msg).toContain('`spokenNote`');
+        expect(msg).toContain('js/core/srs.js');
+    });
+
+    it('warns once per type and field, so the console stays readable', () => {
+        // A warning printed on every review is a warning nobody reads, which is
+        // the same silence this exists to break.
+        for (let i = 0; i < 5; i++) {
+            SRS.scheduleItem('gram', 'g' + i, { id: 'g' + i, mystery: 1 }, false);
+        }
+        expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('warns separately for the same field name under a different type', () => {
+        SRS.scheduleItem('gram', 'g', { id: 'g', mystery: 1 }, false);
+        SRS.scheduleItem('phon', 'iː-ɪ', { id: 'iː-ɪ', mystery: 1 }, false);
+        expect(warn).toHaveBeenCalledTimes(2);
+        expect(warn.mock.calls[1][0]).toContain('PROJECTORS.phon');
+    });
+
+    it('is silent about identity fields', () => {
+        SRS.scheduleItem('gram', 'g', {
+            id: 'g', srsType: 'gram', srsRef: 'g', srsKey: 'gram:g',
+            type: 'gram', ref: 'g', key: 'gram:g'
+        }, false);
+        expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('is silent about a field explicitly set to undefined', () => {
+        SRS.scheduleItem('gram', 'g', { id: 'g', notWritten: undefined }, false);
+        expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('can be switched off, and off means silent', () => {
+        global.SRS_PROJECTION_WARNINGS = false;
+        SRS.scheduleItem('gram', 'g', { id: 'g', mystery: 1 }, false);
+        expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('changes nothing about what is stored, on or off', () => {
+        // The audit is a diagnostic. If it could alter a payload it would be a
+        // feature, and a feature that only runs in development is a bug.
+        const item = { id: 'g', title: 'T', rule: 'R', mystery: 1, tags: ['x'] };
+        global.SRS_PROJECTION_WARNINGS = false;
+        SRS.records = {};
+        SRS.scheduleItem('gram', 'g', item, false);
+        const quiet = JSON.stringify(SRS.records['gram:g'].data);
+
+        global.SRS_PROJECTION_WARNINGS = true;
+        SRS._resetProjectionWarnings();
+        SRS.records = {};
+        SRS.scheduleItem('gram', 'g', item, false);
+        expect(JSON.stringify(SRS.records['gram:g'].data)).toBe(quiet);
+        expect(warn).toHaveBeenCalled();
+    });
+
+    it('never lets a diagnostic break a review', () => {
+        warn.mockImplementation(() => { throw new Error('console is gone'); });
+        expect(() => SRS.scheduleItem('gram', 'g', { id: 'g', mystery: 1 }, false)).not.toThrow();
+        expect(SRS.records['gram:g'].data.id).toBe('g');
+    });
+
+    it('would have caught both of the defects that have actually happened', () => {
+        const original = SRS.PROJECTORS.gram;
+        try {
+            // The list as it shipped before US-148: three fields no grammar point
+            // has, and no `rule`.
+            SRS.PROJECTORS.gram = ['id', 'title', 'explanation', 'example', 'practice', 'difficulty'];
+            const audit = SRS.auditProjection('gram', {
+                id: 'articles', title: 'T', rule: 'R', review: { itemIds: [] },
+                cefr: 'A1–A2', practice: []
+            });
+            expect(audit.dropped).toContain('rule');      // defect 1
+            expect(audit.dropped).toContain('review');    // defect 2
+            expect(audit.dropped).toContain('cefr');      // defect 2
+            expect(audit.phantom).toContain('explanation');
+            expect(audit.phantom).toContain('example');
+            expect(audit.phantom).toContain('difficulty');
+        } finally {
+            SRS.PROJECTORS.gram = original;
+        }
+    });
+
+    it('reports an unknown type against the default projector, as _project does', () => {
+        expect(SRS.auditProjection('nope', { word: 'x' }).type).toBe('vocab');
+    });
+
+    it('tolerates a nullish or non-object item', () => {
+        [null, undefined, 'string', 42].forEach(bad => {
+            expect(() => SRS.auditProjection('gram', bad)).not.toThrow();
+            expect(SRS.auditProjection('gram', bad).dropped).toEqual([]);
+        });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// US-134 — the IIFE global object
+// ---------------------------------------------------------------------------
+describe('module globals under CommonJS (US-134)', () => {
+    it('publishes SRS as a global, not only as module.exports', () => {
+        expect(global.SRS).toBeDefined();
+        expect(global.SRS).toBe(require('../../js/core/srs.js'));
+    });
+
+    it('resolves its own dependencies through the same global object', () => {
+        // The real consequence of getting this wrong: srs.js looks up
+        // global.Migrations to run the legacy-key migration and to normalise
+        // keys. If its `global` is not the one migrations.js published to, the
+        // migration silently never runs and normRef falls back to the inline
+        // copy — a whole class of test passing while exercising nothing.
+        expect(global.Migrations).toBeDefined();
+        expect(global.Migrations).toBe(require('../../js/core/migrations.js'));
+        expect(SRS._key('  Happy ')).toBe(Migrations.srsRef('  Happy '));
+    });
+
+    it('passes globalThis, not `this`, as the IIFE global — checked in the source', () => {
+        // THIS IS THE ASSERTION WITH TEETH, and it is a source check on purpose.
+        //
+        // Under CommonJS a bare top-level `this` is `module.exports`, so
+        // `(function (global) {...})(typeof window !== 'undefined' ? window : this)`
+        // hands the module an empty object as its global. But jest.config.js sets
+        // testEnvironment: 'jsdom', where `window` IS the test global object — so
+        // the `: this` branch is never taken and NO behavioural assertion in this
+        // file can detect the defect. It bites plain `node` scripts and any file
+        // with `@jest-environment node`. A source check is therefore the only
+        // guard that actually fails when this regresses.
+        const fs = require('fs');
+        const path = require('path');
+        const dir = path.join(__dirname, '../../js/core');
+        fs.readdirSync(dir).filter(f => f.endsWith('.js')).forEach(f => {
+            const src = fs.readFileSync(path.join(dir, f), 'utf8');
+            expect(src).not.toMatch(/\?\s*window\s*:\s*this\s*\)/);
+        });
     });
 });

@@ -35,6 +35,12 @@
  *   SRS.reset()                          -> clears all SRS data
  *   SRS.DAILY_REVIEW_CAP                 -> the daily queue cap (20)
  *   SRS.PROJECTORS / SRS.RENDERABLE      -> per-type payload + renderability
+ *   SRS.auditProjection(type, item)      -> { projected, dropped, phantom, ignored }
+ *                                           what a projector keeps and loses for
+ *                                           one item. Development-time warnings
+ *                                           for `dropped` are emitted automatically
+ *                                           under Node/localhost; force them with
+ *                                           `SRS_PROJECTION_WARNINGS = true|false`.
  */
 (function (global) {
     'use strict';
@@ -70,6 +76,10 @@
      * silently dropped from every review card. `vocab` is deliberately the exact
      * six fields the old inline whitelist copied, so this change moves no
      * vocabulary bytes. See docs/CONTENT_AUTHORING_GUIDE.md.
+     *
+     * That warning has now been missed twice on `gram` alone, so it is no longer
+     * only a comment: _project() audits every item against its projector and
+     * warns about unlisted fields in development. See auditProjection below.
      */
     const PROJECTORS = {
         vocab: ['word', 'pronunciation', 'definition', 'example', 'quiz', 'difficulty'],
@@ -80,10 +90,64 @@
         // reason, a contrast and a retry on every wrong grammar answer, so
         // `rule`, `explain`, `contrast` and `practice` are all load-bearing.
         // `tier` carries the level (grammar has no `difficulty` field).
-        gram:  ['id', 'title', 'tier', 'rule', 'explain', 'contrast', 'practice',
-                'produce', 'caveats', 'l1Notes', 'mistakeCategory'],
+        //
+        // `review` and `cefr` were the two remaining gaps flagged in that file's
+        // own "SRS PROJECTION CONTRACT" note:
+        //  - `review` is { rulePrompt, itemIds } and IS the review card. FR-GRM-3
+        //    asks for a due grammar point to be reviewable "without re-teaching
+        //    the whole lesson"; without this field there is no such thing as a
+        //    grammar review, only the lesson again. `itemIds` indexes into
+        //    `practice`, so the two must be projected together or the ids on a
+        //    stored record dangle.
+        //  - `cefr` is display-only, but it is what a card labels the point with.
+        // NOT projected, deliberately: `notice`, `decide`, `whyItMatters`,
+        // `spokenNote`, `commonErrors` and `prerequisites` are first-teaching
+        // fields, and a review by definition is not the first teaching;
+        // `syllabusNumber` and `tags` are authoring metadata; `srsType`/`srsRef`/
+        // `srsKey` are already on the record as type/ref/key. All are still in
+        // data/grammar.js, so a lesson view reads them from content directly.
+        gram:  ['id', 'title', 'tier', 'cefr', 'rule', 'explain', 'contrast',
+                'practice', 'review', 'produce', 'caveats', 'l1Notes',
+                'mistakeCategory'],
+        // ⚠️ UNVERIFIED — this list is a guess and has never been checked against
+        // authored content, because data/pronunciation.js does not exist yet. It
+        // is left as-is rather than re-guessed: a second guess is not better than
+        // the first. Whoever lands data/pronunciation.js must diff this against
+        // the real schema; auditProjection() will report the mismatch on the
+        // first phon item scheduled in development, which is the backstop.
         phon:  ['id', 'pair', 'label', 'examples', 'minimalPairs', 'difficulty'],
+        // Also unverified: data/collocations.js does not exist yet either.
         coll:  ['id', 'chunk', 'meaning', 'example', 'practice', 'difficulty']
+    };
+
+    /**
+     * Fields that identify or route an item rather than describe it. schedule()
+     * lifts them onto the record itself as `type` / `ref` / `key`, so a projector
+     * that does not list them is complete, not lossy — the audit below must not
+     * cry wolf about them or the warning stops being read.
+     */
+    const NON_CONTENT_FIELDS = ['srsType', 'srsRef', 'srsKey', 'type', 'ref', 'key'];
+
+    /**
+     * Fields a projector drops ON PURPOSE, per type.
+     *
+     * Without this the audit contradicts the PROJECTORS comment directly above:
+     * that comment lists eight grammar fields as deliberately unprojected
+     * (first-teaching material and authoring metadata), and the audit then warned
+     * about all eight on the very first grammar item scheduled. A warning that
+     * fires on the documented, correct call is noise, and noise is how the real
+     * signal — an author's new field silently vanishing — gets ignored. Same
+     * reasoning as NON_CONTENT_FIELDS: the audit must not cry wolf.
+     *
+     * Adding a field here is a deliberate statement that a review card does not
+     * need it. Anything NOT listed here and not projected still warns.
+     */
+    const DELIBERATE_OMISSIONS = {
+        vocab: [],
+        gram:  ['notice', 'decide', 'whyItMatters', 'spokenNote', 'commonErrors',
+                'prerequisites', 'syllabusNumber', 'tags'],
+        phon:  [],
+        coll:  []
     };
 
     /**
@@ -138,6 +202,62 @@
         return (TYPES.indexOf(t) === -1 ? DEFAULT_TYPE : t) + ':' + r;
     }
 
+    // ------------------------------------------------------------------
+    // Projection audit (development only)
+    // ------------------------------------------------------------------
+    //
+    // WHY THIS EXISTS AT ALL. The projector is the right design — rec.data goes
+    // to localStorage and copying an author's whole object risks a DOM node, a
+    // blob or a cycle in storage — but it fails in the one way a whitelist
+    // always fails: SILENTLY, and at content-authoring time rather than at code
+    // time. `gram` has now been wrong twice. Once it projected three fields that
+    // do not exist on a grammar point while dropping `rule`, the single field a
+    // wrong answer must show; then it dropped `review`, without which FR-GRM-3
+    // has no review card at all. Neither threw, neither failed a test, and both
+    // were found by a human reading two files side by side. `phon` and `coll`
+    // are still unverified guesses and will fail the same way when their
+    // content lands.
+    //
+    // A comment saying "remember to update this" has already been tried; it is
+    // the comment directly above PROJECTORS and it did not work. So the audit is
+    // machinery instead: any field an author puts on an item that its projector
+    // does not list produces a console warning, naming the type, the field and
+    // the file to edit.
+    //
+    // Constraints it is built to respect, since a diagnostic that misbehaves is
+    // worse than none:
+    //   - It NEVER throws and never changes what is stored. The projector's
+    //     output is byte-identical with warnings on or off.
+    //   - It is off in production. A learner must not see console noise, and
+    //     the key scan must not run on their device.
+    //   - It warns ONCE per type+field. A dictionary payload carrying twenty
+    //     unused API fields must not print twenty lines per review, or the
+    //     warning trains people to ignore the console — which is the same
+    //     silence it was built to break.
+    //   - Identity fields are excluded (NON_CONTENT_FIELDS) — see above.
+    const _warnedFields = Object.create(null);
+
+    /**
+     * Is this a development context? Node/Jest and localhost, plus an explicit
+     * override (`SRS_PROJECTION_WARNINGS = true/false`) for anyone who wants to
+     * force it either way — including a CI content check that wants them on.
+     */
+    function projectionWarningsEnabled() {
+        if (typeof global.SRS_PROJECTION_WARNINGS === 'boolean') {
+            return global.SRS_PROJECTION_WARNINGS;
+        }
+        // Under Node (Jest, a content lint script) always on: a dropped field is
+        // a content bug, and the test run is exactly where it should surface.
+        if (typeof module !== 'undefined' && module.exports) return true;
+        try {
+            const host = (global.location && global.location.hostname) || '';
+            return host === 'localhost' || host === '127.0.0.1' ||
+                   host === '[::1]' || host === '' || /\.local$/.test(host);
+        } catch (e) {
+            return false;                      // no location: assume production
+        }
+    }
+
     const SRS = {
         records: {},
 
@@ -147,6 +267,8 @@
         TYPES: TYPES,
         PROJECTORS: PROJECTORS,
         RENDERABLE: RENDERABLE,
+        NON_CONTENT_FIELDS: NON_CONTENT_FIELDS,
+        DELIBERATE_OMISSIONS: DELIBERATE_OMISSIONS,
 
         /**
          * Normalize a reference into a stable, case-insensitive key fragment.
@@ -455,7 +577,85 @@
             fields.forEach(function (f) {
                 if (type === DEFAULT_TYPE || source[f] !== undefined) out[f] = source[f];
             });
+            // Diagnostic only, after the fact: it cannot alter `out`, and it is
+            // wrapped because a review must survive anything the audit does.
+            try {
+                this._warnUnprojected(type, source);
+            } catch (e) { /* never let a diagnostic break a review */ }
             return out;
+        },
+
+        /**
+         * What this type's projector does and does not carry, for a given item.
+         * Pure — no logging, no storage, safe in production and in a test.
+         *
+         *   projected  fields the review card will see
+         *   dropped    fields the AUTHOR wrote that the card will never see
+         *              (the silent-data-loss bug, made visible)
+         *   phantom    fields the projector DECLARES that this item does not
+         *              have (the `explanation`/`example`/`difficulty` class of
+         *              mistake: a list edited against a guess, not content)
+         *   ignored    identity fields, listed so the output is complete
+         *
+         * @param {string} type - one of SRS.TYPES.
+         * @param {Object} source - an authored content item.
+         */
+        auditProjection(type, source) {
+            const t = TYPES.indexOf(type) === -1 ? DEFAULT_TYPE : type;
+            const fields = PROJECTORS[t] || PROJECTORS[DEFAULT_TYPE];
+            const empty = { type: t, fields: fields.slice(), projected: [], dropped: [], phantom: [], ignored: [], omitted: [] };
+            if (!source || typeof source !== 'object') return empty;
+
+            const authored = Object.keys(source);
+            const out = empty;
+            const omit = DELIBERATE_OMISSIONS[t] || [];
+            out.omitted = [];
+            authored.forEach(function (k) {
+                if (NON_CONTENT_FIELDS.indexOf(k) !== -1) out.ignored.push(k);
+                else if (fields.indexOf(k) !== -1) out.projected.push(k);
+                else if (omit.indexOf(k) !== -1) out.omitted.push(k);
+                else if (source[k] !== undefined) out.dropped.push(k);
+            });
+            fields.forEach(function (f) {
+                if (source[f] === undefined) out.phantom.push(f);
+            });
+            return out;
+        },
+
+        /**
+         * Development-time warning for fields an author wrote that this type's
+         * projector drops. Once per type+field, never throws. See the block
+         * comment above _warnedFields for why this is machinery and not a note.
+         */
+        _warnUnprojected(type, source) {
+            if (!projectionWarningsEnabled()) return;
+            if (!source || typeof source !== 'object') return;
+            if (typeof console === 'undefined' || typeof console.warn !== 'function') return;
+            try {
+                const audit = this.auditProjection(type, source);
+                const fresh = audit.dropped.filter(function (f) {
+                    const seen = audit.type + '.' + f;
+                    if (_warnedFields[seen]) return false;
+                    _warnedFields[seen] = true;
+                    return true;
+                });
+                if (!fresh.length) return;
+                console.warn(
+                    '[SRS] PROJECTORS.' + audit.type + ' does not list ' +
+                    fresh.map(function (f) { return '`' + f + '`'; }).join(', ') +
+                    ', so ' + (fresh.length === 1 ? 'it is' : 'they are') +
+                    ' dropped from every ' + audit.type + ' review card. ' +
+                    'Add to PROJECTORS.' + audit.type + ' in js/core/srs.js, or ' +
+                    'remove from the content if the card genuinely does not need it.'
+                );
+            } catch (e) {
+                /* a diagnostic must never break a review */
+            }
+        },
+
+        /** Forget which fields have already been warned about. For tests. */
+        _resetProjectionWarnings() {
+            Object.keys(_warnedFields).forEach(function (k) { delete _warnedFields[k]; });
         },
 
 

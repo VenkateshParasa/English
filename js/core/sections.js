@@ -173,6 +173,28 @@
             srsType: null,
             tracksExercises: true,
             hasDifficulty: false
+        },
+        {
+            // US-501/US-149. Appended rather than slotted in after `sentences`
+            // where it belongs pedagogically: this list is positional for the
+            // Alt+N shortcuts, so inserting mid-list would silently renumber
+            // Reading, Listening and Puzzles for every existing learner.
+            id: 'grammar',
+            label: 'Grammar',
+            icon: '📐',
+            indexKey: 'currentGrammarIndex',
+            goalKey: 'grammar',
+            prevBtnId: 'prevGrammar',
+            nextBtnId: 'nextGrammar',
+            statusId: 'grammarStatus',
+            dailyStatKey: 'grammarCompleted',
+            totalStatKey: 'totalGrammar',
+            avgKey: 'grammar',
+            // The second section wired to the scheduler: one record per grammar
+            // point, keyed 'gram:<lesson id>' (data/grammar.js `srsKey`).
+            srsType: 'gram',
+            tracksExercises: true,
+            hasDifficulty: true
         }
     ];
 

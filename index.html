@@ -64,6 +64,7 @@
             <button class="nav-btn" data-section="reading" aria-label="Go to Reading section" aria-controls="reading">📖 Reading</button>
             <button class="nav-btn" data-section="listening" aria-label="Go to Listening section" aria-controls="listening">🎧 Listening</button>
             <button class="nav-btn" data-section="puzzles" aria-label="Go to Puzzles section" aria-controls="puzzles">🧩 Puzzles</button>
+            <button class="nav-btn" data-section="grammar" aria-label="Go to Grammar section" aria-controls="grammar">📐 Grammar</button>
         </nav>
 
         <!-- Dashboard Section -->
@@ -87,6 +88,10 @@
                     <h3>🧩 Puzzles Solved</h3>
                     <p class="stat-number" id="puzzlesSolved" aria-live="polite" aria-atomic="true">0</p>
                 </div>
+                <div class="stat-card" role="listitem">
+                    <h3>📐 Grammar Points</h3>
+                    <p class="stat-number" id="grammarCompleted" aria-live="polite" aria-atomic="true">0</p>
+                </div>
             </div>
             <div class="daily-goal" role="complementary" aria-labelledby="daily-goal-title">
                 <h3 id="daily-goal-title">Today's Goal</h3>
@@ -97,6 +102,7 @@
                     <label><input type="checkbox" id="goalReading" disabled aria-label="Reading exercise completed"> Reading Exercise</label>
                     <label><input type="checkbox" id="goalListening" disabled aria-label="Listening practice completed"> Listening Practice</label>
                     <label><input type="checkbox" id="goalPuzzle" disabled aria-label="Puzzle activity completed"> Puzzle Activity</label>
+                    <label><input type="checkbox" id="goalGrammar" disabled aria-label="Grammar point completed"> Grammar Point</label>
                 </div>
             </div>
 
@@ -386,6 +392,50 @@
                 <div class="feedback" id="matchingFeedback" role="status" aria-live="polite"></div>
                 </div>
             </section>
+
+        <!-- Grammar Section (US-501 / US-149).
+             A shell only: loadGrammarPoint() in app.js renders one point from
+             data/grammar.js into #grammarTeaching, #grammarPractice and
+             #grammarProduce. Nothing here is hardcoded to a particular point.
+             The completion indicator (#grammarStatus) is created at runtime by
+             updateCompletionIndicator(), which inserts it after the h2 above —
+             so that h2 must stay a DIRECT child of this section. -->
+        <section id="grammar" class="section" role="region" aria-labelledby="grammar-title">
+            <h2 id="grammar-title">📐 Grammar Points</h2>
+            <div class="difficulty-selector" role="radiogroup" aria-label="Select difficulty level">
+                <!-- Painted by syncDifficultySelectors() from state.currentDifficulty,
+                     exactly like the other sections. Do not hardcode `active`. -->
+                <button class="diff-btn" data-level="foundation" role="radio" aria-checked="false" aria-label="Foundation level, CEFR A1 to A2">Foundation</button>
+                <button class="diff-btn" data-level="everyday" role="radio" aria-checked="false" aria-label="Everyday level, CEFR B1">Everyday</button>
+                <button class="diff-btn" data-level="confident" role="radio" aria-checked="false" aria-label="Confident level, CEFR B2">Confident</button>
+                <button class="diff-btn" data-level="fluent" role="radio" aria-checked="false" disabled aria-disabled="true" aria-label="Fluent level, CEFR C1 — not available yet">Fluent <span class="level-soon">(soon)</span></button>
+            </div>
+            <div class="grammar-container">
+                <div class="exercise-card grammar-lesson" role="article" aria-labelledby="grammarPointTitle">
+                    <h3 id="grammarPointTitle">Loading...</h3>
+                    <div id="grammarTeaching" aria-label="The rule, and how to decide"></div>
+                </div>
+
+                <div class="exercise-card grammar-practice" role="form" aria-labelledby="grammar-practice-title">
+                    <h3 id="grammar-practice-title">Practice</h3>
+                    <p class="instruction">Pick the word that belongs in the gap. Every answer is explained, and a wrong one can be retried straight away.</p>
+                    <div id="grammarPractice" aria-label="Practice items"></div>
+                </div>
+
+                <div class="exercise-card grammar-produce" role="group" aria-labelledby="grammar-produce-title">
+                    <h3 id="grammar-produce-title">Now say it yourself</h3>
+                    <div id="grammarProduce" aria-label="Speaking task"></div>
+                </div>
+
+                <div class="exercise-card">
+                    <div class="navigation-buttons" role="navigation" aria-label="Grammar point navigation">
+                        <button class="btn-secondary" id="prevGrammar" aria-label="Previous grammar point">← Previous</button>
+                        <button class="btn-primary" id="nextGrammar" aria-label="Next grammar point">Next →</button>
+                    </div>
+                    <div class="feedback" id="grammarFeedback" role="status" aria-live="polite"></div>
+                </div>
+            </div>
+        </section>
         </main>
     </div>
 
@@ -413,6 +463,10 @@
 
     <!-- Application Data & Logic -->
     <script src="data.js"></script>
+    <!-- Strand B grammar content (data/grammar.js). Declares the lexical global
+         `grammarLessons`; app.js's grammar loader guards on
+         `typeof grammarLessons`, so this must load before app.js runs. -->
+    <script src="data/grammar.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

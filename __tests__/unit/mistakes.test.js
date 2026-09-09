@@ -693,3 +693,68 @@ describe('persistence', () => {
         expect(localStorage.getItem('mistakeLog')).toBeNull();
     });
 });
+
+// ---------------------------------------------------------------------------
+// US-134 — the IIFE global object
+// ---------------------------------------------------------------------------
+describe('module globals under CommonJS (US-134)', () => {
+    it('publishes Mistakes as a global, not only as module.exports', () => {
+        expect(global.Mistakes).toBeDefined();
+        expect(global.Mistakes).toBe(require('../../js/core/mistakes.js'));
+    });
+
+    it('sees an AppErrorHandler installed on the global object', () => {
+        // The load-bearing consequence of the defect this replaced. save() must
+        // report a full-quota write through global.AppErrorHandler (NFR-10:
+        // "quota exceeded must not be silent"). When the IIFE was handed
+        // `module.exports` instead of the real global, that lookup could never
+        // resolve — so a test that installed a spy here would have passed while
+        // exercising a branch that was structurally unreachable.
+        const logged = [];
+        const previous = global.AppErrorHandler;
+        const realSetItem = localStorage.setItem;
+        global.AppErrorHandler = { logError: (e, ctx) => logged.push(ctx) };
+        try {
+            Mistakes.entryList = [];
+            Mistakes.record('gram.articles');
+            localStorage.setItem = () => { throw new Error('QuotaExceededError'); };
+            expect(Mistakes.save()).toBe(false);
+            expect(logged).toContain('Mistakes save');
+        } finally {
+            localStorage.setItem = realSetItem;
+            if (previous === undefined) delete global.AppErrorHandler;
+            else global.AppErrorHandler = previous;
+        }
+    });
+
+    it('keeps the entry list intact when storage is unavailable, not merely full', () => {
+        // The same path, checked for its data promise rather than its logging:
+        // the trimmed quarter goes back, because the entries are not why the
+        // write failed.
+        const realSetItem = localStorage.setItem;
+        try {
+            Mistakes.entryList = [];
+            seed('gram.articles', [1, 2, 3, 4]);
+            const before = Mistakes.entryList.length;
+            localStorage.setItem = () => { throw new Error('nope'); };
+            expect(Mistakes.save()).toBe(false);
+            expect(Mistakes.entryList.length).toBe(before);
+        } finally {
+            localStorage.setItem = realSetItem;
+        }
+    });
+
+    it('passes globalThis, not `this`, as the IIFE global — checked in the source', () => {
+        // A source check on purpose: jest.config.js sets testEnvironment 'jsdom',
+        // where `window` IS the test global object, so the `: this` branch is
+        // never taken and no behavioural assertion in this file can detect the
+        // defect. It bites plain `node` and `@jest-environment node` only. See
+        // the matching test in srs.test.js.
+        const fs = require('fs');
+        const path = require('path');
+        const src = fs.readFileSync(
+            path.join(__dirname, '../../js/core/mistakes.js'), 'utf8');
+        expect(src).toMatch(/\?\s*window\s*:\s*globalThis\s*\)/);
+        expect(src).not.toMatch(/\?\s*window\s*:\s*this\s*\)/);
+    });
+});

@@ -1281,4 +1281,12 @@
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = Mistakes;
     }
-})(typeof window !== 'undefined' ? window : this);
+// `globalThis`, not `this`. Under CommonJS a bare top-level `this` is
+// `module.exports`, so the old `: this` fallback meant that when Jest or a node
+// script require()d this file, `global.Mistakes` was never published and
+// `global.AppErrorHandler` resolved against an empty object — so the NFR-10
+// quota-exceeded reporting in save() was unreachable under test, and a test that
+// installed an error-handler spy would have passed while exercising nothing.
+// levels.js, migrations.js and srs.js already use globalThis; this brings
+// mistakes.js in line — it was the last core module with the defect.
+})(typeof window !== 'undefined' ? window : globalThis);
