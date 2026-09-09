@@ -116,6 +116,12 @@ behaviours that teach errors.
 | ✅ **US-107** | Remove the unverified WCAG compliance claim — **done 2026-09-09** | `NFR-11` | 1 | M |
 | ✅ **US-108** | Deterministic sentence exercise mode — **done 2026-09-09** | `FR-RDW-4` | 1 | M |
 | ✅ **US-109** | **Statistics pipeline repaired** — all five types now route through `updateStatistics()`; `state.stats` retained for loading old saves but no longer written — **done 2026-09-09** | `FR-DATA-3`, `BR-8` | 3 | M |
+| **US-130** | `loadProgress()` pushes `loaded.dailyStats` into `dailyHistory` and then overwrites `dailyHistory` from storage two lines later, dropping yesterday's stats on any day rollover | `FR-DATA-3` | 2 | M |
+| **US-131** | `FR-SRS-2` is **not met**: the code yields intervals 1→3→8→22→62, not the specified 1→3→7→16→35. The existing suite pins `8` as a known divergence | `FR-SRS-2` | 3 | M |
+| **US-132** | Dictation and scramble toast a hardcoded "Please enter your answer" for *any* validation failure, contradicting the inline message (paste 600 chars and it tells you to enter an answer you did enter) | `NFR-3` | 1 | S |
+| **US-133** | Drag/drop toasts blame the learner for app-supplied data: "Invalid word detected", "Invalid drop operation" | `BR-3` | 1 | S |
+| **US-134** | `js/core/srs.js` closes its IIFE over `this` rather than `globalThis`, so `require()` never publishes `SRS` — harmless in browser, breaks Node-based checks | — | 1 | S |
+| **US-135** | `js/core/portability.js` borrows `.daily-goal` styling for the data panel; a dedicated `.data-controls` class would read better | — | 1 | C |
 | **US-110** | **Stop the crossword awarding the daily goal for a blank grid** (D2) | `BR-3` | 2 | M |
 | ✅ **US-111** | Guard the quiz counters against re-clicking a correct answer — **done 2026-09-09** | `FR-VOC-1` | 1 | M |
 | ✅ **US-112** | Stop dictation double-counting the reading passage — **done 2026-09-09** | `FR-DATA-3` | 1 | M |
@@ -129,11 +135,11 @@ behaviours that teach errors.
 | ✅ **US-120** | SRS lapse on read-aloud failure — lapses only vocabulary words the diff reports missed, and only when the recogniser matched over half the sentence — **done 2026-09-09** | `FR-SRS-1` | 2 | S |
 | ✅ **US-121** | `validateInput` no longer rejects ordinary speech; denylist + length cap replaces the allowlist, and the blaming message is gone — **done 2026-09-09** | `NFR-3`, `BR-3` | 2 | M |
 | ✅ **US-122** | `migrations.js` no longer downgrades a future schema version, and `saveProgress()` no longer re-stamps it downwards — **done 2026-09-09** | `FR-DATA-2` | 2 | S |
-| **US-124** | `generateAlgorithmicSentence` corrupts fill-blanks at the source: `correct.replace(words[mid], "___")` is a first-occurrence *substring* replace, so it blanks mid-word (`underst___ing`). 81 of 3000 swept indices were affected. US-114 neutralised the symptom downstream; this is the cause | `FR-RDW-4` | 2 | M |
-| **US-125** | `classifyError` never returns `VALIDATION`, so a validation failure produces **two** toasts — the call site's specific one plus a generic "Something went wrong" | `NFR-3` | 1 | M |
-| **US-126** | `sanitizeInput`'s entity-encoding leaks into `textContent` display, so a word containing `&` renders as `&amp;` | — | 1 | S |
-| **US-127** | `updateCompletionIndicator` builds `innerHTML` with an inline `onclick` — a live HTML sink in a file that has otherwise moved to `textContent` | `NFR-12` | 2 | S |
-| **US-128** | `USER_GUIDE.md` listening section is now stale: it still describes "Speech Recognition Practice" and saying a single word, which US-119 replaced | — | 1 | S |
+| ✅ **US-124** | Generator fill-blank corruption fixed **at the source** — blanks by position, not substring replace; 0 of 3000 swept indices now rejected (was 81) — **done 2026-09-09** | `FR-RDW-4` | 2 | M |
+| ✅ **US-125** | Double toast on validation fixed — `classifyError` now returns `VALIDATION` and `handleError` lets the call site's specific message stand — **done 2026-09-09** | `NFR-3` | 1 | M |
+| ✅ **US-126** | `sanitizeInput` entity-encoding removed; `Toast` converted to a text sink so escaping is no longer needed there — **done 2026-09-09** | — | 1 | S |
+| ✅ **US-127** | `updateCompletionIndicator` rebuilt with `createElement`/`addEventListener`; `app.js` now has **zero** inline `on*=` handlers — **done 2026-09-09** | `NFR-12` | 2 | S |
+| ✅ **US-128** | `USER_GUIDE.md` listening section rewritten for the sentence-based read-aloud, with an honesty-framing subsection — **done 2026-09-09** | — | 1 | S |
 | **US-129** | Generated listening sentences ("The trees love beautiful moments") violate the meaningful-input principle — and US-119 now asks learners to **read them aloud**, which raises the stakes | `FR-CNT-4` | 2 | M |
 | **US-123** | Word Search selection never clears on a wrong guess, so leftover `.selected` cells silently poison later attempts (related to the unwinnable-puzzle defect D3) | — | 2 | S |
 
@@ -217,11 +223,10 @@ sounds.**
   converts an intermittent bug into a visible one — but it needs a follow-up. See `US-114`.
 
 **US-108 — As Lakshmi, I want to retry an exercise in the mode I failed it in.**
-**Sprint 1 total: 53 points across 29 stories — 38 points done, 15 remaining.** It has grown
-15 → 23 → 30 → 44 → 53 as each wave exposed the next defect, but the growth is decelerating and
-the *character* of what remains has shifted: the early waves found things that actively misled
-learners, whereas most of what is left (US-124…US-129) is code hygiene and doc staleness.
-**Sprint 0 is 4 of 6 points done** — only `US-001` remains, and it needs network access.
+**Sprint 1 total: 62 points across 35 stories — 45 done, 17 remaining.** Grown
+15 → 23 → 30 → 44 → 53 → 62 across five waves. Only `US-110` (crossword crediting a blank grid)
+is still a learner-facing honesty defect, and it waits on `OQ-7`. Everything else remaining is
+hygiene or copy.
 
 ---
 
@@ -233,9 +238,9 @@ Highest-risk sprint. Blocked on **OQ-4**.
 |---|---|---|---|---|
 | **US-201** | Migrate level keys to the four CEFR tiers | `FR-SES-3` | 5 | M |
 | **US-202** | Pre-migration backup, provably idempotent | `FR-DATA-2` | 3 | M |
-| **US-203** | Export all learner data as JSON | `FR-DATA-4` | 3 | M |
-| **US-204** | Import/restore from an export | `FR-DATA-4` | 3 | M |
-| **US-205** | "Reset my review history" action | `FR-DATA-5` | 2 | M |
+| ✅ **US-203** | Export all learner data as one JSON file — **done 2026-09-09** | `FR-DATA-4` | 3 | M |
+| ✅ **US-204** | Import/restore with validate-before-write and verified rollback — **done 2026-09-09** | `FR-DATA-4` | 3 | M |
+| ✅ **US-205** | "Clear review history" — clears `srsData` only, backs up first — **done 2026-09-09** | `FR-DATA-5` | 2 | M |
 | **US-206** | Adopt IndexedDB for blobs; document the storage split | `NFR-10`, `CON-3` | 3 | M |
 
 **US-201 — As Lakshmi, I want levels that tell me what I can do.**
@@ -266,9 +271,9 @@ Enables E5 and E6. No user-visible feature — and that is deliberate.
 | **US-301** | `SECTIONS` registry, additive, zero new sections | — | 5 | M |
 | **US-302** | Generalise SRS keys to `vocab:`/`gram:`/`phon:`/`coll:` | `FR-SRS-1` | 5 | M |
 | **US-303** | Migrate existing `srsData` to namespaced keys | `FR-SRS-1`, `FR-DATA-2` | 3 | M |
-| **US-304** | Cap the daily queue at ~20, defer the rest | `FR-SRS-4` | 2 | M |
+| ✅ **US-304** | Daily review queue capped at 20, read-time only so deferral writes nothing — **done 2026-09-09** | `FR-SRS-4` | 2 | M |
 | **US-305** | Mistake log by error type, with a top-5 view | `FR-SRS-3` | 5 | M |
-| **US-306** | Store self-reported outcomes flagged, never as verified | `FR-SRS-5` | 2 | M |
+| ✅ **US-306** | Self-reported outcomes may shorten an interval but never certify; backwards-compatible with no migration — **done 2026-09-09** | `FR-SRS-5` | 2 | M |
 
 **US-305 — As Anusha, I want to know what I keep getting wrong.**
 - **Given** 30 days of practice, **when** I open the mistake log, **then** I see my top 5 recurring
@@ -523,15 +528,15 @@ one with a spike attached.
 | Sprint | Theme | Points | Cumulative |
 |---|---|---|---|
 | 0 | Unblock | 6 | 6 |
-| 1 | Honesty | 53 | 59 |
-| 2 | Data integrity | 19 | 78 |
-| 3 | Extensibility | 22 | 100 |
-| 4 | Pronunciation | 33 | 133 |
-| 5 | Grammar | 33 | 166 |
-| 6 | Speaking | 36 | 202 |
-| 7 | Listening & vocabulary | 40 | 242 |
-| 8 | Session & platform | 44 | 286 |
+| 1 | Honesty | 62 | 68 |
+| 2 | Data integrity | 19 | 87 |
+| 3 | Extensibility | 22 | 109 |
+| 4 | Pronunciation | 33 | 142 |
+| 5 | Grammar | 33 | 175 |
+| 6 | Speaking | 28 | 203 |
+| 7 | Listening & vocabulary | 40 | 243 |
+| 8 | Session & platform | 44 | 287 |
 
-**286 points total, of which 43 are done** (23 stories). At 8–12 points a week of evenings that is
+**287 points total, of which 62 are done — 21%.** At 8–12 points a week of evenings that is
 roughly **5–7 months** for everything. Sprint 1 is the one to finish first: it is where every
 honesty defect lives.
