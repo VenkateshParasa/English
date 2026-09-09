@@ -215,7 +215,11 @@ After 3 incorrect attempts:
 
 ## 🎧 Listening & Speaking
 
+The app calls this section **"🎧 Listening & Speaking Practice"**, and it has two cards side by side: **Listen and Repeat** (listen, record yourself, compare) and **Read Aloud** (read the sentence and see which words the recogniser matched). Both use the same sentence, so you can work through one and then the other.
+
 ### Listen and Repeat
+
+*"Click to hear the sentence, then repeat it."*
 
 1. **Click "🔊 Play"**
    - Hear the sentence spoken clearly
@@ -225,33 +229,72 @@ After 3 incorrect attempts:
    - Click "🎤 Record Your Voice"
    - Speak the sentence clearly
    - Click "⏹️ Stop" when finished
+   - You'll see "Recording saved!" — and saving a recording is enough on its own to tick off today's Listening goal
 
 3. **Review Your Recording**
    - Click "🔄 Replay Recording"
    - Compare with the original
    - Practice until satisfied
    - Playback is reliable in Chrome and Edge. In Safari the recording is saved but usually won't play back, so use Chrome or Edge for this exercise.
+   - Nobody grades this one. It's for your own ears — the point is hearing yourself change over weeks, not scoring today.
 
-### Speech Recognition Practice
+### Read Aloud
 
-1. **View Target Word**
-   - A word is displayed in large text
+This is the second card in the section, headed **"Read Aloud"**: *"Read the sentence below aloud. We will show you which words the recogniser matched."*
+
+1. **Read the sentence on screen**
+   - It's shown in large text, and it's the *same* sentence the "🔊 Play" button speaks — so you can listen to it first, as many times as you like, then read it back
+   - Your job is the whole sentence, not one word from it
 
 2. **Click "🎤 Start Speaking"**
-   - Say the word clearly
-   - The system listens and writes down what it heard
+   - Read the sentence aloud at a natural pace, straight through
+   - Your browser writes down what it thinks it heard, and shows it as: `The recogniser heard: "…"`
 
-3. **Get Feedback**
-   - You'll see "The recogniser heard: …" with the words it picked up
-   - If it caught everything, it says it understood every word and the exercise is marked complete
-   - Otherwise it tells you how many words it missed and underlines them, so you can try just those again
-   - Remember this is the recogniser's opinion, not a verdict on your English — background noise and accents both affect it
+3. **Read the word-by-word comparison**
+   - Underneath, the sentence appears again with every word the recogniser *didn't* match shown in bold with a wavy underline (hover over one and it says "The recogniser did not match this word")
+   - Above it you get one of two lines:
+     - `The recogniser understood every word.`
+     - `The recogniser missed 2 of 9 words: asked, texts.` — with your actual numbers and your actual words
+   - The exercise is only ticked off when every word matched, so a partial match leaves it open and you can simply press "🎤 Start Speaking" again
+   - Moving to another sentence with "← Previous" or "Next →" clears the feedback and starts fresh
+
+### What that feedback means (and what it doesn't)
+
+Read this once, because it saves a lot of unnecessary worry.
+
+The app never tells you your pronunciation was "correct", "perfect" or "wrong" — and that's on purpose, not an oversight. All it can honestly report is **what the recogniser guessed it heard**, which is a very different thing from whether a person would have understood you. So it tells you exactly that, and nothing more.
+
+Which means:
+
+- 💡 **"The recogniser missed 2 of 9 words" is information, not a mark out of nine.** It's a note about which words to look at again, in the same spirit as a listening tip. Nothing is failed and nothing is held against you.
+- 💡 **The recogniser gets things wrong all the time, especially with accents.** It's a piece of browser software trained mostly on a narrow set of voices. A word it misses may have been perfectly clear. Background noise, a distant or cheap microphone, a fast connection of two words, or simply an unfamiliar accent will all make it drop words you said fine.
+- 💡 **The small words go missing most.** "a", "the", "to" and "is" are the ones the recogniser swallows first, and those are almost never the ones worth worrying about.
+- 💡 **"The recogniser understood every word" is deliberately not "Perfect!"** It's honest praise for something real that happened. It doesn't mean your accent is finished — and equally, the opposite result doesn't mean you can't speak English.
+
+If a sentence comes back badly two or three times in a row, treat it as a hint about the *sentence* — try "🔊 Play" again, listen for where the words run together, then read it back a bit more slowly. That's the useful move. Most learners see plenty of missed words in the first weeks; it settles down, and it says far less about you than it does about the software.
+
+### Words that come back to your review queue
+
+A read-aloud attempt can put a word back into your vocabulary review queue. When it does, the app tells you plainly, right under the comparison:
+
+`Added back to your review queue: happy, decide.`
+
+Here's exactly when that happens:
+
+- Only words that are in your **current level's vocabulary list** — a missed "the" or "of" is never added
+- Only when the recogniser matched **more than half** the words in the sentence. If most of the sentence came back missing, the app assumes the problem was the microphone, the noise or the recogniser itself, and adds nothing
+- Only ever *adds* words back. A word the recogniser matched is never marked as learned and never gets pushed further away, because matching it isn't proof you know it
+
+Those words become due straight away, so the "🔁 Review Due (N)" count in the Vocabulary section goes up and you can practise them there.
+
+And note the wording the app uses: **"back to your review queue"**, not "you mispronounced this". It means *we couldn't confirm that one, so let's see it again* — which is the same thing that happens when you skip a word in vocabulary practice. It is not a verdict on how you said it.
 
 ### Tips for Better Recognition
+- 💡 Read the whole sentence in one go — pausing between words makes recognition worse, not better
 - 💡 Speak clearly and at normal pace
 - 💡 Minimize background noise
 - 💡 Position microphone properly
-- 💡 Practice pronunciation first
+- 💡 Listen with "🔊 Play" first, then read back
 - 💡 Don't shout or whisper
 
 ## 🧩 Puzzles & Games
@@ -387,6 +430,7 @@ The app keeps your counts and your streak. Choosing what to aim for is up to you
 2. **Repetition**: Listen multiple times
 3. **Shadowing**: Repeat immediately after hearing
 4. **Recording Review**: Compare your pronunciation
+5. **Read It Back**: Use Read Aloud on the same sentence, and treat any words it misses as words to listen to again — not as a score
 
 ## 🔧 Troubleshooting
 

@@ -115,6 +115,24 @@
                     <p>Loading...</p>
                 </div>
             </div>
+
+            <!-- Your data: export, restore, reset review history (FR-DATA-4, FR-DATA-5).
+                 Wired by js/core/portability.js via Portability.initUI(). -->
+            <div class="daily-goal" id="dataControls" role="region" aria-labelledby="data-controls-title">
+                <h3 id="data-controls-title">💾 Your data</h3>
+                <p>Everything you practise is saved on this device only. Save a copy if you want a backup, or to carry your progress to another device.</p>
+                <div class="button-group" role="group" aria-label="Your data">
+                    <button class="btn-primary" id="exportData" aria-label="Save a copy of your data as a file">⬇️ Save a copy</button>
+                    <button class="btn-secondary" id="importData" aria-label="Restore your data from a saved copy">⬆️ Restore from a copy</button>
+                    <button class="btn-secondary" id="resetReviewHistory" aria-label="Clear your review history and keep everything else">↺ Clear review history</button>
+                </div>
+                <!-- The button above is what you tab to and activate; this input is
+                     only the file picker, so it stays out of the tab order. -->
+                <input type="file" id="importDataFile" accept="application/json,.json" class="sr-only" tabindex="-1" aria-hidden="true">
+                <p>Restoring replaces the progress, review history and settings on this device. Clearing your review history keeps your progress, streak, completed exercises and settings.</p>
+                <div class="feedback" id="dataControlsStatus" role="status" aria-live="polite"></div>
+                <p id="dataControlsUsage" aria-live="polite"></p>
+            </div>
         </section>
 
         <!-- Vocabulary Section -->
@@ -360,6 +378,8 @@
     <script src="js/core/levels.js"></script>
     <script src="js/core/migrations.js"></script>
     <script src="js/core/srs.js"></script>
+    <!-- Depends on migrations.js (schemaVersion, backupOnce) and srs.js (reset). -->
+    <script src="js/core/portability.js"></script>
     <script src="js/theme-toggle.js"></script>
     <script src="js/ui-enhancements.js"></script>
 

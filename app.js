@@ -179,6 +179,16 @@ const cache = {
 };
 
 function saveProgress() {
+    // A restore (js/core/portability.js) has replaced `learningProgress` on disk
+    // but `state` still holds the pre-import data until the page reloads. The
+    // 30-second autosave below would otherwise write that stale state straight
+    // over the restored record and silently undo the restore. Fail closed:
+    // between a successful import and the reload, nobody writes progress.
+    if (typeof Portability !== 'undefined' && Portability &&
+        typeof Portability.writesSuspended === 'function' &&
+        Portability.writesSuspended()) {
+        return;
+    }
     try {
         const toSave = {
             ...state,
@@ -615,17 +625,26 @@ function generateAlgorithmicSentence(index, difficulty) {
         words: words,
         correct: sentence
     };
-    
+
+    // Blank the middle word BY POSITION, not with correct.replace(word, "___").
+    // A first-occurrence substring replace blanks mid-word whenever the chosen
+    // word also appears inside an earlier one — producing prompts like
+    // "requires underst___ing and implementing" for the answer "and", which no
+    // learner can answer. This is the same idiom deriveFillBlank() uses.
+    const blankIndex = Math.floor(words.length / 2);
+
     return {
         words: baseExercise.words,
         correct: baseExercise.correct,
         fillBlank: {
-            sentence: baseExercise.correct.replace(baseExercise.words[Math.floor(baseExercise.words.length / 2)], "___"),
-            answer: baseExercise.words[Math.floor(baseExercise.words.length / 2)],
-            options: [
-                baseExercise.words[Math.floor(baseExercise.words.length / 2)],
-                "other", "word", "test"
-            ].sort(() => Math.random() - 0.5)
+            sentence: words.map((word, i) => (i === blankIndex ? '___' : word)).join(' '),
+            answer: words[blankIndex],
+            // Only `sentence` and `answer` are read by loadFillBlankExercise.
+            // The old `options` array padded the answer with the literal strings
+            // "other"/"word"/"test" and shuffled them with Math.random(), so it
+            // was both nondeterministic and never displayed. Carrying just the
+            // answer keeps the shape without pretending to offer distractors.
+            options: [words[blankIndex]]
         }
     };
 }
@@ -674,9 +693,37 @@ function updateCompletionIndicator(type, index, isCompleted) {
     }
     
     if (indicator) {
-        indicator.innerHTML = isCompleted
-            ? `<span class="status-complete">✓ Completed</span> <button class="btn-secondary btn-retake" onclick="retakeCurrentExercise('${type}')">Retake</button>`
-            : `<span class="status-incomplete">○ Not completed</span>`;
+        // Built node by node rather than with innerHTML (US-127). The markup this
+        // replaces carried an inline onclick="retakeCurrentExercise('...')" — a
+        // script inside an attribute, which only runs because index.html's CSP
+        // still allows 'unsafe-inline' for scripts, and which is exactly the kind
+        // of code that makes dropping that allowance a large change instead of a
+        // one-line one. `type` is internal today, but it is still interpolated
+        // straight into an HTML sink, so nothing but that fact makes it safe.
+        // Same element structure, same classes, same behaviour; the handler is
+        // simply attached in JavaScript.
+        indicator.textContent = '';
+
+        const status = document.createElement('span');
+        status.className = isCompleted ? 'status-complete' : 'status-incomplete';
+        status.textContent = isCompleted ? '✓ Completed' : '○ Not completed';
+        indicator.appendChild(status);
+
+        if (isCompleted) {
+            // The whitespace text node the old template had between the span and
+            // the button. .exercise-status is a flex container, so it never
+            // rendered as a gap (that comes from `gap: 15px`), but keeping it
+            // makes this DOM identical to what innerHTML produced.
+            indicator.appendChild(document.createTextNode(' '));
+
+            const retakeButton = document.createElement('button');
+            retakeButton.className = 'btn-secondary btn-retake';
+            retakeButton.textContent = 'Retake';
+            // Looked up on window at click time, exactly as the inline handler
+            // did: retakeCurrentExercise is assigned further down this file.
+            retakeButton.addEventListener('click', () => window.retakeCurrentExercise(type));
+            indicator.appendChild(retakeButton);
+        }
     }
 }
 
@@ -718,14 +765,43 @@ const AppErrorHandler = {
         UNKNOWN: 'UNKNOWN_ERROR'
     },
 
-    // Classify error type
+    // Classify error type.
+    //
+    // Order matters here. The validation check runs first, before the offline
+    // check, because a validation failure is a statement about what the learner
+    // typed and has nothing to do with the network: with `!navigator.onLine`
+    // first, an empty answer entered offline was classified NETWORK and reported
+    // as "No internet connection. Using offline mode." — nonsense in a PWA whose
+    // whole point is that it works offline.
     classifyError(error) {
+        const err = error || {};
+        if (this.isValidationError(err)) return this.ErrorTypes.VALIDATION;
         if (!navigator.onLine) return this.ErrorTypes.NETWORK;
-        if (error.name === 'TimeoutError' || error.name === 'AbortError') return this.ErrorTypes.TIMEOUT;
-        if (error.response) return this.ErrorTypes.API;
-        if (error.name === 'QuotaExceededError') return this.ErrorTypes.STORAGE;
-        if (error.name === 'NotAllowedError') return this.ErrorTypes.PERMISSION;
+        if (err.name === 'TimeoutError' || err.name === 'AbortError') return this.ErrorTypes.TIMEOUT;
+        if (err.response) return this.ErrorTypes.API;
+        if (err.name === 'QuotaExceededError') return this.ErrorTypes.STORAGE;
+        if (err.name === 'NotAllowedError') return this.ErrorTypes.PERMISSION;
         return this.ErrorTypes.UNKNOWN;
+    },
+
+    // True only for the errors validateInput() raises *about the input*.
+    //
+    // Deliberately a tag, not a guess from the message text: anything else that
+    // escapes validateInput — a TypeError because a caller passed a non-regex
+    // `pattern`, say — is a genuine bug, must keep classifying as UNKNOWN, and
+    // must keep being reported. This is the line between "the learner has not
+    // typed anything yet" and "this code is broken", so it stays narrow.
+    isValidationError(error) {
+        return !!error && (error.isValidationError === true || error.name === 'ValidationError');
+    },
+
+    // Build a tagged validation error. The message is shown to the learner
+    // verbatim by the call sites, so it is written for them, not for a log.
+    validationError(message) {
+        const error = new Error(message);
+        error.name = 'ValidationError';
+        error.isValidationError = true;
+        return error;
     },
 
     // Get user-friendly error message
@@ -801,11 +877,38 @@ const AppErrorHandler = {
         const {
             showToast = true,
             useCache = true,
-            fallback = null
+            fallback = null,
+            showValidationToast = false
         } = options;
 
         this.logError(error, context);
         const errorType = this.classifyError(error);
+
+        // A validation failure is not a malfunction, and it is already spoken
+        // for (US-125). validateInput() throws a message written for the learner
+        // ("There is nothing to check yet. Say or type your answer, then try
+        // again."), and every call site surfaces it — inline feedback under the
+        // exercise, or a toast in the exercise's own words. Adding a second,
+        // generic toast from here is what produced two notifications for one
+        // empty answer, the second of them the vague and faintly alarming
+        // "Something went wrong. Please try again." So: log it, and let the call
+        // site do the talking.
+        //
+        // Only validation is treated this way. Every other type still toasts,
+        // because nothing else here is guaranteed to have been reported already.
+        // A caller that has nothing of its own to say can opt in with
+        // showValidationToast, and then gets the thrown message verbatim rather
+        // than the generic line.
+        if (errorType === this.ErrorTypes.VALIDATION) {
+            if (showValidationToast && showToast && window.Toast) {
+                const validationMessage = (error && error.message)
+                    ? error.message
+                    : this.getUserMessage(errorType, context);
+                window.Toast.warning(validationMessage);
+            }
+            return fallback;
+        }
+
         const message = this.getUserMessage(errorType, context);
 
         if (showToast && window.Toast) {
@@ -891,57 +994,80 @@ const AppErrorHandler = {
         // Nothing supplied. Phrased as a state of the exercise, not a verdict
         // on the learner: an empty transcript usually means the mic heard
         // nothing, which is not a mistake.
+        //
+        // Every throw below is built with validationError(), so classifyError()
+        // can recognise it as VALIDATION and handleError() knows the call site
+        // has already shown this message (US-125). Anything thrown here with a
+        // bare `new Error` would be reported a second time as an unexplained
+        // failure.
         if (required && text.trim() === '') {
-            throw new Error('There is nothing to check yet. Say or type your answer, then try again.');
+            throw this.validationError('There is nothing to check yet. Say or type your answer, then try again.');
         }
 
         if (text === '') return '';
 
-        // Sanitize. Deliberately NOT via sanitizeInput(): that one round-trips
-        // through .innerHTML, so it entity-encodes — "fish & chips" comes back
-        // as "fish &amp; chips". That encoding is correct for Toast, which
-        // renders its message with innerHTML, and wrong here, where the result
-        // is shown with textContent and compared against an expected answer;
-        // the learner would see the entity and be marked wrong for an
-        // ampersand. Strip the dangerous characters and the markup delimiters
-        // instead, and leave the learner's own punctuation alone.
+        // Sanitize. Deliberately NOT via sanitizeInput(): that one is for text a
+        // caller is about to display as-is, and it does not enforce this
+        // function's length cap or its `required` rule. The two share the same
+        // stripping rules on purpose — dangerous characters and the markup
+        // delimiters go, the learner's own punctuation (ampersands, curly
+        // apostrophes, accents, dashes) stays, because the result is shown with
+        // textContent and compared against an expected answer. Entity-encoding
+        // here would show the learner "fish &amp; chips" and then mark them
+        // wrong for an ampersand.
         const sanitized = text
             .replace(this.UNSAFE_CHARS, '')
             .replace(/[<>]/g, '')
             .trim();
 
         if (required && sanitized === '') {
-            throw new Error('There is nothing to check yet. Say or type your answer, then try again.');
+            throw this.validationError('There is nothing to check yet. Say or type your answer, then try again.');
         }
 
         // Length. The caller's cap applies, but never above the hard ceiling.
         const cap = Math.min(Number(maxLength) || this.HARD_MAX_LENGTH, this.HARD_MAX_LENGTH);
         if (sanitized.length < minLength) {
-            throw new Error(`This needs at least ${minLength} characters. Add a little more and try again.`);
+            throw this.validationError(`This needs at least ${minLength} characters. Add a little more and try again.`);
         }
         if (sanitized.length > cap) {
-            throw new Error(`This exercise can only check ${cap} characters at a time. Shorten it and try again.`);
+            throw this.validationError(`This exercise can only check ${cap} characters at a time. Shorten it and try again.`);
         }
 
         // Format, for structured fields only — see the note above.
         if (strictPattern && pattern && !pattern.test(sanitized)) {
-            throw new Error('That is not the format this field expects.');
+            throw this.validationError('That is not the format this field expects.');
         }
 
         return sanitized;
     },
 
-    // Sanitize input to prevent XSS
+    /**
+     * Sanitize a string for display as plain text.
+     *
+     * Returns text, not entity-encoded HTML (US-126). This used to round-trip
+     * through .innerHTML — textContent in, innerHTML out — which encodes: "fish
+     * & chips" came back as "fish &amp; chips". That only rendered correctly if
+     * the consumer happened to be an innerHTML sink, and the word chips in
+     * loadDragDropSentence() are not: they assign the result to .textContent, so
+     * a learner building a sentence about fish & chips read "fish &amp; chips"
+     * on the chip. The encoding also meant the escaping of the one real HTML
+     * sink in this file (Toast) was a side effect of a helper named "sanitize" —
+     * protection you could remove by accident while fixing a display bug. Toast
+     * now escapes structurally at its own sink (displayToast builds its nodes
+     * and sets .textContent), so this function can do what all of its callers
+     * already assume it does: hand back safe plain text.
+     *
+     * "Safe" here means the same denylist validateInput() uses — control and
+     * bidi characters out, the markup delimiters `<` and `>` out — and nothing
+     * about the learner's own punctuation touched. What it is not is a
+     * substitute for escaping at an HTML sink: any future caller that writes
+     * this result with .innerHTML must escape it there.
+     */
     sanitizeInput(input) {
         if (typeof input !== 'string') return input;
 
-        // Remove HTML tags
-        const div = document.createElement('div');
-        div.textContent = input;
-        const sanitized = div.innerHTML;
-
-        // Additional sanitization
-        return sanitized
+        return input
+            .replace(this.UNSAFE_CHARS, '')
             .replace(/[<>]/g, '')
             .trim();
     }
@@ -976,6 +1102,10 @@ const Toast = {
 
         const toast = {
             id: Date.now() + Math.random(),
+            // sanitizeInput() is still worth calling — it drops control and bidi
+            // characters, which would otherwise land in a notification and in the
+            // console line logError() writes. What it no longer does is escape
+            // for HTML; displayToast() handles that by setting .textContent.
             message: AppErrorHandler.sanitizeInput(message),
             type,
             duration
@@ -1006,15 +1136,34 @@ const Toast = {
             info: 'ℹ'
         };
 
-        toastEl.innerHTML = `
-            <span class="toast-icon">${icons[toast.type] || icons.info}</span>
-            <span class="toast-message">${toast.message}</span>
-            <button class="toast-close" aria-label="Close notification">×</button>
-        `;
+        // Built node by node instead of with innerHTML (US-126). The message can
+        // contain anything a learner typed or a recogniser heard, and it used to
+        // be interpolated into markup here — safe only because sanitizeInput()
+        // happened to entity-encode on the way in. That encoding was wrong for
+        // the callers that display its result as text, so it is gone; the
+        // escaping now lives at the sink, where it belongs. .textContent is not
+        // parsed as markup, so a message about fish & chips renders as "fish &
+        // chips" rather than "fish &amp; chips", and a message containing markup
+        // cannot become markup. Same elements, same classes, same order.
+        const iconEl = document.createElement('span');
+        iconEl.className = 'toast-icon';
+        iconEl.textContent = icons[toast.type] || icons.info;
+
+        const messageEl = document.createElement('span');
+        messageEl.className = 'toast-message';
+        messageEl.textContent = toast.message;
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'toast-close';
+        closeBtn.setAttribute('aria-label', 'Close notification');
+        closeBtn.textContent = '×';
+
+        toastEl.appendChild(iconEl);
+        toastEl.appendChild(messageEl);
+        toastEl.appendChild(closeBtn);
 
         // Close button handler
-        const closeBtn = toastEl.querySelector('.toast-close');
-        closeBtn.onclick = () => this.dismiss(toast.id);
+        closeBtn.addEventListener('click', () => this.dismiss(toast.id));
 
         // Add to container
         this.container.appendChild(toastEl);
@@ -2927,7 +3076,12 @@ function recordReadAloudLapses(diff) {
     if (diff.matchedCount * 2 <= diff.totalCount) return [];
 
     const lapsed = missedVocabularyWords(diff);
-    lapsed.forEach(wordObj => SRS.schedule(wordObj, false));
+    // selfReport(), not schedule(word, false). A graded lapse increments `lapses`,
+    // zeroes `reps` and drops `ease` — it records that the learner got the word
+    // wrong. All we actually know is that a speech recogniser did not match it,
+    // which is not the same claim (FR-SRS-5). selfReport brings the word back
+    // sooner without certifying anything about the learner's knowledge.
+    lapsed.forEach(wordObj => SRS.selfReport(wordObj, false));
     if (lapsed.length > 0) {
         updateDueCount();
     }
@@ -3692,6 +3846,11 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeCrosswordButtons();
     initializeScrambleButtons();
     initializeMatchingButtons();
+    // Export / restore / clear-review-history controls on the Dashboard.
+    // Owned by js/core/portability.js so its copy and its behaviour stay together.
+    if (typeof Portability !== 'undefined' && Portability && typeof Portability.initUI === 'function') {
+        Portability.initUI();
+    }
     updateDashboard();
 
     // Initialize robustness improvements

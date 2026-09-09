@@ -2,7 +2,7 @@
 // Provides offline functionality and caching
 
 const CACHE_NAME = 'english-portal-v1.0.2';
-const STATIC_CACHE = 'english-portal-static-v4';
+const STATIC_CACHE = 'english-portal-static-v5';
 const DYNAMIC_CACHE = 'english-portal-dynamic-v3';
 const API_CACHE = 'english-portal-api-v3';
 
@@ -30,6 +30,7 @@ const STATIC_ASSETS = [
     '/js/core/levels.js',
     '/js/core/migrations.js',
     '/js/core/srs.js',
+    '/js/core/portability.js',
     // UI
     '/js/theme-toggle.js',
     '/js/ui-enhancements.js',
