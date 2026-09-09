@@ -122,6 +122,14 @@ behaviours that teach errors.
 | **US-133** | Drag/drop toasts blame the learner for app-supplied data: "Invalid word detected", "Invalid drop operation" | `BR-3` | 1 | S |
 | **US-134** | `js/core/srs.js` closes its IIFE over `this` rather than `globalThis`, so `require()` never publishes `SRS` — harmless in browser, breaks Node-based checks | — | 1 | S |
 | **US-135** | `js/core/portability.js` borrows `.daily-goal` styling for the data panel; a dedicated `.data-controls` class would read better | — | 1 | C |
+| **US-136** | Wire `js/core/blobstore.js` into the recording UI. Note `promptId` must be **stable content identity**, not `state.currentListeningIndex` — an index renumbers when content is inserted, and month-one recordings would then belong to someone else's sentence | `FR-DATA-6`, `FR-SPK-6` | 3 | S |
+| **US-137** | Wire `js/core/mistakes.js` into the wrong-answer paths and add the dashboard panel. Calls must sit behind the existing single-answer guards or one stubborn item becomes a whole diagnosis | `FR-SRS-3` | 3 | M |
+| **US-138** | `FR-DATA-4` export does not cover recordings. With blobs in IndexedDB, `CON-3`'s "export is the only backup" is now false for them | `FR-DATA-4` | 3 | M |
+| **US-139** | `FR-DATA-6`/`OQ-6` specify ring-buffer eviction, which deletes the month-one recording the feature exists to keep. `blobstore.js` deliberately pins the baseline instead — the requirement text needs amending to match | `FR-DATA-6` | 1 | M |
+| **US-140** | `checkDictation`'s similarity is fake: `sim = exact ? 1 : 0.5` then `if (sim > 0.8)`. The name implies fuzzy matching that does not exist, and the failure branch shows the answer with no reason or contrast | `FR-GRM-2` | 2 | M |
+| **US-141** | `checkComprehension` gives a red mark with no fix on screen — violates `FR-A11Y-5` and `FR-GRM-2`; also still prints "✓ Perfect!" | `FR-A11Y-5` | 2 | M |
+| **US-142** | Grammar authoring: 6 practice items is too few for high-frequency points. Recommend 6 as a floor and 12 for the top four points | `FR-GRM-1` | 2 | S |
+| **US-143** | `data/l1/telugu.js` does not exist, so the 21 `T-`coded mistake categories live inline in `mistakes.js` rather than in a pluggable L1 profile | `FR-CNT-3` | 2 | S |
 | **US-110** | **Stop the crossword awarding the daily goal for a blank grid** (D2) | `BR-3` | 2 | M |
 | ✅ **US-111** | Guard the quiz counters against re-clicking a correct answer — **done 2026-09-09** | `FR-VOC-1` | 1 | M |
 | ✅ **US-112** | Stop dictation double-counting the reading passage — **done 2026-09-09** | `FR-DATA-3` | 1 | M |
@@ -223,10 +231,9 @@ sounds.**
   converts an intermittent bug into a visible one — but it needs a follow-up. See `US-114`.
 
 **US-108 — As Lakshmi, I want to retry an exercise in the mode I failed it in.**
-**Sprint 1 total: 62 points across 35 stories — 45 done, 17 remaining.** Grown
-15 → 23 → 30 → 44 → 53 → 62 across five waves. Only `US-110` (crossword crediting a blank grid)
-is still a learner-facing honesty defect, and it waits on `OQ-7`. Everything else remaining is
-hygiene or copy.
+**Sprint 1 total: 80 points across 43 stories — 45 done, 35 remaining.** The remaining items are
+almost all hygiene, copy or wiring surfaced by later work; `US-110` (crossword crediting a blank
+grid) is the last learner-facing honesty defect and waits on `OQ-7`.
 
 ---
 
@@ -236,12 +243,12 @@ Highest-risk sprint. Blocked on **OQ-4**.
 
 | # | Story | FR | Pts | MoSCoW |
 |---|---|---|---|---|
-| **US-201** | Migrate level keys to the four CEFR tiers | `FR-SES-3` | 5 | M |
-| **US-202** | Pre-migration backup, provably idempotent | `FR-DATA-2` | 3 | M |
+| ✅ **US-201** | CEFR level rename with migration — `data.js` keys renamed, `data-level` attributes updated, **exercise ids migrated** so completion history survives — **done 2026-09-09** | `FR-SES-3` | 5 | M |
+| ✅ **US-202** | Pre-migration backup, provably idempotent — byte-identical on rerun, `.bak.v1` for both stores — **done 2026-09-09** | `FR-DATA-2` | 3 | M |
 | ✅ **US-203** | Export all learner data as one JSON file — **done 2026-09-09** | `FR-DATA-4` | 3 | M |
 | ✅ **US-204** | Import/restore with validate-before-write and verified rollback — **done 2026-09-09** | `FR-DATA-4` | 3 | M |
 | ✅ **US-205** | "Clear review history" — clears `srsData` only, backs up first — **done 2026-09-09** | `FR-DATA-5` | 2 | M |
-| **US-206** | Adopt IndexedDB for blobs; document the storage split | `NFR-10`, `CON-3` | 3 | M |
+| ✅ **US-206** | IndexedDB blob store (`js/core/blobstore.js`) with retention, quota handling and graceful degradation — **done 2026-09-09** (module only; UI wiring pending) | `NFR-10`, `CON-3` | 3 | M |
 
 **US-201 — As Lakshmi, I want levels that tell me what I can do.**
 - **Given** saved progress under `basic`/`intermediate`/`medium`, **when** I upgrade, **then** it
@@ -269,10 +276,10 @@ Enables E5 and E6. No user-visible feature — and that is deliberate.
 | # | Story | FR | Pts | MoSCoW |
 |---|---|---|---|---|
 | **US-301** | `SECTIONS` registry, additive, zero new sections | — | 5 | M |
-| **US-302** | Generalise SRS keys to `vocab:`/`gram:`/`phon:`/`coll:` | `FR-SRS-1` | 5 | M |
-| **US-303** | Migrate existing `srsData` to namespaced keys | `FR-SRS-1`, `FR-DATA-2` | 3 | M |
+| ✅ **US-302** | SRS keys namespaced `vocab:`/`gram:`/`phon:`/`coll:`; `getDueWords` no longer hardcodes a `quiz` filter — **done 2026-09-09** | `FR-SRS-1` | 5 | M |
+| ✅ **US-303** | Existing bare-word `srsData` migrated to `vocab:<word>` with **zero drift** across all scheduling fields — **done 2026-09-09** | `FR-SRS-1`, `FR-DATA-2` | 3 | M |
 | ✅ **US-304** | Daily review queue capped at 20, read-time only so deferral writes nothing — **done 2026-09-09** | `FR-SRS-4` | 2 | M |
-| **US-305** | Mistake log by error type, with a top-5 view | `FR-SRS-3` | 5 | M |
+| ✅ **US-305** | Mistake log by error type (`js/core/mistakes.js`) — 34 categories from the Telugu interference tables, top-5 over a 30-day window with recency decay — **done 2026-09-09** (module only; wiring pending) | `FR-SRS-3` | 5 | M |
 | ✅ **US-306** | Self-reported outcomes may shorten an interval but never certify; backwards-compatible with no migration — **done 2026-09-09** | `FR-SRS-5` | 2 | M |
 
 **US-305 — As Anusha, I want to know what I keep getting wrong.**
@@ -336,7 +343,7 @@ Largest content effort in the backlog, and the phase needing no external data.
 
 | # | Story | FR | Pts | MoSCoW |
 |---|---|---|---|---|
-| **US-500** | **Spike:** author **one** grammar point end to end and review it | `FR-GRM-1` | 2 | M |
+| ✅ **US-500** | Authored **one** grammar point (articles) end to end for review, plus a schema designed to carry all 24 — **done 2026-09-09**. See `docs/GRAMMAR_SAMPLE_REVIEW.md` | `FR-GRM-1` | 2 | M |
 | **US-501** | Grammar section shell wired to the registry | `FR-GRM-1` | 3 | M |
 | **US-502** | Foundation points 1–8 (**split from an 8**) | `FR-GRM-1` | 5 | M |
 | **US-503** | Everyday points 9–16 (**split from an 8**) | `FR-GRM-1` | 5 | M |
@@ -528,15 +535,15 @@ one with a spike attached.
 | Sprint | Theme | Points | Cumulative |
 |---|---|---|---|
 | 0 | Unblock | 6 | 6 |
-| 1 | Honesty | 62 | 68 |
-| 2 | Data integrity | 19 | 87 |
-| 3 | Extensibility | 22 | 109 |
-| 4 | Pronunciation | 33 | 142 |
-| 5 | Grammar | 33 | 175 |
-| 6 | Speaking | 28 | 203 |
-| 7 | Listening & vocabulary | 40 | 243 |
-| 8 | Session & platform | 44 | 287 |
+| 1 | Honesty | 80 | 86 |
+| 2 | Data integrity | 19 | 105 |
+| 3 | Extensibility | 22 | 127 |
+| 4 | Pronunciation | 33 | 160 |
+| 5 | Grammar | 33 | 193 |
+| 6 | Speaking | 28 | 221 |
+| 7 | Listening & vocabulary | 40 | 261 |
+| 8 | Session & platform | 44 | 305 |
 
-**287 points total, of which 62 are done — 21%.** At 8–12 points a week of evenings that is
+**305 points total, of which 88 are done — 28%.** **Sprint 2 is complete** and Sprint 3 is 17 of 22.** At 8–12 points a week of evenings that is
 roughly **5–7 months** for everything. Sprint 1 is the one to finish first: it is where every
 honesty defect lives.
