@@ -120,7 +120,7 @@ behaviours that teach errors.
 | ✅ **US-131** | `FR-SRS-2` discrepancy documented rather than laundered; both ladders stated, recommendation recorded as `OQ-10` — **done 2026-09-09** | `FR-SRS-2` | 3 | M |
 | **US-132** | Dictation and scramble toast a hardcoded "Please enter your answer" for *any* validation failure, contradicting the inline message (paste 600 chars and it tells you to enter an answer you did enter) | `NFR-3` | 1 | S |
 | **US-133** | Drag/drop toasts blame the learner for app-supplied data: "Invalid word detected", "Invalid drop operation" | `BR-3` | 1 | S |
-| **US-134** | `js/core/srs.js` closes its IIFE over `this` rather than `globalThis`, so `require()` never publishes `SRS` — harmless in browser, breaks Node-based checks | — | 1 | S |
+| ✅ **US-134** | IIFE global-object bug fixed in `mistakes.js` (`srs.js` was already fixed). Note it never bit the jest suite, because jsdom makes `window === global` — so a behavioural test could not have caught it; pinned by a source check instead — **done 2026-09-09** | — | 1 | S |
 | **US-135** | `js/core/portability.js` borrows `.daily-goal` styling for the data panel; a dedicated `.data-controls` class would read better | — | 1 | C |
 | **US-136** | Wire `js/core/blobstore.js` into the recording UI. Note `promptId` must be **stable content identity**, not `state.currentListeningIndex` — an index renumbers when content is inserted, and month-one recordings would then belong to someone else's sentence | `FR-DATA-6`, `FR-SPK-6` | 3 | S |
 | **US-137** | Wire `js/core/mistakes.js` into the wrong-answer paths and add the dashboard panel. Calls must sit behind the existing single-answer guards or one stubborn item becomes a whole diagnosis | `FR-SRS-3` | 3 | M |
@@ -134,10 +134,18 @@ behaviours that teach errors.
 | **US-145** | `markExerciseComplete` is never called for `vocabulary` or `puzzles`, so those completion sets stay permanently empty and vocabulary never shows ✓/Retake however many quizzes are answered | `FR-DATA-3` | 2 | M |
 | **US-146** | `loadProgress` does `Object.assign(state.dailyGoals, loaded.dailyGoals \|\| {})`, accepting arbitrary keys from storage, so the dashboard progress bar can exceed 100% | `FR-DATA-1` | 1 | S |
 | **US-147** | `updateStatisticsDisplay` still hardcodes all five sections across three `innerHTML` blocks — the last un-collapsed site after the registry refactor | — | 2 | S |
-| **US-148** | `PROJECTORS.gram` still omits `review` (needed by `FR-GRM-3`) and `cefr`; `PROJECTORS.phon` has never been matched against real content and is a guess | `FR-GRM-3` | 1 | M |
-| **US-149** | `data/grammar.js` is in neither `index.html` nor `STATIC_ASSETS` — the content exists and nothing reads it. Needs the Grammar section shell (`US-501`) | `FR-GRM-1` | 1 | M |
+| ✅ **US-148** | `PROJECTORS.gram` now carries `review` and `cefr`; added `auditProjection()` so a dropped authored field warns in development instead of vanishing silently — **done 2026-09-09** | `FR-GRM-3` | 1 | M |
+| ✅ **US-149** | `data/grammar.js` is now loaded and precached; the Grammar section reads it — **done 2026-09-09** | `FR-GRM-1` | 1 | M |
 | **US-150** | Author `data/pronunciation.js` — minimal pairs for the Telugu priority pairs, stress families, schwa/rhythm noticing material. Agent died mid-task this wave; nothing landed | `FR-PRN-1` | 5 | M |
 | **US-151** | Author grammar points 1, 2 and 4 (copula `T-G2`, stative progressive `T-G3`, uncountables `T-G4`) — the highest-impact Telugu interference points. Agent died mid-task this wave | `FR-GRM-1` | 5 | M |
+| ✅ **US-501** | **Grammar section exists** — registry row, markup, loader, and feedback that teaches: every wrong answer shows the authored reason, a contrast pair and a retry, with defensible alternatives accepted. Scheduled as a `gram:` SRS item — **done 2026-09-09** | `FR-GRM-1`, `FR-GRM-2`, `FR-GRM-5` | 3 | M |
+| **US-152** | Grammar can **double-count across tiers**: only `foundation` has content, so selecting Everyday shows the Foundation point, and `markExerciseComplete` builds its id from `state.currentDifficulty`, so the same point counts twice | `FR-DATA-3` | 2 | M |
+| **US-153** | `resolveDifficulty`/`isLevelAvailable` probe `vocabularyData` as the content oracle — wrong now that a second content map exists with different tier coverage | `FR-SES-3` | 2 | M |
+| **US-154** | `updateDashboard`/`updateStatisticsDisplay` are the last non-registry-driven per-section code; grammar had to be added to three blocks by hand | — | 2 | S |
+| **US-155** | `srs.js` lapse sets `interval = 0, due = now`, but `TEACHING_METHODOLOGY.md` §3 and `FR-GRM-3` both say a lapse resets to **1 day**. Related to `OQ-10` | `FR-SRS-2` | 1 | S |
+| **US-156** | `data/grammar.js`'s own SRS PROJECTION CONTRACT recommends `difficulty`, which no grammar lesson has — following it would re-introduce the phantom-field bug | — | 1 | S |
+| **US-157** | Grammar practice modes `choose`, `repair` and `order` are reserved in the schema but unimplemented; the section shows an honest count of skipped items | `FR-GRM-1` | 3 | S |
+| **US-158** | No `state.learnerL1`, so the Telugu note renders only when content offers exactly one L1. A real profile field replaces one line | `FR-CNT-3` | 1 | S |
 | **US-110** | **Stop the crossword awarding the daily goal for a blank grid** (D2) | `BR-3` | 2 | M |
 | ✅ **US-111** | Guard the quiz counters against re-clicking a correct answer — **done 2026-09-09** | `FR-VOC-1` | 1 | M |
 | ✅ **US-112** | Stop dictation double-counting the reading passage — **done 2026-09-09** | `FR-DATA-3` | 1 | M |
@@ -543,15 +551,15 @@ one with a spike attached.
 | Sprint | Theme | Points | Cumulative |
 |---|---|---|---|
 | 0 | Unblock | 6 | 6 |
-| 1 | Honesty | 98 | 104 |
-| 2 | Data integrity | 19 | 123 |
-| 3 | Extensibility | 22 | 145 |
-| 4 | Pronunciation | 33 | 178 |
-| 5 | Grammar | 33 | 211 |
-| 6 | Speaking | 28 | 239 |
-| 7 | Listening & vocabulary | 40 | 279 |
-| 8 | Session & platform | 44 | 323 |
+| 1 | Honesty | 110 | 116 |
+| 2 | Data integrity | 19 | 135 |
+| 3 | Extensibility | 22 | 157 |
+| 4 | Pronunciation | 33 | 190 |
+| 5 | Grammar | 36 | 226 |
+| 6 | Speaking | 28 | 254 |
+| 7 | Listening & vocabulary | 40 | 294 |
+| 8 | Session & platform | 44 | 338 |
 
-**323 points total, of which 97 are done — 30%.** **Sprints 2 and 3 are both complete.** ** **Sprint 2 is complete** and Sprint 3 is 17 of 22.** At 8–12 points a week of evenings that is
+**338 points total, of which 103 are done — 30%.** Sprints 2 and 3 are complete; the Grammar section now exists. ** **Sprints 2 and 3 are both complete.** ** **Sprint 2 is complete** and Sprint 3 is 17 of 22.** At 8–12 points a week of evenings that is
 roughly **5–7 months** for everything. Sprint 1 is the one to finish first: it is where every
 honesty defect lives.
