@@ -14,6 +14,37 @@ const CONFIG = {
     useAPIFirst: true
 };
 
+// ============================================
+// SECTION REGISTRY
+// ============================================
+//
+// js/core/sections.js owns every per-section fact (nav id, index field, button
+// ids, status element, stat keys, goal key). Everything below reads it instead
+// of restating the section list, so adding a section is a row there plus markup
+// plus one line in the registerRuntime() block near the loaders.
+//
+// There is deliberately NO `typeof Sections === 'undefined'` fallback here, and
+// no degraded mode. levels.js gets one because a bad level id has a sane
+// substitute; a missing section registry has none — every section, counter and
+// shortcut is defined by it. If the <script> tag is missing this throws
+// immediately on the next line, which is the correct, loud outcome.
+// __tests__/unit/assets.test.js and __tests__/unit/sections.test.js exist so
+// that never reaches a learner.
+
+/** `{ vocabulary: new Set(), ... }` — one Set per exercise-tracking section. */
+function freshCompletedExercises() {
+    const sets = {};
+    Sections.exerciseIds().forEach(id => { sets[id] = new Set(); });
+    return sets;
+}
+
+/** `{ vocab: false, ... }` — one flag per section that has a daily goal. */
+function freshDailyGoals() {
+    const goals = {};
+    Sections.goalKeys().forEach(key => { goals[key] = false; });
+    return goals;
+}
+
 const state = {
     currentSection: 'dashboard',
     currentDifficulty: 'foundation',
@@ -31,13 +62,7 @@ const state = {
         readingCompleted: 0,
         puzzlesSolved: 0
     },
-    dailyGoals: {
-        vocab: false,
-        sentence: false,
-        reading: false,
-        listening: false,
-        puzzle: false
-    },
+    dailyGoals: freshDailyGoals(),
     sentenceBuilderWords: [],
     sentenceAttempts: 0,
     sentenceHintUsed: false,
@@ -46,47 +71,33 @@ const state = {
     reviewQueue: [],
     currentVocabWord: null,
     // Enhanced progress tracking
-    completedExercises: {
-        vocabulary: new Set(),
-        sentences: new Set(),
-        reading: new Set(),
-        listening: new Set(),
-        puzzles: new Set()
-    },
+    completedExercises: freshCompletedExercises(),
     exerciseHistory: [],
     generatedExercises: {
         sentences: [],
         reading: [],
         listening: []
     },
-    // Daily and overall statistics
-    dailyStats: {
-        date: new Date().toDateString(),
-        wordsLearned: 0,
-        sentencesCompleted: 0,
-        readingCompleted: 0,
-        listeningCompleted: 0,
-        puzzlesSolved: 0,
-        timeSpent: 0,
-        streak: 0
-    },
-    overallStats: {
-        totalDays: 0,
-        totalWords: 0,
-        totalSentences: 0,
-        totalReading: 0,
-        totalListening: 0,
-        totalPuzzles: 0,
-        bestStreak: 0,
-        currentStreak: 0,
-        averageDaily: {
-            words: 0,
-            sentences: 0,
-            reading: 0,
-            listening: 0,
-            puzzles: 0
+    // Daily and overall statistics.
+    //
+    // Object.assign rather than a spread of literals so the five per-section
+    // counters come from the registry while the fields that are NOT per-section
+    // (date, timeSpent, streak, totalDays, bestStreak, currentStreak) stay
+    // visible and hand-written. Key order is unchanged from the old literals.
+    dailyStats: Object.assign(
+        { date: new Date().toDateString() },
+        Sections.zeroMap('dailyStatKey'),
+        { timeSpent: 0, streak: 0 }
+    ),
+    overallStats: Object.assign(
+        { totalDays: 0 },
+        Sections.zeroMap('totalStatKey'),
+        {
+            bestStreak: 0,
+            currentStreak: 0,
+            averageDaily: Sections.zeroMap('avgKey')
         }
-    },
+    ),
     dailyHistory: []
 };
 
@@ -224,13 +235,13 @@ function saveProgress() {
                     ? Migrations.SCHEMA_VERSION
                     : 0
             ) || undefined,
-            completedExercises: {
-                vocabulary: Array.from(state.completedExercises.vocabulary),
-                sentences: Array.from(state.completedExercises.sentences),
-                reading: Array.from(state.completedExercises.reading),
-                listening: Array.from(state.completedExercises.listening),
-                puzzles: Array.from(state.completedExercises.puzzles)
-            }
+            // Sets are not JSON-serialisable, so every tracked section's Set
+            // becomes an array. Driven by the registry so a new section cannot
+            // be saved-but-not-loaded (or vice versa) — see loadProgress().
+            completedExercises: Sections.exerciseIds().reduce((out, id) => {
+                out[id] = Array.from(state.completedExercises[id]);
+                return out;
+            }, {})
         };
         localStorage.setItem('learningProgress', JSON.stringify(toSave));
     } catch (e) {
@@ -310,19 +321,18 @@ function loadProgress() {
             // state.overallStats (written by updateStatistics) are the source of truth.
             Object.assign(state.stats, loaded.stats || {});
             Object.assign(state.dailyGoals, loaded.dailyGoals || {});
-            state.currentWordIndex = loaded.currentWordIndex || 0;
-            state.currentSentenceIndex = loaded.currentSentenceIndex || 0;
-            state.currentPassageIndex = loaded.currentPassageIndex || 0;
-            state.currentListeningIndex = loaded.currentListeningIndex || 0;
+            // Where the learner was in each section. Registry-driven so a new
+            // section's position is restored without a fifth near-identical line.
+            Sections.indexKeys().forEach(key => {
+                state[key] = loaded[key] || 0;
+            });
             state.exerciseHistory = loaded.exerciseHistory || [];
             
             // Restore completed exercises sets
             if (loaded.completedExercises) {
-                state.completedExercises.vocabulary = new Set(loaded.completedExercises.vocabulary || []);
-                state.completedExercises.sentences = new Set(loaded.completedExercises.sentences || []);
-                state.completedExercises.reading = new Set(loaded.completedExercises.reading || []);
-                state.completedExercises.listening = new Set(loaded.completedExercises.listening || []);
-                state.completedExercises.puzzles = new Set(loaded.completedExercises.puzzles || []);
+                Sections.exerciseIds().forEach(id => {
+                    state.completedExercises[id] = new Set(loaded.completedExercises[id] || []);
+                });
             }
             
             // Load daily and overall stats
@@ -360,15 +370,15 @@ function loadProgress() {
 
 // Reset daily stats for new day
 function resetDailyStats() {
-    state.dailyStats = {
-        date: new Date().toDateString(),
-        wordsLearned: 0,
-        sentencesCompleted: 0,
-        readingCompleted: 0,
-        listeningCompleted: 0,
-        puzzlesSolved: 0,
-        timeSpent: 0
-    };
+    // Same shape and same key order as the state.dailyStats literal, with one
+    // pre-existing difference preserved deliberately: `streak` is NOT reset here
+    // (it never was), because state.overallStats.currentStreak is the real
+    // streak and state.dailyStats.streak is a vestigial field nothing reads.
+    state.dailyStats = Object.assign(
+        { date: new Date().toDateString() },
+        Sections.zeroMap('dailyStatKey'),
+        { timeSpent: 0 }
+    );
 }
 
 // Update streak
@@ -395,44 +405,32 @@ function calculateAverages() {
     state.overallStats.totalDays = totalDays;
     
     if (totalDays > 0) {
-        state.overallStats.averageDaily.words = Math.round(state.overallStats.totalWords / totalDays);
-        state.overallStats.averageDaily.sentences = Math.round(state.overallStats.totalSentences / totalDays);
-        state.overallStats.averageDaily.reading = Math.round(state.overallStats.totalReading / totalDays);
-        state.overallStats.averageDaily.listening = Math.round(state.overallStats.totalListening / totalDays);
-        state.overallStats.averageDaily.puzzles = Math.round(state.overallStats.totalPuzzles / totalDays);
+        Sections.exercises().forEach(section => {
+            state.overallStats.averageDaily[section.avgKey] =
+                Math.round(state.overallStats[section.totalStatKey] / totalDays);
+        });
     }
 }
 
 // Update statistics when completing exercises
 function updateStatistics(type) {
-    // Update daily stats
-    switch(type) {
-        case 'vocabulary':
-            state.dailyStats.wordsLearned++;
-            state.overallStats.totalWords++;
-            break;
-        case 'sentences':
-            state.dailyStats.sentencesCompleted++;
-            state.overallStats.totalSentences++;
-            break;
-        case 'reading':
-            state.dailyStats.readingCompleted++;
-            state.overallStats.totalReading++;
-            break;
-        case 'listening':
-            state.dailyStats.listeningCompleted++;
-            state.overallStats.totalListening++;
-            break;
-        case 'puzzles':
-            state.dailyStats.puzzlesSolved++;
-            state.overallStats.totalPuzzles++;
-            break;
-        default:
-            // Deliberate: a mistyped type used to fall through here silently, so a
-            // section would render perfectly and count nothing. Fail loudly instead.
-            console.warn(`updateStatistics: unknown type "${type}" — nothing counted`);
-            return;
+    // This used to be a `switch` with one `case` per section and, for a long
+    // time, no `default` at all — so a section missing a case rendered perfectly
+    // and counted nothing. The registry removes the possibility rather than the
+    // symptom: any section that exists has both counter keys, and any `type`
+    // that is not a section cannot reach the counters.
+    const section = Sections.get(type);
+    if (!section || !section.dailyStatKey || !section.totalStatKey) {
+        // Reachable only from a caller typo or a section row missing its counter
+        // keys, both of which are programmer errors, not learner-facing failures
+        // — hence console.warn rather than AppErrorHandler.logError, which is for
+        // thrown Errors and writes to the sessionStorage error log.
+        console.warn(`updateStatistics: unknown type "${type}" — nothing counted`);
+        return;
     }
+
+    state.dailyStats[section.dailyStatKey]++;
+    state.overallStats[section.totalStatKey]++;
 
     calculateAverages();
     saveProgress();
@@ -674,33 +672,22 @@ function generateAlgorithmicSentence(index, difficulty) {
 
 // Update navigation buttons visibility and state
 function updateNavigationButtons(type) {
-    const sections = {
-        vocabulary: { prev: null, next: 'nextWord', current: 'currentWordIndex' },
-        sentences: { prev: 'prevSentence', next: 'nextSentence', current: 'currentSentenceIndex' },
-        reading: { prev: 'prevReading', next: 'nextReading', current: 'currentPassageIndex' },
-        listening: { prev: 'prevListening', next: 'nextListening', current: 'currentListeningIndex' }
-    };
-    
-    const section = sections[type];
-    if (!section) return;
-    
-    const currentIndex = state[section.current];
+    // Sections without an index field (dashboard, puzzles) are not walked with
+    // prev/next and have nothing to indicate, exactly as the old map — which
+    // listed only vocabulary/sentences/reading/listening — arranged by omission.
+    const section = Sections.get(type);
+    if (!section || !section.indexKey) return;
+
+    const currentIndex = state[section.indexKey];
     const isCompleted = isExerciseCompleted(type, currentIndex);
-    
+
     // Update completion indicator
     updateCompletionIndicator(type, currentIndex, isCompleted);
 }
 
 // Update completion indicator in UI
 function updateCompletionIndicator(type, index, isCompleted) {
-    const indicators = {
-        vocabulary: 'vocabStatus',
-        sentences: 'sentenceStatus',
-        reading: 'readingStatus',
-        listening: 'listeningStatus'
-    };
-    
-    const indicatorId = indicators[type];
+    const indicatorId = (Sections.get(type) || {}).statusId;
     if (!indicatorId) return;
     
     let indicator = document.getElementById(indicatorId);
@@ -752,24 +739,24 @@ function updateCompletionIndicator(type, index, isCompleted) {
 
 // Retake current exercise
 window.retakeCurrentExercise = function(type) {
-    const indexMap = {
-        vocabulary: 'currentWordIndex',
-        sentences: 'currentSentenceIndex',
-        reading: 'currentPassageIndex',
-        listening: 'currentListeningIndex'
-    };
+    const section = Sections.get(type);
 
-    const currentIndex = state[indexMap[type]];
+    // No early return on an unknown/index-less type: the old code did
+    // `state[indexMap[type]]`, which yields undefined, and then still cleared and
+    // re-saved. Kept identical — this is only ever called from a Retake button,
+    // which updateCompletionIndicator only creates for sections that have a
+    // statusId, so in practice `section` is always one of the four walkable ones.
+    const currentIndex = state[(section || {}).indexKey];
     retakeExercise(type, currentIndex);
 
-    // Reload the exercise
-    const loaders = {
-        vocabulary: loadVocabularyWord,
-        sentences: loadSentenceExercise,
-        reading: loadReadingPassage,
-        listening: loadListeningExercise
-    };
-    loaders[type]?.();
+    // Reload the exercise, but only for a section the learner can be positioned
+    // within. `indexKey` is the condition, not a section list: the old retake
+    // loaders map held exactly the four sections that have one. Puzzles have a
+    // registered loader (switchSection uses it) but no index and no Retake
+    // button, and re-running it here would regenerate a puzzle nobody asked for.
+    if (section && section.indexKey) {
+        Sections.loader(type)?.();
+    }
 };
 
 // ============================================
@@ -1095,6 +1082,15 @@ const AppErrorHandler = {
             .trim();
     }
 };
+
+// `const` at the top level of a classic script creates a LEXICAL global, not a
+// property of `window`. So `window.AppErrorHandler` was permanently undefined,
+// and every `global.AppErrorHandler && ...` guard in js/core/srs.js,
+// blobstore.js, mistakes.js and portability.js evaluated false — meaning error
+// logging from all four core modules was a silent no-op in the browser.
+// Publishing it explicitly is the one-line fix; the alternative was rewriting
+// four modules to reach a binding they cannot see.
+window.AppErrorHandler = AppErrorHandler;
 
 // ============================================
 // TOAST NOTIFICATION SYSTEM
@@ -1748,15 +1744,10 @@ function switchSection(sectionName) {
     document.getElementById(sectionName).classList.add('active');
     document.querySelector(`[data-section="${sectionName}"]`).classList.add('active');
     state.currentSection = sectionName;
-    
-    const loaders = {
-        vocabulary: loadVocabularyWord,
-        sentences: loadSentenceExercise,
-        reading: loadReadingPassage,
-        listening: loadListeningExercise,
-        puzzles: () => loadPuzzle(state.currentPuzzle)
-    };
-    loaders[sectionName]?.();
+
+    // `dashboard` has no loader registered, so this is a no-op for it — the same
+    // outcome the old literal produced by simply not listing it.
+    Sections.loader(sectionName)?.();
 }
 
 /**
@@ -1811,9 +1802,13 @@ function initializeDifficultySelectors() {
             // otherwise be written straight into state and crash every lookup.
             const level = resolveDifficulty(btn.dataset.level);
             state.currentDifficulty = level;
-            state.currentWordIndex = 0;
-            state.currentSentenceIndex = 0;
-            state.currentPassageIndex = 0;
+            // Every section's content is keyed by level, so every section's
+            // position has to go back to the start. This used to list three of
+            // the four index fields and silently omit currentListeningIndex,
+            // which left Listening pointing at, say, item 7 of a level that might
+            // only have three exercises. Named as a deliberate change in the
+            // Phase 3 commit message (docs/IMPLEMENTATION_PLAN.md).
+            Sections.indexKeys().forEach(key => { state[key] = 0; });
             // Repaint every selector, not just this section's: all three show the
             // same single state.currentDifficulty, so highlighting one section's
             // button and leaving the others stale is a lie about which level the
@@ -1822,9 +1817,10 @@ function initializeDifficultySelectors() {
             saveProgress();
 
             const section = btn.closest('.section').id;
-            if (section === 'vocabulary') loadVocabularyWord();
-            if (section === 'sentences') loadSentenceExercise();
-            if (section === 'reading') loadReadingPassage();
+            // Only vocabulary/sentences/reading carry a .diff-btn group today
+            // (Sections.hasDifficulty), and those are exactly the three loaders
+            // the old three `if`s called.
+            Sections.loader(section)?.();
         });
     });
 
@@ -1849,7 +1845,9 @@ function updateDashboard() {
     });
     
     const completedGoals = Object.values(state.dailyGoals).filter(g => g).length;
-    const progressPercent = (completedGoals / 5) * 100;
+    // Denominator from the registry, not a hardcoded 5: a new section with a
+    // daily goal would otherwise push the bar past 100%.
+    const progressPercent = (completedGoals / Sections.goalKeys().length) * 100;
     document.getElementById('overallProgress').style.width = `${progressPercent}%`;
     document.getElementById('progressPercent').textContent = `${Math.round(progressPercent)}%`;
     
@@ -3685,6 +3683,32 @@ function showFeedback(id, msg, type) {
 }
 
 // ============================================
+// SECTION LOADER REGISTRATION
+// ============================================
+//
+// The one place section loaders are wired to js/core/sections.js, deliberately
+// placed after every loader declaration in this file rather than inside the
+// registry, because sections.js is a separate classic <script> that parses
+// BEFORE app.js: naming loadVocabularyWord in that file's literal would be a
+// ReferenceError. Data stays with data, functions stay with functions.
+//
+// This is a top-level statement, so it runs at app.js parse time — complete
+// before DOMContentLoaded and long before any click can reach switchSection.
+//
+// Three call sites read it: switchSection(), retakeCurrentExercise() and the
+// difficulty-selector handler. A section with no entry simply does not reload,
+// which is deliberately how `dashboard` behaves. Adding a section means adding
+// one line here.
+Sections.registerRuntime({
+    vocabulary: loadVocabularyWord,
+    sentences: loadSentenceExercise,
+    reading: loadReadingPassage,
+    listening: loadListeningExercise,
+    // Wrapped, not bare: puzzles reload whichever sub-puzzle is selected.
+    puzzles: () => loadPuzzle(state.currentPuzzle)
+});
+
+// ============================================
 // KEYBOARD NAVIGATION SYSTEM
 // ============================================
 
@@ -3742,10 +3766,15 @@ const KeyboardNavigation = {
     handleGlobalShortcuts(event) {
         const { key, ctrlKey, altKey } = event;
 
-        // Alt + number for section navigation
-        if (altKey && key >= '1' && key <= '6') {
+        // Alt + number for section navigation.
+        //
+        // The ceiling comes from the registry so a new section is reachable by
+        // keyboard the moment it exists. NOTE: this is a single-CHARACTER
+        // comparison, so it caps out at nine sections — '10' never arrives as one
+        // `key` anyway. Past nine, this handler needs reworking, not widening.
+        const sections = Sections.ids();
+        if (altKey && key >= '1' && key <= String(sections.length)) {
             event.preventDefault();
-            const sections = ['dashboard', 'vocabulary', 'sentences', 'reading', 'listening', 'puzzles'];
             const index = parseInt(key) - 1;
             if (sections[index]) {
                 switchSection(sections[index]);
@@ -3763,37 +3792,25 @@ const KeyboardNavigation = {
 
     // Navigate to previous item in current section
     navigatePrevious(section) {
-        const buttons = {
-            vocabulary: 'prevWord',
-            sentences: 'prevSentence',
-            reading: 'prevReading',
-            listening: 'prevListening'
-        };
-
-        const btnId = buttons[section];
-        if (btnId) {
-            const btn = document.getElementById(btnId);
-            if (btn && !btn.disabled) {
-                btn.click();
-            }
-        }
+        this.clickNavButton((Sections.get(section) || {}).prevBtnId);
     },
 
     // Navigate to next item in current section
     navigateNext(section) {
-        const buttons = {
-            vocabulary: 'nextWord',
-            sentences: 'nextSentence',
-            reading: 'nextReading',
-            listening: 'nextListening'
-        };
+        this.clickNavButton((Sections.get(section) || {}).nextBtnId);
+    },
 
-        const btnId = buttons[section];
-        if (btnId) {
-            const btn = document.getElementById(btnId);
-            if (btn && !btn.disabled) {
-                btn.click();
-            }
+    /**
+     * Click a prev/next button if it exists and is enabled.
+     *
+     * A null id (dashboard, puzzles — neither is walked item by item) is a no-op,
+     * which is how the old prev/next maps behaved by not listing those sections.
+     */
+    clickNavButton(btnId) {
+        if (!btnId) return;
+        const btn = document.getElementById(btnId);
+        if (btn && !btn.disabled) {
+            btn.click();
         }
     },
 

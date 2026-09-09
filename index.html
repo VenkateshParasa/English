@@ -397,6 +397,10 @@
     <script src="js/core/storage.js"></script>
     <script src="js/core/notification.js"></script>
     <script src="js/core/levels.js"></script>
+    <!-- US-301 section registry: one row per section (nav id, index field, button
+         ids, stat keys). No dependencies, but app.js's `state` literal reads it at
+         parse time, so it must load before app.js. -->
+    <script src="js/core/sections.js"></script>
     <script src="js/core/migrations.js"></script>
     <script src="js/core/srs.js"></script>
     <script src="js/core/mistakes.js"></script><!-- US-305 mistake log by error type (FR-SRS-3). No dependencies; own localStorage key `mistakeLog`. -->
