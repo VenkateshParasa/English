@@ -28,7 +28,13 @@
     X-Frame-Options = "SAMEORIGIN"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    Permissions-Policy = "geolocation=(), camera=(), microphone=()"
+    # microphone=(self) is load-bearing, not boilerplate. This app needs the mic
+    # for SpeechRecognition (app.js startRecognition) and MediaRecorder
+    # (getUserMedia({audio:true})). An empty allowlist -- microphone=() -- denies
+    # the feature to ALL origins including our own, which silently kills the
+    # entire Listening & Speaking strand in production while working fine on
+    # localhost. Camera and geolocation stay denied: the app never uses them.
+    Permissions-Policy = "geolocation=(), camera=(), microphone=(self)"
     X-XSS-Protection = "1; mode=block"
 
 # ---------------------------------------------------------------------------

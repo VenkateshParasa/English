@@ -120,6 +120,38 @@ use directives like `frame-ancestors`). Not required for a working deploy.
 | `favicon.ico` request | ✅ Redirected to PNG (no 404) |
 | `robots.txt` | ✅ Added (allow all) |
 | `node_modules` / tests / docs excluded from deploy | ✅ via `.gitignore` |
+| **`Permissions-Policy` permits the microphone** | ✅ **Fixed 2026-09-09** — was `microphone=()`, now `microphone=(self)`. See below |
+| **No SPA catch-all redirect** | ✅ Deliberate — see below |
+| **JS/CSS are revalidated, not immutable** | ✅ Deliberate — filenames are not content-hashed |
+
+### 6.1 Three things that were wrong or would be wrong to change
+
+**1. `Permissions-Policy` was blocking the microphone (fixed).**
+The header read `microphone=()`. An empty allowlist denies the feature to **all** origins,
+including our own — so `SpeechRecognition` and `getUserMedia({ audio: true })` would both
+fail on the deployed site while working perfectly on `localhost`. That silently disables
+the entire Listening & Speaking strand: the read-aloud check, voice recording and
+playback. Now `microphone=(self)`. Camera and geolocation remain denied because the app
+never uses them.
+
+This is the failure mode worth remembering: a permissions header that only breaks in
+production is invisible to local testing, and the compatibility table above previously
+"verified" the deploy without checking it.
+
+**2. Do not add a SPA catch-all redirect.**
+A `/* → /index.html status = 200` rule is standard for Vite/React SPAs, but it would be
+harmful here. This app is one HTML document with `offline.html` as a *real* second
+document, and the service worker uses navigation requests plus a cache-first asset
+strategy. With a catch-all, a request for a genuinely missing asset returns
+`index.html` with a `200`, so the service worker would cache an HTML page under an asset
+URL and the offline fallback would be shadowed. Let 404s be 404s.
+
+**3. Do not use `immutable` caching for `*.js` / `*.css`.**
+Build-tool projects can set `max-age=31536000, immutable` because filenames are
+content-hashed (`app-4f2b1c.js`). This project has no build step (`CON-4`), so the
+filenames are stable — `app.js`, `styles.css`. Immutable caching would pin returning
+visitors to a year-old copy of the app. The current `max-age=0, must-revalidate` is
+correct and intentional; ETags make the revalidation cheap.
 
 ---
 
