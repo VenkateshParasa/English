@@ -23,6 +23,8 @@ const state = {
     currentListeningIndex: 0,
     currentPuzzle: 'wordsearch',
     vocabProgress: 0,
+    // Legacy counters kept for backwards-compatible loading of old saves only.
+    // Not authoritative: see state.dailyStats / state.overallStats.
     stats: {
         wordsLearned: 0,
         sentencesCompleted: 0,
@@ -137,6 +139,9 @@ function loadProgress() {
         const saved = localStorage.getItem('learningProgress');
         if (saved) {
             const loaded = JSON.parse(saved);
+            // Legacy counters: kept only so old saves keep loading. They are no longer
+            // authoritative and are not displayed anywhere - state.dailyStats and
+            // state.overallStats (written by updateStatistics) are the source of truth.
             Object.assign(state.stats, loaded.stats || {});
             Object.assign(state.dailyGoals, loaded.dailyGoals || {});
             state.currentWordIndex = loaded.currentWordIndex || 0;
@@ -256,8 +261,13 @@ function updateStatistics(type) {
             state.dailyStats.puzzlesSolved++;
             state.overallStats.totalPuzzles++;
             break;
+        default:
+            // Deliberate: a mistyped type used to fall through here silently, so a
+            // section would render perfectly and count nothing. Fail loudly instead.
+            console.warn(`updateStatistics: unknown type "${type}" — nothing counted`);
+            return;
     }
-    
+
     calculateAverages();
     saveProgress();
 }
@@ -1264,6 +1274,10 @@ function updateStatisticsDisplay() {
                 ${getComparisonBadge(state.dailyStats.readingCompleted, state.overallStats.averageDaily.reading)}
             </div>
             <div class="stat-row">
+                <span>Listening:</span> <strong>${state.dailyStats.listeningCompleted}</strong>
+                ${getComparisonBadge(state.dailyStats.listeningCompleted, state.overallStats.averageDaily.listening)}
+            </div>
+            <div class="stat-row">
                 <span>Puzzles:</span> <strong>${state.dailyStats.puzzlesSolved}</strong>
                 ${getComparisonBadge(state.dailyStats.puzzlesSolved, state.overallStats.averageDaily.puzzles)}
             </div>
@@ -1288,7 +1302,7 @@ function updateStatisticsDisplay() {
                 <span>Total Words:</span> <strong>${state.overallStats.totalWords}</strong>
             </div>
             <div class="stat-row">
-                <span>Total Exercises:</span> <strong>${state.overallStats.totalSentences + state.overallStats.totalReading + state.overallStats.totalPuzzles}</strong>
+                <span>Total Exercises:</span> <strong>${state.overallStats.totalSentences + state.overallStats.totalReading + state.overallStats.totalListening + state.overallStats.totalPuzzles}</strong>
             </div>
         `;
     }
@@ -1306,6 +1320,9 @@ function updateStatisticsDisplay() {
             </div>
             <div class="stat-row">
                 <span>Reading:</span> <strong>${state.overallStats.averageDaily.reading}</strong>
+            </div>
+            <div class="stat-row">
+                <span>Listening:</span> <strong>${state.overallStats.averageDaily.listening}</strong>
             </div>
             <div class="stat-row">
                 <span>Puzzles:</span> <strong>${state.overallStats.averageDaily.puzzles}</strong>
@@ -1399,7 +1416,9 @@ function generateVocabularyWord(index, difficulty) {
     
     return {
         word: word.charAt(0).toUpperCase() + word.slice(1),
-        pronunciation: `/${word}/`,
+        // No IPA source exists for generated words, so leave this empty
+        // rather than fabricating `/spelling/` as if it were phonetics.
+        pronunciation: '',
         definition: definition,
         example: example,
         quiz: {
@@ -1408,6 +1427,17 @@ function generateVocabularyWord(index, difficulty) {
             correct: options.indexOf(definition)
         }
     };
+}
+
+// Show the pronunciation line only when we actually have phonetics.
+// Generated words carry no IPA, and an empty element would still take up
+// its margin and render as a blank gap under the word.
+function setPronunciationDisplay(pronunciation) {
+    const el = document.getElementById('pronunciation');
+    if (!el) return;
+    const value = pronunciation || '';
+    el.textContent = value;
+    el.style.display = value ? '' : 'none';
 }
 
 async function loadVocabularyWord() {
@@ -1446,7 +1476,7 @@ async function loadVocabularyWord() {
         }
         
         document.getElementById('currentWord').textContent = wordData.word;
-        document.getElementById('pronunciation').textContent = wordData.pronunciation;
+        setPronunciationDisplay(wordData.pronunciation);
         document.getElementById('definition').textContent = wordData.definition;
         document.getElementById('example').textContent = wordData.example;
         wordData.difficulty = state.currentDifficulty;
@@ -1479,20 +1509,21 @@ function displayVocabQuiz(quiz) {
             container.querySelectorAll('.quiz-option').forEach(o => o.classList.remove('selected', 'correct', 'incorrect'));
             const isCorrect = index === quiz.correct;
             div.classList.add('selected', isCorrect ? 'correct' : 'incorrect');
-            if (isCorrect) {
-                state.vocabProgress++;
-                state.stats.wordsLearned++;
-                state.dailyGoals.vocab = true;
-                updateStatistics('vocabulary');
-                updateDashboard();
-                saveProgress();
-            } else {
+            if (!isCorrect) {
                 container.children[quiz.correct].classList.add('correct');
             }
 
-            // Feed the spaced-repetition scheduler once per word render.
+            // Count progress and feed the spaced-repetition scheduler once per word render,
+            // so re-clicking an option cannot inflate the counters.
             if (!answered) {
                 answered = true;
+                if (isCorrect) {
+                    state.vocabProgress++;
+                    state.dailyGoals.vocab = true;
+                    updateStatistics('vocabulary');
+                    updateDashboard();
+                    saveProgress();
+                }
                 if (window.SRS && state.currentVocabWord) {
                     SRS.schedule(state.currentVocabWord, isCorrect);
                     updateDueCount();
@@ -1589,7 +1620,7 @@ function loadReviewWord() {
     }
     const wordData = state.reviewQueue[0];
     document.getElementById('currentWord').textContent = wordData.word;
-    document.getElementById('pronunciation').textContent = wordData.pronunciation || '';
+    setPronunciationDisplay(wordData.pronunciation);
     document.getElementById('definition').textContent = wordData.definition || '';
     document.getElementById('example').textContent = wordData.example || '';
     state.currentVocabWord = wordData;
@@ -1633,15 +1664,18 @@ function loadSentenceExercise() {
     // Store current exercise for hint system
     state.currentExercise = exercise;
     
-    // Randomly choose exercise type
+    // Choose the exercise type deterministically from the exercise index so
+    // the same exercise always renders in the same mode. A random pick made
+    // retrying a failed exercise impossible: navigating away and back would
+    // swap fill-in-the-blank for drag-and-drop.
     const exerciseTypes = ['dragdrop', 'fillblank', 'multiplechoice', 'reorder'];
-    const randomType = exerciseTypes[Math.floor(Math.random() * exerciseTypes.length)];
-    
+    const exerciseType = exerciseTypes[state.currentSentenceIndex % exerciseTypes.length];
+
     // Hide all exercise containers
     document.querySelectorAll('.sentence-exercise-container').forEach(el => el.style.display = 'none');
-    
+
     // Show selected exercise type
-    switch(randomType) {
+    switch(exerciseType) {
         case 'dragdrop':
             loadDragDropSentence(exercise);
             document.getElementById('dragDropContainer').style.display = 'block';
@@ -1888,9 +1922,12 @@ function initializeSentenceButtons() {
         
         if (isCorrect) {
             showFeedback('sentenceFeedback', '✓ Correct!', 'success');
-            state.stats.sentencesCompleted++;
             state.dailyGoals.sentence = true;
-            markExerciseComplete('sentences', state.currentSentenceIndex);
+            // Count the exercise once, even if "Check Answer" is clicked again.
+            if (!isExerciseCompleted('sentences', state.currentSentenceIndex)) {
+                updateStatistics('sentences');
+                markExerciseComplete('sentences', state.currentSentenceIndex);
+            }
             updateDashboard();
             saveProgress();
             hideHintButton();
@@ -2313,9 +2350,12 @@ function initializeReadingButtons() {
         const msg = `${correct}/${questions.length} correct!`;
         if (correct === questions.length) {
             showFeedback('comprehensionFeedback', `✓ Perfect! ${msg}`, 'success');
-            state.stats.readingCompleted++;
             state.dailyGoals.reading = true;
-            markExerciseComplete('reading', state.currentPassageIndex);
+            // A passage counts once, no matter which success path completes it.
+            if (!isExerciseCompleted('reading', state.currentPassageIndex)) {
+                updateStatistics('reading');
+                markExerciseComplete('reading', state.currentPassageIndex);
+            }
             updateDashboard();
             saveProgress();
         } else {
@@ -2344,9 +2384,13 @@ function initializeReadingButtons() {
             if (sim > 0.8) {
                 showFeedback('dictationFeedback', '✓ Excellent!', 'success');
                 Toast.success('Dictation completed successfully!');
-                state.stats.readingCompleted++;
                 state.dailyGoals.reading = true;
-                markExerciseComplete('reading', state.currentPassageIndex);
+                // Dictation is a separate exercise, so it must not re-count a passage
+                // that comprehension already completed.
+                if (!isExerciseCompleted('reading', state.currentPassageIndex)) {
+                    updateStatistics('reading');
+                    markExerciseComplete('reading', state.currentPassageIndex);
+                }
                 updateDashboard();
                 saveProgress();
             } else {
@@ -2435,10 +2479,14 @@ function initializeListeningButtons() {
                 }
                 
                 state.dailyGoals.listening = true;
+                if (!isExerciseCompleted('listening', state.currentListeningIndex)) {
+                    markExerciseComplete('listening', state.currentListeningIndex);
+                    updateStatistics('listening');
+                }
                 updateDashboard();
                 saveProgress();
             };
-            
+
             mediaRecorder.start();
             document.getElementById('startRecording').disabled = true;
             document.getElementById('stopRecording').disabled = false;
@@ -2535,7 +2583,10 @@ function initializeListeningButtons() {
             if (transcript.toLowerCase().includes(target.toLowerCase())) {
                 showFeedback('speechFeedback', '✓ Perfect!', 'success');
                 state.dailyGoals.listening = true;
-                markExerciseComplete('listening', state.currentListeningIndex);
+                if (!isExerciseCompleted('listening', state.currentListeningIndex)) {
+                    markExerciseComplete('listening', state.currentListeningIndex);
+                    updateStatistics('listening');
+                }
                 updateDashboard();
                 saveProgress();
             } else {
@@ -2569,6 +2620,8 @@ function loadPuzzle(type) {
 
 function generateWordSearch() {
     const data = puzzleData.wordSearch[state.currentDifficulty];
+    // One generated grid can only be counted as one solved puzzle.
+    let puzzleCounted = false;
     const list = document.getElementById('searchWordList');
     list.innerHTML = '';
     data.words.forEach(word => {
@@ -2621,9 +2674,10 @@ function generateWordSearch() {
                 if (sel === item.dataset.word || sel === item.dataset.word.split('').reverse().join('')) {
                     item.classList.add('found');
                     document.querySelectorAll('.grid-cell.selected').forEach(c => c.classList.add('found'));
-                    if (document.querySelectorAll('.word-list-item.found').length === data.words.length) {
-                        state.stats.puzzlesSolved++;
+                    if (!puzzleCounted && document.querySelectorAll('.word-list-item.found').length === data.words.length) {
+                        puzzleCounted = true;
                         state.dailyGoals.puzzle = true;
+                        updateStatistics('puzzles');
                         updateDashboard();
                         saveProgress();
                     }
@@ -2657,8 +2711,8 @@ function generateCrossword() {
 
 function initializeCrosswordButtons() {
     document.getElementById('checkCrossword').onclick = () => {
-        state.stats.puzzlesSolved++;
         state.dailyGoals.puzzle = true;
+        updateStatistics('puzzles');
         updateDashboard();
         saveProgress();
         alert('Checked!');
@@ -2691,8 +2745,8 @@ function initializeScrambleButtons() {
             if (sanitizedInput.toUpperCase() === input.dataset.answer) {
                 showFeedback('scrambleFeedback', '✓ Correct!', 'success');
                 Toast.success('Word unscrambled correctly!');
-                state.stats.puzzlesSolved++;
                 state.dailyGoals.puzzle = true;
+                updateStatistics('puzzles');
                 updateDashboard();
                 saveProgress();
             } else {
@@ -2833,8 +2887,8 @@ function selectMatch(item, type) {
             if (document.querySelectorAll('#wordsColumn .match-item.matched').length === document.querySelectorAll('#wordsColumn .match-item').length) {
                 setTimeout(() => {
                     showFeedback('matchingFeedback', '✓ All matched!', 'success');
-                    state.stats.puzzlesSolved++;
                     state.dailyGoals.puzzle = true;
+                    updateStatistics('puzzles');
                     updateDashboard();
                     saveProgress();
                 }, 300);
@@ -3124,7 +3178,6 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('📡 API: Free Dictionary + Web Speech');
     console.log('💾 Offline Fallback: Enabled');
     console.log('⌨️ Keyboard Navigation: Enabled');
-    console.log('♿ Accessibility: WCAG 2.1 AA Compliant');
 
     // Register Service Worker for offline functionality and caching
     if ('serviceWorker' in navigator) {
