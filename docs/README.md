@@ -82,16 +82,19 @@ An interactive web-based English learning application featuring vocabulary pract
 - **Data Validation**: Strict validation rules for all user inputs
 
 ### Testing & Quality Assurance
-- **260+ Unit Tests**: Comprehensive test coverage
-  - ErrorHandler: 80+ tests
-  - Toast System: 60+ tests
-  - LoadingIndicator: 50+ tests
-  - KeyboardNavigation: 70+ tests
-- **40+ Integration Tests**: Real user flow scenarios
-- **70% Code Coverage**: Enforced minimum coverage threshold
-- **Automated Testing**: Jest framework with jsdom environment
-- **CI/CD Ready**: Test suite ready for continuous integration
-All robustness features have been fully implemented and are production-ready.
+- **Automated Testing**: Jest with the jsdom environment, configured in [`jest.config.js`](../jest.config.js)
+- **112 Runnable Test Cases** across three suites, all under `__tests__/unit/`:
+  - `assets.test.js`: 65 generated cases guarding `index.html` ↔ `service-worker.js` asset parity (every local script/stylesheet exists on disk and is precached; no duplicate entries; offline fallback present)
+  - `migrations.test.js`: 24 tests over `js/core/levels.js` and `js/core/migrations.js`
+  - `srs.test.js`: 23 tests over the spaced-repetition scheduler in `js/core/srs.js`
+- **Coverage Reporting**: Scoped to `js/core/**`. `app.js` is a single classic script with no exports, so this setup cannot reach it — reporting on it would show a misleading near-zero
+- **No Coverage Threshold Yet**: Deliberate, and documented as such in `jest.config.js`. Thresholds go in once the core modules introduced by Phases 1–4 are all under test
+- **No Integration Tests Yet**: `npm run test:integration` currently matches no files and passes via `--passWithNoTests`. Real user-flow coverage is planned, not written
+- **Quarantined Legacy Suites**: `__tests__/legacy/` holds five older suites (~155 assertions) written against an intended module architecture that does not exist — they `require` `Toast`, `LoadingIndicator` and `KeyboardNavigation`, which live as plain objects *inside* `app.js` and are never exported. They have therefore never run, and are excluded via `testPathIgnorePatterns`. They are kept as a written specification to test against once that code becomes importable. See [`__tests__/README.md`](../__tests__/README.md)
+- **CI**: [`.github/workflows/ci-cd.yml`](../.github/workflows/ci-cd.yml) runs `npm run test:unit`, `npm run test:integration` and `npm test`
+- **Known gap — Jest is not yet a declared dependency**: `devDependencies` lists only `http-server`, so `npm test` fails on a clean checkout until Jest and `jest-environment-jsdom` are installed. Declaring them in `package.json` is outstanding work
+
+The error handling, feedback and accessibility features listed above are implemented in `app.js` and `js/core/`. The automated tests that would keep them honest are not yet — the quarantined suites are the plan, not the proof.
 
 
 ## 🚀 Getting Started
@@ -110,17 +113,21 @@ All robustness features have been fully implemented and are production-ready.
 
 #### For Developers (Testing)
 ```bash
-# Install dependencies
+# Install dependencies (note: Jest is not yet declared in package.json —
+# see the "Known gap" above; add it before the test scripts will run)
 npm install
 
-# Run tests
+# Run every runnable suite, with coverage
 npm test
 
-# Run tests with coverage
-npm run test:coverage
+# Unit suites only
+npm run test:unit
 
 # Watch mode (auto-rerun on changes)
 npm run test:watch
+
+# Per-test output
+npm run test:verbose
 ```
 
 No build process required for the application - it's pure HTML/CSS/JavaScript!
@@ -146,15 +153,19 @@ English-Learning-Portal/
 │   ├── CHANGELOG.md                # Version history
 │   └── FOLDER_STRUCTURE.md         # Project structure
 └── __tests__/                      # Test suite
-    ├── setup.js                    # Test configuration
+    ├── setup.js                    # Test configuration (clears storage between tests)
     ├── README.md                   # Testing documentation
-    ├── unit/                       # Unit tests (260+ tests)
-    │   ├── errorHandler.test.js
-    │   ├── toast.test.js
-    │   ├── loadingIndicator.test.js
-    │   └── keyboardNavigation.test.js
-    └── integration/                # Integration tests (40+ tests)
-        └── userFlows.test.js
+    ├── unit/                       # The runnable suites (112 test cases)
+    │   ├── assets.test.js
+    │   ├── migrations.test.js
+    │   └── srs.test.js
+    └── legacy/                     # Quarantined, NOT run — see __tests__/README.md
+        ├── errorHandler.test.js
+        ├── toast.test.js
+        ├── loadingIndicator.test.js
+        ├── keyboardNavigation.test.js
+        ├── userFlows.test.js
+        └── setup.js
 ```
 
 ## 🎓 Teaching Documentation
