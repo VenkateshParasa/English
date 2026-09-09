@@ -108,18 +108,22 @@ behaviours that teach errors.
 | # | Story | FR | Pts | MoSCoW |
 |---|---|---|---|---|
 | ✅ **US-101** | Fix vocabulary quiz grading — **done 2026-09-08** | `FR-VOC-1` | 2 | M |
-| **US-102** | Delete fabricated IPA | `FR-VOC-3` | 1 | M |
+| ✅ **US-102** | Delete fabricated IPA — **done 2026-09-09** | `FR-VOC-3` | 1 | M |
 | **US-103** | Word-level read-aloud diff replacing the substring match | `FR-SPK-1` | 5 | M |
 | **US-104** | Stable, retryable speaking target | `FR-SPK-2` | 2 | M |
 | ✅ **US-105** | Real quiz distractors — **done 2026-09-08** | `FR-VOC-2` | 2 | M |
 | **US-106** | Differentiated speech-recognition errors | `NFR-3` | 1 | M |
-| **US-107** | Remove the unverified WCAG compliance claim | `NFR-11` | 1 | M |
-| **US-108** | Deterministic sentence exercise mode | `FR-RDW-4` | 1 | M |
-| **US-109** | **Repair the statistics pipeline** — only vocabulary reaches `updateStatistics()`; sentences, reading and puzzles write a `state.stats` object nothing displays (D1) | `FR-DATA-3`, `BR-8` | 3 | M |
+| ✅ **US-107** | Remove the unverified WCAG compliance claim — **done 2026-09-09** | `NFR-11` | 1 | M |
+| ✅ **US-108** | Deterministic sentence exercise mode — **done 2026-09-09** | `FR-RDW-4` | 1 | M |
+| ✅ **US-109** | **Statistics pipeline repaired** — all five types now route through `updateStatistics()`; `state.stats` retained for loading old saves but no longer written — **done 2026-09-09** | `FR-DATA-3`, `BR-8` | 3 | M |
 | **US-110** | **Stop the crossword awarding the daily goal for a blank grid** (D2) | `BR-3` | 2 | M |
-| **US-111** | Guard the quiz counters against re-clicking a correct answer (D9) | `FR-VOC-1` | 1 | M |
-| **US-112** | Stop dictation marking the reading passage complete, double-counting (D10) | `FR-DATA-3` | 1 | M |
-| **US-113** | Correct `docs/README.md`'s false testing claims — "260+ tests", "70% coverage enforced" (D5) | `NFR-16` | 1 | M |
+| ✅ **US-111** | Guard the quiz counters against re-clicking a correct answer — **done 2026-09-09** | `FR-VOC-1` | 1 | M |
+| ✅ **US-112** | Stop dictation double-counting the reading passage — **done 2026-09-09** | `FR-DATA-3` | 1 | M |
+| ✅ **US-113** | Correct `docs/README.md`'s false testing claims — **done 2026-09-09** | `NFR-16` | 1 | M |
+| **US-114** | `exercise.fillBlank` can be `undefined`, so `case 'fillblank'` breaks. Now reproducible at `index % 4 === 1` rather than intermittent | `FR-RDW-4` | 2 | M |
+| **US-115** | Scramble: repeated "Check" clicks on a correct answer each count a solve — no per-render guard exists | `FR-DATA-3` | 1 | S |
+| **US-116** | Scramble's "Show Answer" reveals the solution and the authored `hint` field is never displayed (D4) | `FR-VOC-7` | 2 | S |
+| **US-117** | Correct `TECHNICAL_DOCUMENTATION.md` stale line refs and the nonexistent `capitalize()` (D6) | — | 2 | S |
 
 ### Stories in full
 
@@ -128,8 +132,8 @@ I actually know.** ✅ **Done 2026-09-08.**
 - **Given** a quiz whose options were shuffled, **when** I select an option, **then** the verdict
   compares my selection against the correct definition's *current* index.
 - **Given** I answer correctly, **when** SRS is updated, **then** it records a success.
-- **Implemented at** `app.js:970-986` — `correct: options.indexOf(correctDefinition)`, mirroring the
-  already-correct generated path at `app.js:1408`. Verified over 5000 renders: 0 index mismatches.
+- **Implemented at** `app.js:980-996` — `correct: options.indexOf(correctDefinition)`, mirroring the
+  already-correct generated path at `app.js:1427`. Verified over 5000 renders: 0 index mismatches.
 - **Still outstanding:** review items already persisted to `srsData` carry the old `correct: 0` and
   the placeholder distractors, because `js/core/srs.js:100` stores the whole `quiz` object and
   `loadReviewWord` replays it. Those items will keep mis-grading until purged. Handled by **US-205**.
@@ -137,7 +141,7 @@ I actually know.** ✅ **Done 2026-09-08.**
 **US-105 — As Anusha, I want distractors that test meaning, not absurdity.** ✅ **Done 2026-09-08.**
 - **Given** a vocabulary check, **then** all distractors are real definitions of *other* entries,
   preferring the current level and falling back to other levels.
-- **Implemented at** `app.js:997-1042` as `getDistractorDefinitions(correctDefinition, count)`.
+- **Implemented at** `app.js:1008-1053` as `getDistractorDefinitions(correctDefinition, count)`.
   Wrapped in `try/catch` with `Array.isArray` guards and a generic top-up, so a missing
   `vocabularyData` degrades instead of taking the section down.
 - Did **not** use the API's synonyms/antonyms, per the decision recorded in PROGRESS.md §6.
@@ -147,7 +151,7 @@ I actually know.** ✅ **Done 2026-09-08.**
   **then** the corresponding counter has increased.
 - **Given** the app loads saved progress, **then** historical counts are preserved.
 - **Note:** `updateStatistics()` (`app.js:236`) has exactly **one** call site, for `'vocabulary'`
-  (`app.js:1486`). Every other path increments `state.stats.*` (`app.js:1891`, `2316`, `2347`,
+  (`app.js:1523`). Every other path increments `state.stats.*` (`app.js:1921`, `2316`, `2347`,
   `2625`, `2660`, `2694`, `2836`) which is loaded at `app.js:140` and read by nothing.
 - **Blocks `FR-DATA-3`.** The success metrics assumed this data was already being collected.
 - ⚠️ Decide whether to migrate the orphaned `state.stats` values into `overallStats` or start the
@@ -156,13 +160,13 @@ I actually know.** ✅ **Done 2026-09-08.**
 **US-110 — As a learner, I don't want to be told I solved something I didn't attempt.**
 - **Given** an untouched crossword grid, **when** I press "Check Answers", **then** the daily puzzle
   goal is **not** awarded and no `puzzlesSolved` increment occurs.
-- `generateCrossword` (`app.js:2641-2656`) has no answer key, so there is nothing to validate
+- `generateCrossword` (`app.js:2695-2710`) has no answer key, so there is nothing to validate
   against. Minimum honest fix: stop granting credit and label the section unfinished.
 - ⚠️ **Resolve `OQ-7` first.** If the crossword is being retired there is no point repairing it.
 
 **US-102 — As a learner, I want to never be shown invented pronunciation.**
 - **Given** an algorithmically generated word, **when** it renders, **then** it shows real IPA or
-  **no** pronunciation field — never `/word/` derived from spelling (`app.js:1402`).
+  **no** pronunciation field — never `/word/` derived from spelling (`app.js:1421`).
 
 **US-103 — As Ravi, I want to know which words the recogniser missed, so I can practise those
 sounds.**
@@ -177,24 +181,34 @@ sounds.**
 
 **US-104 — As Lakshmi, I want to retry the word I just failed.**
 - **Given** I failed a speaking target, **when** I navigate away and back, **then** the **same**
-  target is presented (fixes the `Math.random()` pick at `app.js:2392`).
+  target is presented (fixes the `Math.random()` pick at `app.js:2436`).
 - **Given** an active SRS queue, **then** the target is drawn from it, not at random.
 
 **US-106 — As Lakshmi, I want to know whether the app broke or I did.**
 - **Given** `no-speech`, **then** "I didn't hear anything — try again". **Given** `not-allowed`,
   **then** microphone-permission guidance. **Given** `network`, **then** an offline explanation.
-- Replaces the single generic toast at `app.js:1134-1137`.
+- Replaces the single generic toast at `app.js:1144-1147`.
 
 **US-107 — As the maintainer, I want the app to stop asserting an unaudited standard.**
-- **Given** startup, **then** no log claims WCAG compliance (`app.js:3127`). The target is stated in
-  `NFR-11` and claimed only after an audit.
+✅ **Done 2026-09-09.**
+- **Given** startup, **then** no log claims WCAG compliance. The line is deleted with nothing put in
+  its place. The target is stated in `NFR-11` and will be claimed only after an audit (`US-806`).
+
+**US-108 — As Lakshmi, I want to retry an exercise in the mode I failed it in.** ✅ **Done 2026-09-09.**
+- **Given** exercise index *n*, **when** it renders twice, **then** the same mode appears both times.
+- Implemented as `exerciseTypes[state.currentSentenceIndex % exerciseTypes.length]` at
+  `app.js:1672`, replacing the `Math.random()` pick. The two downstream dispatch sites derive the
+  type from the live DOM, so they were already consistent and needed no change.
+- ⚠️ **Surfaced by this fix:** `case 'fillblank'` calls `loadFillBlankExercise(exercise.fillBlank)`,
+  and that property can be absent. Previously this failed intermittently (~25% of renders); it is
+  now *reproducibly* broken for indices where `index % 4 === 1`. Determinism is still correct — it
+  converts an intermittent bug into a visible one — but it needs a follow-up. See `US-114`.
 
 **US-108 — As Lakshmi, I want to retry an exercise in the mode I failed it in.**
-- **Given** exercise index *n*, **when** it renders twice, **then** the same mode appears both times
-  (fixes `Math.random()` at `app.js:1638`).
-
-**Sprint 1 total: 23 points** — 4 done (US-101, US-105), 19 remaining. Grew from 15 when the
-Wave 1 audit added US-109…US-113.
+**Sprint 1 total: 30 points across 17 stories** — **13 done, 17 remaining.** Grew 15 → 23 after the
+Wave 1 audit (US-109…US-113), then → 30 after Wave 2 surfaced US-114…US-117. The sprint doubling in
+size while half-completing is the honest shape of fixing a codebase nobody had audited: each fix
+exposes the next defect.
 
 ---
 
@@ -496,16 +510,15 @@ one with a spike attached.
 | Sprint | Theme | Points | Cumulative |
 |---|---|---|---|
 | 0 | Unblock | 6 | 6 |
-| 1 | Honesty | 23 | 29 |
-| 2 | Data integrity | 19 | 48 |
-| 3 | Extensibility | 22 | 70 |
-| 4 | Pronunciation | 33 | 103 |
-| 5 | Grammar | 33 | 136 |
-| 6 | Speaking | 36 | 172 |
-| 7 | Listening & vocabulary | 40 | 212 |
-| 8 | Session & platform | 44 | 256 |
+| 1 | Honesty | 30 | 36 |
+| 2 | Data integrity | 19 | 55 |
+| 3 | Extensibility | 22 | 77 |
+| 4 | Pronunciation | 33 | 110 |
+| 5 | Grammar | 33 | 143 |
+| 6 | Speaking | 36 | 179 |
+| 7 | Listening & vocabulary | 40 | 219 |
+| 8 | Session & platform | 44 | 263 |
 
-**256 points total, of which 4 are done.** At 8–12 points a week of evenings that is roughly
-**5–7 months** for everything, or **about three weeks to R2** — the point at which the app stops
-misleading learners and their data is safe. If time runs out anywhere, it should run out after R2,
-not before.
+**263 points total, of which 13 are done.** At 8–12 points a week of evenings that is roughly
+**5–7 months** for everything, or **about two weeks to finish R1** — the point at which the app
+stops misleading learners. If time runs out anywhere, it should run out after R2, not before.

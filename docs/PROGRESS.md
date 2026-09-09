@@ -11,7 +11,7 @@ it points at them:
 [CONTENT_AUTHORING_GUIDE.md](CONTENT_AUTHORING_GUIDE.md) (how to add content) ·
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) (the phased build plan)
 
-**Last updated:** 2026-09-08
+**Last updated:** 2026-09-09
 
 ---
 
@@ -34,14 +34,17 @@ it points at them:
 
 ## 1. Where the project stands, in one paragraph
 
-The app works and is deployed. Phase 0 (the safety net: CEFR level module, migration
-spine, test harness) is **code-complete but uncommitted and unverified by real Jest**.
-An audit produced four specification docs and a 10-phase plan to close 14 pedagogical
-gaps. **No phase after 0 has started.** Three live bugs are known; two of them corrupt
-learner data, and the worst — `correct: 0` after an options shuffle — means the existing
-`srsData` review history is substantially noise. The immediate blocker is not code: it is
-that `npm test` cannot run on a clean checkout because Jest was never added to
-`devDependencies`.
+Phase 0 (the safety net: CEFR level module, migration spine, test harness) and all seven
+specification and planning docs are **committed** as of 2026-09-08. **Sprint 1 is 13 of 30
+points done**: the quiz-grading corruption, the fabricated IPA, the unearned WCAG claim, the
+random exercise mode, the inert statistics pipeline, the inflating counters and the
+double-counted reading passage are all fixed. What remains in Sprint 1 is the word-level speech
+diff (`US-103`), the stable speaking target (`US-104`), differentiated recognition errors
+(`US-106`), the crossword honesty fix (`US-110`, waiting on `OQ-7`), and four defects the fixes
+themselves surfaced (`US-114`–`US-117`). Two things still block progress and neither is code:
+**`npm test` cannot run** because Jest was never added to `devDependencies` (`US-001`), and the
+CEFR framework and migration spine **still have zero call sites** (`US-003`, `US-004`), so they
+exist only on paper and in tests.
 
 ---
 
@@ -83,7 +86,7 @@ the committed version.
 | ✅ | Audited all 11 docs for requirements coverage; confirmed **no requirements doc exists** | 5 named gaps, §2.4 below |
 | ✅ | 4 scoping decisions taken | §7 Decisions log |
 | ✅ | Personas + Telugu L1 interference analysis designed | plan file, pending write-up as **A1** |
-| ✅ | Every code line to be cited re-read and confirmed accurate | `app.js:972-984`, `1402`, `1408`, `2535`, `1112-1113`, `2392`, `1497` |
+| ✅ | Every code line to be cited re-read and confirmed accurate | `app.js:980-996`, `1421`, `1427`, `2583`, `1122-1123`, `2436`, `1520` |
 | ✅ | Plan approved | `~/.claude/plans/okay-lets-create-it-cuddly-breeze.md` |
 | ✅ | **Asset inventory** — read the whole codebase to establish what is already built and reusable | §3 below |
 
@@ -101,7 +104,7 @@ Three subagents, scoped so no two touched the same file.
 
 | # | Item | Evidence |
 |---|---|---|
-| ✅ | **US-101 + US-105 — quiz grading fixed.** `parseAPIResponse` now derives `correct` from `options.indexOf(correctDefinition)` after the shuffle, and distractors are real definitions of other `vocabularyData` entries | `app.js:970-986`; new helper `getDistractorDefinitions(correctDefinition, count)` at `app.js:997-1042`. `node --check app.js` passes |
+| ✅ | **US-101 + US-105 — quiz grading fixed.** `parseAPIResponse` now derives `correct` from `options.indexOf(correctDefinition)` after the shuffle, and distractors are real definitions of other `vocabularyData` entries | `app.js:980-996`; new helper `getDistractorDefinitions(correctDefinition, count)` at `app.js:1008-1053`. `node --check app.js` passes |
 | ✅ | Distractor helper degrades safely — `try/catch` around data access, `Array.isArray` guards, per-entry type checks, generic top-up so the option list is always 4 and `correct` always valid | Verified in Node against real `data.js`: 5000 renders, 0 index mismatches, 0 duplicate options, 0 placeholder strings; also survives deleted `vocabularyData`, unknown level, single-entry level, deleted `state` |
 | ✅ | **W4 — doc drift corrected.** `FOLDER_STRUCTURE.md` and `ERROR_HANDLING_GUIDE.md` no longer present `new StorageManager(errorHandler, validator)` as the app's architecture; the aspirational design is retained but labelled *not wired up* | Both files edited; `js/core/` modules marked ⚠️ UNUSED with a harvest-then-delete note |
 | ✅ | **Second doc audit** — `TECHNICAL_DOCUMENTATION.md`, `USER_GUIDE.md`, `docs/README.md` reviewed against source | 15 findings, §3.7 below |
@@ -114,6 +117,38 @@ global error capture. It must be **preserved or replaced** before deletion, not 
 Also `notification.js` mutates the DOM at load (its constructor calls `init()`, appending a
 `.toast-container` and an `#sr-announcer`), so every page currently has **two** `.toast-container`
 elements — `app.js`'s `Toast` creates its own with the same class.
+
+### 2.6 Wave 2 — Sprint 1 mostly cleared (2026-09-09)
+
+Three subagents on disjoint regions of `app.js` plus the docs, then two fixes done directly.
+
+| # | Item | Evidence |
+|---|---|---|
+| ✅ | **US-102 — fabricated IPA gone.** `generateVocabularyWord` now sets `pronunciation: ''` (`app.js:1421`), and a new `setPronunciationDisplay()` helper (`app.js:1435`) hides the element when the value is falsy | Also fixed a latent bug: one of the two DOM write sites had no `\|\| ''` fallback, so an `undefined` pronunciation printed the literal text "undefined" |
+| ✅ | **US-107 — WCAG claim deleted.** The startup log is gone, with nothing put in its place | 0 matches for `WCAG 2.1 AA Compliant` in `app.js` |
+| ✅ | **US-108 — exercise mode deterministic.** `exerciseTypes[state.currentSentenceIndex % exerciseTypes.length]` (`app.js:1672`) replaces the random pick, so a failed item can be retried in the mode it was failed in | The two downstream dispatch sites derive the type from the live DOM, so they were already consistent |
+| ✅ | **US-109 — statistics pipeline repaired.** All five types now route through `updateStatistics()`; the eight `state.stats.*` writes are removed | `grep -c 'state\.stats\.'` → **0**. The object itself is retained in `state` and `loadProgress` so old saves still load and `validator.js`'s progress schema still validates |
+| ✅ | **US-111 — quiz counters guarded.** Counting moved inside the existing `if (!answered)` block; visual feedback stays unguarded | One rendered word can now contribute at most one increment |
+| ✅ | **US-112 — reading counts once.** Both the comprehension and dictation paths wrap counting in `if (!isExerciseCompleted('reading', …))` | Whichever path fires first records the passage |
+| ✅ | **US-113 — README testing claims corrected.** "260+ tests / 40+ integration / 70% coverage enforced" replaced with the real 112 assertions across 3 suites, the deliberate absence of a coverage threshold, and the Jest-not-declared gap stated plainly | `docs/README.md` §Testing rewritten |
+| ✅ | **`updateStatistics` now has a `default` case** that `console.warn`s instead of silently counting nothing | `IMPLEMENTATION_PLAN.md` called this out as "the worst kind of bug"; it was still open |
+| ✅ | **Listening now counts at all.** Both listening success paths call `updateStatistics('listening')`, guarded by `isExerciseCompleted`; added Listening rows to Today's Progress and Daily Averages, and included `totalListening` in "Total Exercises" | The switch always supported `'listening'` but nothing ever passed it, so `totalListening` was permanently 0 and displayed nowhere |
+| ⚠️ | `app.js` 3160 → **3213** lines; citations renumbered again | All `app.js:` references across the three planning docs updated |
+
+**Four new defects surfaced by these fixes**, now `US-114`…`US-117`:
+
+- **`exercise.fillBlank` can be `undefined`**, so `case 'fillblank'` throws. Determinism converted
+  this from an intermittent ~25% failure into a *reproducible* one at `index % 4 === 1`. That is an
+  improvement — a visible bug beats a flaky one — but it needs fixing, and it touches `data.js`.
+- **Scramble double-counts**: repeated "Check" clicks on a correct answer each count a solve. Unlike
+  sentences and reading there is no exercise id to guard on.
+- **Scramble's authored `hint` is dead code** (`app.js:2675` writes it, `app.js:2676` immediately
+  hides it, `app.js:2709` overwrites it with the answer).
+- **`TECHNICAL_DOCUMENTATION.md`** stale line refs and the nonexistent `capitalize()` helper.
+
+**Deliberately not done:** `US-110` (crossword honesty) still waits on `OQ-7` — there is no point
+repairing a crossword that may be retired. Routing it through `updateStatistics` in US-109 does mean
+its fake "solve" now shows on the dashboard, which makes the dishonesty more visible, not less.
 
 ---
 
@@ -128,16 +163,16 @@ build. Conversely ~1,690 lines load on every page and do nothing.
 | Asset | Where | Why it matters |
 |---|---|---|
 | **SRS engine** — simplified SM-2, `localStorage`, full API (`schedule`, `getDueWords`, `dueCount`, `stats`, `getRecord`, `reset`) | `js/core/srs.js`, 175 lines | The single most valuable asset in the repo. Backend-free by design, 23 passing assertions. Phase 4 **generalises** it; it does not rewrite it. |
-| **Working review mode** built on that engine — `startReview` / `loadReviewWord` / `onReviewAnswer` / `exitReview`, plus a live due-count badge | `app.js:1542-1614`, fed at `app.js:1497` | "Review Due" is a real, complete loop today. The pedagogy in `TEACHING_METHODOLOGY.md §3` already has a host. |
+| **Working review mode** built on that engine — `startReview` / `loadReviewWord` / `onReviewAnswer` / `exitReview`, plus a live due-count badge | `app.js:1552-1631`, fed at `app.js:1520` | "Review Due" is a real, complete loop today. The pedagogy in `TEACHING_METHODOLOGY.md §3` already has a host. |
 | **PWA offline shell** — 3 cache buckets, differentiated strategies (cache-first for static, network-first for API and HTML), `offline.html` fallback, "new version available" toast, hourly update check | `service-worker.js`, `offline.html` | The offline NFR is **substantially already met**. Precache completeness is asserted by `assets.test.js` (65 assertions), so it cannot silently rot. |
 | **Installable app** — complete manifest, standalone display, 10 icon sizes that all actually exist on disk | `manifest.json`, `icons/` | Nothing to do for "installable on a phone". |
-| **Speech synthesis wrapper** — `speak(text, rate)`, `pause`, `resume`, `stop`, `replay`, tracks current text and rate | `app.js:1049-1109` | **`rate` already exists as a parameter and is simply never varied.** Listening speed grading (0.75×/1.0×/1.25×) is a UI control, not a feature build. |
-| **Speech recognition** with correct feature detection and a graceful toast on unsupported browsers | `app.js:1111-1142` | The iOS-Safari degradation path the NFRs need already has its hook. What is wrong is the *verdict logic* at `app.js:2535`, not the plumbing. |
-| **Voice recording** via `MediaRecorder` + `getUserMedia` | `app.js:2405-2406` | Capture works. What is missing is the archive and the rubric — not the recorder. |
-| **Keyboard navigation** — shortcut map, focus indicators, focus trap | `app.js:2870-3090` (~220 lines) + `css/accessibility.css` | A real head start on the accessibility requirements in `TEACHING_METHODOLOGY.md §6`. |
+| **Speech synthesis wrapper** — `speak(text, rate)`, `pause`, `resume`, `stop`, `replay`, tracks current text and rate | `app.js:1059-1119` | **`rate` already exists as a parameter and is simply never varied.** Listening speed grading (0.75×/1.0×/1.25×) is a UI control, not a feature build. |
+| **Speech recognition** with correct feature detection and a graceful toast on unsupported browsers | `app.js:1121-1152` | The iOS-Safari degradation path the NFRs need already has its hook. What is wrong is the *verdict logic* at `app.js:2583`, not the plumbing. |
+| **Voice recording** via `MediaRecorder` + `getUserMedia` | `app.js:2449-2450` | Capture works. What is missing is the archive and the rubric — not the recorder. |
+| **Keyboard navigation** — shortcut map, focus indicators, focus trap | `app.js:2924-3144` (~220 lines) + `css/accessibility.css` | A real head start on the accessibility requirements in `TEACHING_METHODOLOGY.md §6`. |
 | **Progress & stats engine** — save/load, streak tracking, per-exercise completion IDs, retake support, rolling averages with comparison badges, autosave every 30s | `app.js:117-298`, `1173-1280` | This is the substrate the success metrics need. Metrics are a *derivation* on existing data, not new instrumentation. |
 | **Error/toast/loading utilities** actually in use — 20 call sites, with retry and timeout handling | `app.js:566-932` | Ugly that they duplicate `js/core/*`, but they work and they are wired. |
-| **Exercise variety already shipped** — drag-drop sentence builder, fill-in-the-blank, multiple choice, word reorder, word search, crossword, scramble, matching pairs, dictation, hint-with-show-answer | across `app.js:1615-2859` | Far more interaction types than the docs credit. New strands can reuse these patterns. |
+| **Exercise variety already shipped** — drag-drop sentence builder, fill-in-the-blank, multiple choice, word reorder, word search, crossword, scramble, matching pairs, dictation, hint-with-show-answer | across `app.js:1632-2912` | Far more interaction types than the docs credit. New strands can reuse these patterns. |
 | **Phase 0 modules** — `levels.js` (4 CEFR tiers, permanent aliases, idempotent) and `migrations.js` (`SCHEMA_VERSION`, upgrade chain, `backupOnce`) | 104 + 131 lines, 47 assertions | Correct and tested. See 3.3 — not yet called. |
 
 ### 3.2 Curated content that exists
@@ -195,10 +230,10 @@ class shells. Deleting first means rewriting them in Phase 5.
 Both are honesty problems of the same kind the audit already objects to, so they belong in the
 same bucket as the three live bugs.
 
-1. **`app.js:3127` logs `'♿ Accessibility: WCAG 2.1 AA Compliant'` at every startup.** Nothing
-   verifies this — no audit, no automated check, and the keyboard suites are quarantined in
-   `__tests__/legacy/`. Real work exists (§3.1), but the claim is unearned. The NFR should set
-   WCAG 2.1 AA as a *target with an audit*, and the log line should go.
+1. ~~**`app.js` logged `'♿ Accessibility: WCAG 2.1 AA Compliant'` at every startup.**~~ ✅ **Fixed
+   2026-09-09 (US-107)** — the line is deleted. Nothing verified it: no audit, no automated check,
+   and the keyboard suites are quarantined in `__tests__/legacy/`. Real work exists (§3.1), but the
+   claim was unearned. `NFR-11` now states WCAG 2.1 AA as a *target with an audit* (`US-806`).
 2. **`docs/FOLDER_STRUCTURE.md:123-124` and `docs/ERROR_HANDLING_GUIDE.md:57-58` document
    `new StorageManager(errorHandler, validator)` as the app's architecture.** That wiring does
    not exist anywhere in the app. Those docs describe an intended design that was never adopted.
@@ -220,14 +255,14 @@ Phase 10 hygiene deletes **dead JavaScript modules** (§3.4), never content.
 
 The Sentences strand is 15 curated items (5 per level) plus the generator, and the four
 interaction modes are **not four datasets** — they are four renderings of the same
-`{words, correct, fillBlank}` item, dispatched at `app.js:1638-1661`:
+`{words, correct, fillBlank}` item, dispatched at `app.js:1672-1695`:
 
 | Mode | Loader |
 |---|---|
-| Drag-and-drop builder | `loadDragDropSentence` (`app.js:1666`) |
-| Fill in the blank | `loadFillBlankExercise` (`app.js:1743`) |
-| Multiple choice | `loadMultipleChoiceSentence` (`app.js:1760`) |
-| Word reorder | `loadReorderSentence` (`app.js:1799`) |
+| Drag-and-drop builder | `loadDragDropSentence` (`app.js:1700`) |
+| Fill in the blank | `loadFillBlankExercise` (`app.js:1777`) |
+| Multiple choice | `loadMultipleChoiceSentence` (`app.js:1794`) |
+| Word reorder | `loadReorderSentence` (`app.js:1833`) |
 
 That is efficient, and it means enriching one item improves four exercises.
 
@@ -245,7 +280,7 @@ useful for speech, because it drills the structural flexibility speaking require
 | # | Change | Why |
 |---|---|---|
 | 1 | Fill-in-the-blank feedback must gain a **reason, a contrast, and a retry** | Today it is the app's only grammar teaching and it does none of it — `CURRICULUM.md:91-95` calls it *"assessment without teaching"*. Required by `TEACHING_METHODOLOGY.md §2`. |
-| 2 | **Stop re-randomising the exercise mode on every render** — `app.js:1638` picks the type with `Math.random()` | A learner who fails a fill-blank and navigates back gets a drag-drop instead, so the "retry" the pedagogy contract requires is unreachable. Same defect class as the random target word at `app.js:2392`. |
+| 2 | **Stop re-randomising the exercise mode on every render** — `app.js:1672` picks the type with `Math.random()` | A learner who fails a fill-blank and navigates back gets a drag-drop instead, so the "retry" the pedagogy contract requires is unreachable. Same defect class as the random target word at `app.js:2436`. |
 | 3 | Level keys migrate `basic`/`intermediate`/`medium` → CEFR ids | Phase 2. Content survives untouched; only the keys change. |
 | 4 | Generated sentences become **padding only, never primary content** | Gap #9 — *"The penguin meanders madly at the estuary"* is valid, memorable and useless (`TEACHING_METHODOLOGY.md §6`). The generator stays; its role shrinks. |
 
@@ -271,9 +306,9 @@ file:line to check.
 
 | # | Defect | Evidence | Why it matters |
 |---|---|---|---|
-| **D1** ✅ | **Three of the four dashboard counters are permanently 0.** `updateDashboard` renders `state.overallStats.total*` (`app.js:1228-1231`), but `updateStatistics()` — the only writer of those fields — is called **exactly once**, for `'vocabulary'` (`app.js:1486`). Sentences, reading and puzzles all increment `state.stats.*` instead (`app.js:1891`, `2316`, `2347`, `2625`, `2660`, `2694`, `2836`), which is written on load (`app.js:140`) and **never read for display** | verified by grep: `updateStatistics(` has 1 call site | Only "Words Learned" ever moves. Breaks `BR-8` and makes `M-1`…`M-8` uncomputable. Also makes the `USER_GUIDE.md` milestones unobservable |
-| **D2** ✅ | **The crossword is a stub that grants the daily goal for a blank grid.** `generateCrossword` (`app.js:2641-2656`) hardcodes 2 clue strings and builds 64 cells of empty `<input>` with **no answer key**. `checkCrossword` (`app.js:2658-2665`) validates nothing: it increments `puzzlesSolved`, sets `dailyGoals.puzzle = true`, saves, and `alert('Checked!')` | read the function; there is no answer data anywhere | **This is the same class of dishonesty as "✓ Perfect!"** — it is a `BR-3` violation, not just a missing feature |
-| **D3** ✅ | **Word search is unwinnable.** On a match the handler adds `.found` but **never clears `.selected`** (`app.js:2617-2632`), so the accumulated selection string can never equal a second word. The completion branch requires all words found → unreachable. Selection also ignores adjacency, so scattered clicks spelling a word count | read the handler | A puzzle that cannot be completed, in a section that has no owning requirement anyway (`OQ-7`) |
+| **D1** ✅ | **Three of the four dashboard counters are permanently 0.** `updateDashboard` renders `state.overallStats.total*` (`app.js:1238-1241`), but `updateStatistics()` — the only writer of those fields — is called **exactly once**, for `'vocabulary'` (`app.js:1523`). Sentences, reading and puzzles all increment `state.stats.*` instead (`app.js:1921`, `2316`, `2347`, `2625`, `2660`, `2694`, `2836`), which is written on load (`app.js:140`) and **never read for display** | verified by grep: `updateStatistics(` has 1 call site | Only "Words Learned" ever moves. Breaks `BR-8` and makes `M-1`…`M-8` uncomputable. Also makes the `USER_GUIDE.md` milestones unobservable |
+| **D2** ✅ | **The crossword is a stub that grants the daily goal for a blank grid.** `generateCrossword` (`app.js:2695-2710`) hardcodes 2 clue strings and builds 64 cells of empty `<input>` with **no answer key**. `checkCrossword` (`app.js:2712-2719`) validates nothing: it increments `puzzlesSolved`, sets `dailyGoals.puzzle = true`, saves, and `alert('Checked!')` | read the function; there is no answer data anywhere | **This is the same class of dishonesty as "✓ Perfect!"** — it is a `BR-3` violation, not just a missing feature |
+| **D3** ✅ | **Word search is unwinnable.** On a match the handler adds `.found` but **never clears `.selected`** (`app.js:2665-2680`), so the accumulated selection string can never equal a second word. The completion branch requires all words found → unreachable. Selection also ignores adjacency, so scattered clicks spelling a word count | read the handler | A puzzle that cannot be completed, in a section that has no owning requirement anyway (`OQ-7`) |
 | **D5** ✅ | **`docs/README.md:85-93` claims "260+ Unit Tests", "40+ Integration Tests" and "70% Code Coverage: Enforced minimum coverage threshold".** Those suites are quarantined in `__tests__/legacy/` and excluded by `testPathIgnorePatterns` (`jest.config.js:20-23`); there is no `__tests__/integration/`; and `jest.config.js:33` says in a comment **"No coverageThreshold yet, deliberately"** | read both files | The README asserts the exact opposite of the config. `__tests__/README.md` already contradicts it |
 
 #### 🟠 Medium
@@ -282,10 +317,10 @@ file:line to check.
 |---|---|---|
 | **D4** ✅ | **Scramble's "Show Answer" reveals the solution, and the authored hint is dead code.** `app.js:2675` writes `Hint: ${current.hint}` then `app.js:2676` immediately removes `visible`; the handler at `app.js:2709` overwrites it with `Answer: ${answer}`. The `hint` field in `data.js` is never shown to a learner. `USER_GUIDE.md:269` still calls it "Show Hint" |
 | **D6** | Nearly every `app.js` line reference in `TECHNICAL_DOCUMENTATION.md` is wrong, several by 500–1000 lines. Worse, `:192-199` shows a `capitalize()` helper that **does not exist anywhere in the repo** — copying that snippet yields a `ReferenceError` |
-| **D7** | Safari: recording is hardcoded to `new Blob(audioChunks, { type: 'audio/webm' })` (`app.js:2419`). Safari's `MediaRecorder` produces MP4/AAC, so the replay promised in `USER_GUIDE.md:202-206` will not play back. `TECHNICAL_DOCUMENTATION.md:455` marks Media Recording ✅ for Safari |
+| **D7** | Safari: recording is hardcoded to `new Blob(audioChunks, { type: 'audio/webm' })` (`app.js:2463`). Safari's `MediaRecorder` produces MP4/AAC, so the replay promised in `USER_GUIDE.md:202-206` will not play back. `TECHNICAL_DOCUMENTATION.md:455` marks Media Recording ✅ for Safari |
 | **D8** | `USER_GUIDE.md:10` and `README.md:108` say "simply open `index.html` in your browser". Over `file://` the service worker cannot register (`app.js:3131` registers root-absolute `/service-worker.js`) and the root-absolute manifest/icon paths break, so the offline behaviour promised at `USER_GUIDE.md:436` never engages. `npm start` exists and neither doc mentions it |
-| **D9** | Re-clicking an already-correct quiz option re-increments `wordsLearned`/`totalWords` — there is no answered-guard on the counters (`app.js:1478-1491`), so "words you've mastered" inflates |
-| **D10** | Dictation success marks the **reading passage** complete (`app.js:2347-2349`), double-counting with the comprehension check at `app.js:2316` |
+| **D9** | Re-clicking an already-correct quiz option re-increments `wordsLearned`/`totalWords` — there is no answered-guard on the counters (`app.js:1500-1523`), so "words you've mastered" inflates |
+| **D10** | Dictation success marks the **reading passage** complete (`app.js:2379-2384`), double-counting with the comprehension check at `app.js:2349` |
 | **D11** | `USER_GUIDE.md:406-424` documents an achievement/milestone system ("Complete 200 vocabulary words", "Master all difficulty levels") that exists nowhere in the code |
 | **D12** | `TECHNICAL_DOCUMENTATION.md:440-442` claims "Event Delegation — Minimal event listeners". There is no delegated listener anywhere; handlers are attached per element — 100+ for the word-search grid alone, recreated on every "New Puzzle" |
 
@@ -360,7 +395,7 @@ imply accuracy the app cannot deliver ([TEACHING_METHODOLOGY.md §3](TEACHING_ME
 | ☐ **B7** | Phase 10 says delete `js/core/storage.js` and `js/core/notification.js`. But `storage.js` and `validator.js` contain the backup/export/import and schema-validation code the new NFRs are about to require (§3.4). | Deleting first means rewriting the same functions in Phase 5. | **Harvest, then delete.** Extract `createBackup` / `restoreFromBackup` / `exportData` / `importData` and `validateSchema` / `validateProgress` into the modules that will use them, then remove the class shells. Retarget Phase 10 accordingly. |
 | ☐ **B8** | **What are puzzles for?** Word search, crossword, scramble and matching are built and working but belong to no strand, gap or requirement (§3.6). | They cost maintenance in every refactor — Phase 3's registry, Phase 2's level rename, every stat calculation — while teaching nothing the curriculum asks for. | **Keep matching and scramble, retire word search and crossword.** Matching is a legitimate vocabulary recognition warm-up under `CURRICULUM.md:23`; scramble drills spelling cheaply. Word search and crossword teach neither speaking nor listening and are the most code per unit of value. Your call — they are your app's most "fun" surface, and motivation is not nothing. |
 | ☐ **B9** | **IPA and frequency ordering for Phase 5 content.** I can write IPA for common words, but across hundreds of entries the error rate is not negligible — and a wrong IPA *actively teaches an error*, which is the exact failure the audit objects to. Frequency ordering needs a published list I do not hold verbatim. | Gates the vocabulary authoring in Phase 5 and the stress marking in Phase 7. | **Two-part.** (a) *IPA:* write it only where I am confident and **leave the field empty otherwise** — `TEACHING_METHODOLOGY.md §3` already sanctions omission over false precision, and `CURRICULUM.md:84-87` asks exactly this. (b) *Frequency:* if you want a defensible ordering, I fetch a **freely-licensed** list once at authoring time (new-GSL or a SUBTLEX-derived list) and bundle it. Avoid Oxford 3000/5000 — it is Oxford's copyrighted list and this repo is MIT. |
-| ☐ **B10** | **Audio for pronunciation and accents.** The repo has **zero audio files**; every sound comes from browser TTS at a hardcoded `lang = 'en-US'` (`app.js:1065`), with no `getVoices()` call anywhere. | `CURRICULUM.md:143-146` asks for "listen-and-compare recordings" per phoneme, and §3 Strand D asks for multiple accents. Neither is deliverable as specified. | See the full 19-function breakdown in **§6.y**. Short version: **word-level audio is well covered free** (dictionary API), **minimal-pair discrimination — the highest-value feature — is fully coverable**, and **prosody (rhythm, connected speech, intonation) is not obtainable from any free source**. Recommend building A1/A7/A8 first and descoping A10–A12 to noticing-based exercises. |
+| ☐ **B10** | **Audio for pronunciation and accents.** The repo has **zero audio files**; every sound comes from browser TTS at a hardcoded `lang = 'en-US'` (`app.js:1075`), with no `getVoices()` call anywhere. | `CURRICULUM.md:143-146` asks for "listen-and-compare recordings" per phoneme, and §3 Strand D asks for multiple accents. Neither is deliverable as specified. | See the full 19-function breakdown in **§6.y**. Short version: **word-level audio is well covered free** (dictionary API), **minimal-pair discrimination — the highest-value feature — is fully coverable**, and **prosody (rhythm, connected speech, intonation) is not obtainable from any free source**. Recommend building A1/A7/A8 first and descoping A10–A12 to noticing-based exercises. |
 | ☐ **B11** | **Recording archive vs. the `localStorage`-only constraint.** `CURRICULUM.md` Strand E.7 wants the last N recordings kept per prompt, but audio blobs cannot live in `localStorage` (string-only, ~5–10 MB) — that needs **IndexedDB**, which the stated constraint forbids (§6.y A17). | Blocks the "hear month-one against month-three" feature the curriculum calls its strongest motivator. | **Amend the constraint to "client-side storage only; `localStorage` for state, IndexedDB for blobs."** Still no backend, still offline, still no build step — it only widens *which* browser store is allowed. Add a size cap and an eviction policy, since a recording archive grows without bound. |
 
 ---
@@ -389,9 +424,9 @@ verification steps.
 schema, does not depend on B1, and by the plan's own assessment delivers most of the
 audit's pedagogical value. The three fixes:
 
-- 🔴 `app.js:972-984` — options are shuffled but `correct` stays `0`, so the graded answer is whichever option landed at index 0. Affects every curated word where the dictionary API succeeds, which is the default online path. This verdict feeds `SRS.schedule()` at `app.js:1497`. *(The generated-word path at `app.js:1408` is correct — it uses `options.indexOf(definition)`.)*
-- 🔴 `app.js:1402` — `pronunciation: "/" + word + "/"` produces fake IPA like `/joyful/`, teaching learners that IPA is spelling in slashes.
-- 🟠 `app.js:2535` — `transcript.includes(target)` prints **"✓ Perfect!"**. Praise for an uncorrected error is how errors fossilise.
+- 🔴 `app.js:980-996` — options are shuffled but `correct` stays `0`, so the graded answer is whichever option landed at index 0. Affects every curated word where the dictionary API succeeds, which is the default online path. This verdict feeds `SRS.schedule()` at `app.js:1520`. *(The generated-word path at `app.js:1427` is correct — it uses `options.indexOf(definition)`.)*
+- 🔴 `app.js:1421` — `pronunciation: "/" + word + "/"` produces fake IPA like `/joyful/`, teaching learners that IPA is spelling in slashes.
+- 🟠 `app.js:2583` — `transcript.includes(target)` prints **"✓ Perfect!"**. Praise for an uncorrected error is how errors fossilise.
 
 ### Build-capability audit — what I can write unaided
 
@@ -411,7 +446,7 @@ code and never linguistic knowledge.**
 | 5 | ⚠️ | Definitions, examples, **collocations, word families, register labels** — all unaided and high-confidence. Two gaps: **IPA at scale** and **frequency ordering**. See B9. |
 | 6 | ✅ | The full 24-point grammar syllabus, rules, contrast pairs, practice items and Telugu interference notes are core knowledge. **The largest curriculum gap is the one I need the least help with.** |
 | 7 | ⚠️ | Phoneme inventory, mouth-position notes, minimal-pair sets, schwa, word stress — all unaided. The gap is **audio**: the repo has **zero audio files**, so TTS is the only source. See B10. |
-| 8 | ⚠️ | Comprehension questions and longer listening scripts — unaided. "Multiple accents" is not deliverable: `app.js:1065` hardcodes `lang = 'en-US'` and there is no `getVoices()` call anywhere, so available accents are whatever the learner's OS installed. See B10. |
+| 8 | ⚠️ | Comprehension questions and longer listening scripts — unaided. "Multiple accents" is not deliverable: `app.js:1075` hardcodes `lang = 'en-US'` and there is no `getVoices()` call anywhere, so available accents are whatever the learner's OS installed. See B10. |
 | 9 | ✅ | Pure code. |
 | 10 | ✅ | Pure code — but retarget it per B7 first. |
 
@@ -561,9 +596,9 @@ whether an API could have supplied one stops mattering.
 
 | # | Function | Status |
 |---|---|---|
-| A16 | Record own voice | ✅ **Built** — `MediaRecorder` + `getUserMedia` at `app.js:2405-2406`. |
+| A16 | Record own voice | ✅ **Built** — `MediaRecorder` + `getUserMedia` at `app.js:2449-2450`. |
 | A17 | Recording archive — last N per prompt (E.7) | 🔴 **Blocked by a constraint conflict.** Audio blobs cannot go in `localStorage` (string-only, ~5–10 MB). Needs **IndexedDB**, which the stated "localStorage only" constraint forbids. See B11. |
-| A18 | Read-aloud word-level diff | ✅ Plumbing exists; the verdict logic at `app.js:2535` is what Phase 1 fixes. |
+| A18 | Read-aloud word-level diff | ✅ Plumbing exists; the verdict logic at `app.js:2583` is what Phase 1 fixes. |
 | A19 | Fluency metrics — WPM, fillers, pauses (E.6) | ⚠️ **Partial.** WPM is derivable from transcript + duration. Filler and pause counts need audio analysis or interim recognition timings — materially harder. |
 
 ##### The two conclusions that matter
@@ -670,11 +705,11 @@ never *"I got it right"*.
 
 ##### What today's code does, for contrast
 
-`app.js:2531-2545` — substring match → **"✓ Perfect!"**, target word chosen at random on every
-render (`app.js:2392`), so the learner cannot retry the sound they just failed. Recognition errors
-all collapse to one generic toast (`app.js:1134-1137`), so `no-speech` (say something) is
+`app.js:2579-2593` — substring match → **"✓ Perfect!"**, target word chosen at random on every
+render (`app.js:2436`), so the learner cannot retry the sound they just failed. Recognition errors
+all collapse to one generic toast (`app.js:1144-1147`), so `no-speech` (say something) is
 indistinguishable from `not-allowed` (grant mic permission). And the recording blob is a closure
-variable (`app.js:2398`), discarded on navigation — there is no comparison against the model and
+variable (`app.js:2442`), discarded on navigation — there is no comparison against the model and
 no archive. All four are Phase 1 / Phase 7 work.
 
 
@@ -753,14 +788,14 @@ Not phases — small, independent, and each an hour or less. Pick any of them co
 
 | # | Item | Why it is cheap |
 |---|---|---|
-| ☐ **W1** | Add the 0.75× / 1.0× / 1.25× listening speed control | `speechAPI.speak(text, rate)` already accepts `rate` (`app.js:1055`) and it is never varied. This is a UI control over an existing parameter. Closes gap #14. |
-| ☐ **W2** | Delete the `'♿ Accessibility: WCAG 2.1 AA Compliant'` startup log (`app.js:3127`) | Nothing verifies it (§3.5). One line, and it stops the codebase asserting something untrue. |
+| ☐ **W1** | Add the 0.75× / 1.0× / 1.25× listening speed control | `speechAPI.speak(text, rate)` already accepts `rate` (`app.js:1075`) and it is never varied. This is a UI control over an existing parameter. Closes gap #14. |
+| ✅ **W2** | Delete the `'♿ Accessibility: WCAG 2.1 AA Compliant'` startup log — **done 2026-09-09** | Nothing verified it (§3.5). One line, and it stops the codebase asserting something untrue. |
 | ☐ **W3** | Move dictation into Listening | `readingPassages` entries **already carry a `dictation` field** — reuse, no new content needed. Part of gap #5. |
 | ☐ **W4** | Correct `docs/FOLDER_STRUCTURE.md:123-124` and `docs/ERROR_HANDLING_GUIDE.md:57-58` | They document a `new StorageManager(errorHandler, validator)` architecture that the app never adopted (§3.5). |
 | ☐ **W5** | Call `Migrations.migrateProgress()` from `loadProgress()` | The spine is written and tested but has **zero call sites**, so `schemaVersion` is never written (§3.3). Do this *before* Phase 2 needs it, while the blast radius is still nil. |
-| ☐ **W6** | Make the Sentences exercise mode deterministic per index instead of `Math.random()` at `app.js:1638` | A learner who fails a fill-blank and navigates back gets a different mode, so the retry required by `TEACHING_METHODOLOGY.md §2` is unreachable (§3.6). |
-| ☐ **W11** | Differentiate `recognition.onerror` cases at `app.js:1134-1137` | Every failure currently shows one generic toast, so *"say something"* (`no-speech`) is indistinguishable from *"grant microphone permission"* (`not-allowed`) or *"you are offline"* (`network`). The learner cannot tell whether the app broke or they did (§6.z). |
-| ☐ **W7** | Use `phonetics[].audio` in `parseAPIResponse` (`app.js:970-986`) instead of discarding it | ✅ Verified present: `decide` returns `.../media/pronunciations/en/decide-us.mp3`. Hosted on `api.dictionaryapi.dev`, so this needs only `media-src https://api.dictionaryapi.dev` added at `index.html:6-11` — no new third-party domain. Handle absent audio as the normal case. |
+| ☐ **W6** | Make the Sentences exercise mode deterministic per index instead of `Math.random()` at `app.js:1672` | A learner who fails a fill-blank and navigates back gets a different mode, so the retry required by `TEACHING_METHODOLOGY.md §2` is unreachable (§3.6). |
+| ☐ **W11** | Differentiate `recognition.onerror` cases at `app.js:1144-1147` | Every failure currently shows one generic toast, so *"say something"* (`no-speech`) is indistinguishable from *"grant microphone permission"* (`not-allowed`) or *"you are offline"* (`network`). The learner cannot tell whether the app broke or they did (§6.z). |
+| ☐ **W7** | Use `phonetics[].audio` in `parseAPIResponse` (`app.js:980-996`) instead of discarding it | ✅ Verified present: `decide` returns `.../media/pronunciations/en/decide-us.mp3`. Hosted on `api.dictionaryapi.dev`, so this needs only `media-src https://api.dictionaryapi.dev` added at `index.html:6-11` — no new third-party domain. Handle absent audio as the normal case. |
 | ☐ **W8** | Build quiz distractors from **other `vocabularyData` entries'** definitions, replacing `"Something different"` / `"Unrelated concept"` / `"Opposite meaning"` (`app.js:980`) | 61 real definitions already sit in `data.js` — offline, free, and guaranteed wrong for the current word. *(Not from the API's synonyms: options are definitions, not words, and `decide` returns zero antonyms.)* Fix alongside the `correct: 0` bug on the same line. |
 | ☐ **W9** | Add CC BY-SA 3.0 attribution for dictionary content and per-clip audio credit | ✅ Verified: the entry carries `license: CC BY-SA 3.0` + `sourceUrls: en.wiktionary.org`, and each audio clip carries its own `BY-SA 3.0` Commons licence. This repo is MIT, so the obligation needs stating explicitly. |
 | ☐ **W10** | Route audio explicitly in `service-worker.js` — add `mp3\|ogg\|wav\|m4a` to `isStaticAsset` (`:207`) or the media path to `API_URLS` (`:47-49`) | Today MP3s match neither predicate and fall through to the default branch — cached by accident, not design. Two hazards: `<audio>` Range requests yield **206 responses the Cache API cannot store**, so media caching can fail silently; and the cache-first failure path serves `/offline.html` in response to an audio request (§6.y). |
@@ -778,7 +813,7 @@ Decisions already taken, so they are not re-litigated later.
 | 2026-08-14 | Phase 3 introduces the `SECTIONS` registry **additively**, zero new sections | Separates a risky refactor from new feature surface. |
 | 2026-09-08 | Requirements split into **two** docs, not one | `REQUIREMENTS.md` is stable (what/why); `PRODUCT_BACKLOG.md` churns (when/order). Mixing them means the stable half rots. |
 | 2026-09-08 | **Telugu-first, via a pluggable L1 profile** | Hindi/Tamil/Bengali then become a data file, not a refactor. Telugu-specific items (final-vowel epenthesis *bus* → "bus-u", cluster breaking *asked* → "ask-ed") sit alongside the shared South-Asian pairs already in `CURRICULUM.md §3`. |
-| 2026-09-08 | Platform floor: **mobile-first**, Android Chrome + iOS Safari, last 2 versions | The target learner has 15–20 min/day and no teacher — that is a phone user. Consequence: `SpeechRecognition` is unreliable on iOS Safari, so read-aloud diff **must** degrade to record-and-self-review, not fail. It is already feature-detected at `app.js:1112-1113`. |
+| 2026-09-08 | Platform floor: **mobile-first**, Android Chrome + iOS Safari, last 2 versions | The target learner has 15–20 min/day and no teacher — that is a phone user. Consequence: `SpeechRecognition` is unreliable on iOS Safari, so read-aloud diff **must** degrade to record-and-self-review, not fail. It is already feature-detected at `app.js:1122-1123`. |
 | 2026-09-08 | Client-only is a **hard constraint**, not a current limitation | Static hosting, `localStorage` only, no build step, classic non-module scripts, CSP `default-src 'self'`, no CDN. Real pronunciation scoring and free-speech grading are therefore *deferred*, and replaced by discrimination drills + self-assessment rubrics per `CURRICULUM.md §6`. |
 | 2026-09-08 | Do **not** chase accent | Retroflex /t/, /d/ substitution marks a speaker as Indian but rarely blocks understanding. Target intelligibility instead: rhythm, word stress, schwa. Explicit scope exclusion. |
 
@@ -799,4 +834,5 @@ Decisions already taken, so they are not re-litigated later.
 | 2026-09-08 | Added §6.z: the **three speaking loops** and the gating rule. Only discrimination may gate progress; recognition reports without judging; free production is ungraded. Established that **SRS replaces mastery-gating** — a failed item returns tomorrow rather than trapping the learner. Added W11 (differentiate recognition errors). |
 | 2026-09-08 | Added §6.aa: **self-comparison design approved** (model ↔ own recording), with the perception blind spot named as its one real flaw and six rules that fix it — discrimination-before-production gating, articulatory rather than auditory self-check questions, A→B→A playback, matched speed, cross-week comparison, and self-report as a scheduling signal only. Identified **duration comparison** as an honest offline proxy for Telugu final-vowel epenthesis. |
 | 2026-09-08 | **Track A complete (A1–A10).** Wrote `REQUIREMENTS.md` (10 BR, 66 FR, 17 NFR, 8 CON, 6 AS, 9 OQ) and `PRODUCT_BACKLOG.md` (12 epics, 9 sprints, 248 points, 6 releases, RAID). Verified 66/66 FRs have a story, 14/14 gaps trace to a requirement, all links resolve, and sprint arithmetic is consistent. Four FRs documented as intentionally story-free (DoD or already-implemented). Blockers B1–B11 became `OQ-1`–`OQ-9` plus Sprint 0 stories `US-001`–`US-004`. |
-| 2026-09-08 | **Wave 1.** Fixed the quiz-grading bug and placeholder distractors (`app.js:970-986`, new `getDistractorDefinitions` helper) — US-101 and US-105 done. Corrected the documented-but-nonexistent `StorageManager` architecture in two docs. A second audit found **10 more defects** (§3.7), three of them high-severity and personally verified: the dashboard's sentence/reading/puzzle counters are permanently 0, the crossword awards the daily goal for a blank grid, and word search is unwinnable. Renumbered every `app.js:` citation (+53) after the file grew to 3160 lines. Sprint 1 grew 15 → 23 points. **Corrected an earlier ledger claim:** `error-handler.js` is not dead — it is the app's only global error capture. |
+| 2026-09-08 | **Wave 1.** Fixed the quiz-grading bug and placeholder distractors (`app.js:980-996`, new `getDistractorDefinitions` helper) — US-101 and US-105 done. Corrected the documented-but-nonexistent `StorageManager` architecture in two docs. A second audit found **10 more defects** (§3.7), three of them high-severity and personally verified: the dashboard's sentence/reading/puzzle counters are permanently 0, the crossword awards the daily goal for a blank grid, and word search is unwinnable. Renumbered every `app.js:` citation (+53) after the file grew to 3160 lines. Sprint 1 grew 15 → 23 points. **Corrected an earlier ledger claim:** `error-handler.js` is not dead — it is the app's only global error capture. |
+| 2026-09-09 | **Wave 2 — Sprint 1 taken from 4 to 13 of 30 points.** Fixed the fabricated IPA (US-102), the unearned WCAG log (US-107), the random exercise mode (US-108), the inert statistics pipeline (US-109 — all five types now reach `updateStatistics`, eight `state.stats.*` writes removed), the inflating quiz counters (US-111), the double-counted reading passage (US-112) and the README's false testing claims (US-113). Also closed two gaps found while verifying: `updateStatistics` had **no `default` case** (silent miscounts), and **listening never counted at all** despite the switch supporting it. Four new defects surfaced by the fixes became US-114…US-117; Sprint 1 grew 23 → 30 points. Citations renumbered again (3160 → 3213 lines). `US-110` deliberately deferred pending `OQ-7`. |
