@@ -1,7 +1,7 @@
 // Curriculum Data - Basic to Medium Level
 
 const vocabularyData = {
-    basic: [
+    foundation: [
         {
             word: "Happy",
             pronunciation: "/ˈhæpi/",
@@ -300,7 +300,7 @@ const vocabularyData = {
             }
         }
     ],
-    intermediate: [
+    everyday: [
         {
             word: "Achieve",
             pronunciation: "/əˈtʃiːv/",
@@ -489,7 +489,7 @@ const vocabularyData = {
             }
         }
     ],
-    medium: [
+    confident: [
         {
             word: "Accomplish",
             pronunciation: "/əˈkɑːmplɪʃ/",
@@ -681,7 +681,7 @@ const vocabularyData = {
 };
 
 const sentenceExercises = {
-    basic: [
+    foundation: [
         {
             words: ["I", "am", "happy", "today"],
             correct: "I am happy today",
@@ -728,7 +728,7 @@ const sentenceExercises = {
             }
         }
     ],
-    intermediate: [
+    everyday: [
         {
             words: ["Learning", "English", "is", "very", "important"],
             correct: "Learning English is very important",
@@ -775,7 +775,7 @@ const sentenceExercises = {
             }
         }
     ],
-    medium: [
+    confident: [
         {
             words: ["If", "you", "work", "hard", "you", "will", "succeed"],
             correct: "If you work hard you will succeed",
@@ -825,7 +825,7 @@ const sentenceExercises = {
 };
 
 const readingPassages = {
-    basic: [
+    foundation: [
         {
             title: "A Beautiful Day",
             text: "Today is a beautiful day. The sun is shining brightly in the sky. Birds are singing in the trees. Children are playing in the park. Everyone is happy. I love days like this. The weather is perfect for a walk. I will go outside and enjoy the fresh air.",
@@ -871,7 +871,7 @@ const readingPassages = {
             dictation: "We all live together in a big house."
         }
     ],
-    intermediate: [
+    everyday: [
         {
             title: "The Importance of Reading",
             text: "Reading is one of the most important skills you can develop. It opens doors to new worlds and ideas. When you read, you learn about different cultures, places, and people. Reading improves your vocabulary and helps you communicate better. It also enhances your imagination and creativity. Whether you read books, newspapers, or online articles, every bit of reading makes you smarter and more knowledgeable.",
@@ -917,7 +917,7 @@ const readingPassages = {
             dictation: "The more you practice, the more confident you will become."
         }
     ],
-    medium: [
+    confident: [
         {
             title: "The Power of Collaboration",
             text: "In today's interconnected world, collaboration has become increasingly important. When people work together, they can accomplish far more than they could individually. Collaboration brings together diverse perspectives and skills, leading to innovative solutions. Effective collaboration requires good communication, mutual respect, and a willingness to compromise. Teams that collaborate well can overcome challenges more efficiently and achieve their goals faster. Whether in business, education, or personal projects, the ability to collaborate effectively is a valuable skill that can lead to greater success.",
@@ -944,7 +944,7 @@ const readingPassages = {
 };
 
 const listeningExercises = {
-    basic: [
+    foundation: [
         "Hello, how are you today?",
         "I am learning English every day.",
         "The weather is beautiful outside.",
@@ -956,7 +956,7 @@ const listeningExercises = {
         "I love my family very much.",
         "Today is a wonderful day."
     ],
-    intermediate: [
+    everyday: [
         "Practice makes perfect in everything you do.",
         "Learning a new language opens many opportunities.",
         "Success comes to those who work hard.",
@@ -968,7 +968,7 @@ const listeningExercises = {
         "Dedication and persistence lead to achievement.",
         "Education is the foundation of progress."
     ],
-    medium: [
+    confident: [
         "Collaboration enhances productivity and innovation.",
         "Implementing effective strategies requires careful planning.",
         "Understanding different perspectives broadens your worldview.",
@@ -984,21 +984,21 @@ const listeningExercises = {
 
 const puzzleData = {
     wordSearch: {
-        basic: {
+        foundation: {
             words: ["HAPPY", "BOOK", "FRIEND", "WATER", "HOUSE", "LEARN", "FOOD", "TIME", "SCHOOL", "PLAY", "SUN", "TREE", "RUN", "SMILE", "COLOR", "MUSIC", "HELP", "KIND", "LOVE", "DREAM"],
             gridSize: 10
         },
-        intermediate: {
+        everyday: {
             words: ["ACHIEVE", "CHALLENGE", "DEVELOP", "IMPORTANT", "KNOWLEDGE", "SUCCESS", "PRACTICE", "OPPORTUNITY", "UNDERSTAND", "ENVIRONMENT", "IMPROVE", "PROGRESS", "CREATIVE", "CONFIDENT"],
             gridSize: 10
         },
-        medium: {
+        confident: {
             words: ["ACCOMPLISH", "BENEFICIAL", "COLLABORATE", "EFFICIENT", "IMPLEMENT", "FUNDAMENTAL", "PERSPECTIVE", "SIGNIFICANT", "VERSATILE", "DEMONSTRATE"],
             gridSize: 12
         }
     },
     scramble: {
-        basic: [
+        foundation: [
             { word: "HAPPY", scrambled: "PAHPY", hint: "Feeling joyful" },
             { word: "FRIEND", scrambled: "DIENRF", hint: "Someone you like" },
             { word: "WATER", scrambled: "RETAW", hint: "Clear liquid we drink" },
@@ -1010,7 +1010,7 @@ const puzzleData = {
             { word: "MUSIC", scrambled: "CIMSU", hint: "Pleasant sounds" },
             { word: "HELP", scrambled: "PLEH", hint: "Assist someone" }
         ],
-        intermediate: [
+        everyday: [
             { word: "ACHIEVE", scrambled: "VEECHIA", hint: "Reach a goal" },
             { word: "CHALLENGE", scrambled: "GELNLECHA", hint: "Difficult task" },
             { word: "DEVELOP", scrambled: "VELOPDE", hint: "Grow and improve" },
@@ -1022,7 +1022,7 @@ const puzzleData = {
             { word: "UNDERSTAND", scrambled: "DERSTANDUN", hint: "Comprehend" },
             { word: "ENVIRONMENT", scrambled: "MENTVIRONEN", hint: "Surroundings" }
         ],
-        medium: [
+        confident: [
             { word: "COLLABORATE", scrambled: "LABORCOLATE", hint: "Work together" },
             { word: "DEMONSTRATE", scrambled: "TEMONSDRATE", hint: "Show clearly" },
             { word: "EFFICIENT", scrambled: "FICIEFENT", hint: "Productive" },
@@ -1036,7 +1036,7 @@ const puzzleData = {
         ]
     },
     matching: {
-        basic: [
+        foundation: [
             { word: "Happy", meaning: "Feeling joyful" },
             { word: "Friend", meaning: "Someone you like" },
             { word: "Learn", meaning: "Gain knowledge" },
@@ -1048,7 +1048,7 @@ const puzzleData = {
             { word: "Kind", meaning: "Friendly" },
             { word: "Smile", meaning: "Happy expression" }
         ],
-        intermediate: [
+        everyday: [
             { word: "Achieve", meaning: "Reach a goal" },
             { word: "Challenge", meaning: "Difficult task" },
             { word: "Develop", meaning: "Grow and improve" },
@@ -1060,7 +1060,7 @@ const puzzleData = {
             { word: "Understand", meaning: "Comprehend" },
             { word: "Environment", meaning: "Surroundings" }
         ],
-        medium: [
+        confident: [
             { word: "Collaborate", meaning: "Work together" },
             { word: "Demonstrate", meaning: "Show clearly" },
             { word: "Efficient", meaning: "Productive" },

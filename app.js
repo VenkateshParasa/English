@@ -16,7 +16,7 @@ const CONFIG = {
 
 const state = {
     currentSection: 'dashboard',
-    currentDifficulty: 'basic',
+    currentDifficulty: 'foundation',
     currentWordIndex: 0,
     currentSentenceIndex: 0,
     currentPassageIndex: 0,
@@ -95,31 +95,22 @@ const state = {
 // ============================================
 //
 // js/core/levels.js owns the canonical tier ids (foundation / everyday /
-// confident / fluent). data.js still keys all of its content by the LEGACY
-// names (basic / intermediate / medium) and renaming those keys is a separate,
-// riskier phase. So state.currentDifficulty deliberately keeps holding a DATA
-// KEY rather than a canonical id: every existing lookup - vocabularyData[...],
-// sentenceExercises[...], getExerciseId() - keeps working untouched.
+// confident / fluent) and data.js now keys ALL of its content by those same
+// ids, so state.currentDifficulty holds a canonical id and the legacy
+// canonical->data-key bridge that used to live here is gone.
 //
-// resolveDifficulty() is the single boundary where the two vocabularies meet.
-// It normalises anything level-ish through canonicalLevel() (which never
-// returns undefined) and then maps that canonical id back to the key the
-// content is actually stored under, so a corrupted localStorage value or a
-// stale value from an old release can no longer produce
-// vocabularyData[undefined] and take a whole section down with it.
-
-// Canonical id -> legacy data key, derived from LEVEL_ALIASES instead of being
-// hardcoded so it cannot drift from levels.js. Only the non-identity aliases
-// are reversed: those are exactly the legacy spellings data.js uses.
-function levelDataKeyMap() {
-    const map = {};
-    if (typeof LEVEL_ALIASES === 'undefined' || !LEVEL_ALIASES) return map;
-    Object.keys(LEVEL_ALIASES).forEach(alias => {
-        const canonical = LEVEL_ALIASES[alias];
-        if (alias !== canonical) map[canonical] = alias;
-    });
-    return map;
-}
+// What has NOT gone is the normalisation. resolveDifficulty() still runs every
+// level-ish value through canonicalLevel() — which never returns undefined —
+// because a corrupted localStorage value, a data-level typo or a stale value
+// from an old release would otherwise produce vocabularyData[undefined] and
+// take a whole section down. Legacy stored values ('basic', 'medium') are
+// handled by LEVEL_ALIASES, which is kept permanently for exactly this reason.
+//
+// It also still checks that content EXISTS behind the resolved id. That is what
+// makes the `fluent` tier safe: `fluent` is a real, canonical, first-class level
+// with no authored content yet, so it resolves DOWN to the nearest lower tier
+// that does have content (confident) instead of rendering an empty section. See
+// the disabled "Fluent" buttons in index.html.
 
 // vocabularyData is the widest of the content maps and every other content map
 // (sentenceExercises, readingPassages, listeningExercises, puzzleData.*) uses
@@ -130,26 +121,52 @@ function hasContentForLevel(key) {
            Object.prototype.hasOwnProperty.call(vocabularyData, key);
 }
 
+// The tiers that actually have content behind them, in ascending order. Derived
+// from levels.js rather than hardcoded, so authoring `fluent` content is the
+// only step needed to make the tier live.
+function playableLevels() {
+    if (typeof LEVELS === 'undefined' || !Array.isArray(LEVELS)) return [];
+    return LEVELS.slice()
+        .sort((a, b) => a.order - b.order)
+        .map(l => l.id)
+        .filter(hasContentForLevel);
+}
+
+/** True when this tier is a real level with no authored content yet. */
+function isLevelAvailable(value) {
+    if (typeof canonicalLevel !== 'function') return hasContentForLevel(value);
+    return hasContentForLevel(canonicalLevel(value));
+}
+
 function resolveDifficulty(value) {
     // Guard for levels.js being absent (script-order mistake). Degrade to the
     // previous behaviour of trusting the value, but still never hand back a key
     // that has no content behind it.
     if (typeof canonicalLevel !== 'function') {
-        return hasContentForLevel(value) ? value : 'basic';
+        return hasContentForLevel(value) ? value : 'foundation';
     }
 
     const canonical = canonicalLevel(value);
-    const keyMap = levelDataKeyMap();
-
-    // Legacy key first, because that is what data.js has today. Then the
-    // canonical id itself, so this keeps working the day the content keys are
-    // renamed. Then the default tier, so the return value is always usable.
-    const legacyKey = keyMap[canonical];
-    if (hasContentForLevel(legacyKey)) return legacyKey;
     if (hasContentForLevel(canonical)) return canonical;
 
-    const fallback = keyMap[DEFAULT_LEVEL] || DEFAULT_LEVEL;
-    return hasContentForLevel(fallback) ? fallback : 'basic';
+    // No content for this tier. Step DOWN to the nearest lower tier that has
+    // some — easier content the learner can still use beats an empty screen,
+    // and stepping down never shows them something above the level they asked
+    // for. Only if nothing lower exists do we step up.
+    const playable = playableLevels();
+    const wanted = (typeof LEVELS !== 'undefined' && Array.isArray(LEVELS))
+        ? (LEVELS.find(l => l.id === canonical) || {}).order
+        : undefined;
+
+    if (typeof wanted === 'number' && playable.length > 0) {
+        const orderOf = id => (LEVELS.find(l => l.id === id) || {}).order || 0;
+        const lower = playable.filter(id => orderOf(id) < wanted);
+        if (lower.length > 0) return lower[lower.length - 1];
+        return playable[0];
+    }
+
+    if (hasContentForLevel(DEFAULT_LEVEL)) return DEFAULT_LEVEL;
+    return playable[0] || 'foundation';
 }
 
 // ============================================
@@ -269,11 +286,8 @@ function migrateStoredProgress(loaded) {
 
 function loadProgress() {
     try {
-        // Normalise the level key before anything reads it. Note that
-        // currentDifficulty is deliberately NOT restored from storage here -
-        // that has never been the behaviour, and the difficulty buttons in
-        // index.html hardcode Basic as active, so restoring a stored level would
-        // desync the visible selector from the content being shown.
+        // Normalise the level id before anything reads it, so nothing downstream
+        // can index a content map with a value levels.js does not recognise.
         state.currentDifficulty = resolveDifficulty(state.currentDifficulty);
 
         const saved = localStorage.getItem('learningProgress');
@@ -282,6 +296,15 @@ function loadProgress() {
             if (loaded && loaded.schemaVersion) {
                 state.schemaVersion = loaded.schemaVersion;
             }
+            // Restore the selected tier. It has always been SAVED and never read
+            // back, so every reload silently dropped the learner to Foundation.
+            // Safe to restore now that initializeDifficultySelectors() syncs the
+            // visible buttons from state instead of hardcoding the first one
+            // active — without that sync, restoring here would show Confident
+            // content under a highlighted "Foundation" button.
+            state.currentDifficulty = resolveDifficulty(
+                loaded.currentDifficulty !== undefined ? loaded.currentDifficulty : state.currentDifficulty
+            );
             // Legacy counters: kept only so old saves keep loading. They are no longer
             // authoritative and are not displayed anywhere - state.dailyStats and
             // state.overallStats (written by updateStatistics) are the source of truth.
@@ -483,7 +506,7 @@ function generateSentenceExercise(index) {
 function generateAlgorithmicSentence(index, difficulty) {
     // Multiple sentence templates for variety
     const sentenceTemplates = {
-        basic: [
+        foundation: [
             // Template 1: Subject + Verb + Adverb + Place (50 words each = 6.25M combinations)
             (i) => {
                 const subjects = ["The cat", "My dog", "The bird", "A child", "The teacher", "My friend", "The rabbit", "A butterfly", "The fish", "My sister", "The puppy", "A kitten", "The mouse", "My cousin", "The baby", "A squirrel", "The horse", "My brother", "The duck", "A turtle", "The frog", "A spider", "The bee", "My neighbor", "The ant", "A ladybug", "The owl", "My classmate", "The fox", "A deer", "The bear", "My pet", "The lion", "A tiger", "The elephant", "My uncle", "The monkey", "A panda", "The zebra", "My aunt", "The giraffe", "A kangaroo", "The penguin", "My grandma", "The dolphin", "A whale", "The seal", "My grandpa", "The otter", "A raccoon"];
@@ -525,7 +548,7 @@ function generateAlgorithmicSentence(index, difficulty) {
                 return `${subjects[i % 50]} can ${verbs[Math.floor(i/50) % 50]} ${objects[Math.floor(i/2500) % 50]} ${places[Math.floor(i/125000) % 50]}`;
             }
         ],
-        intermediate: [
+        everyday: [
             // Template 1: Subject + Verb + Object + Modifier
             (i) => {
                 const subjects = ["Success", "Learning", "Practice", "Knowledge", "Experience", "Teamwork", "Patience", "Creativity", "Dedication", "Understanding"];
@@ -567,7 +590,7 @@ function generateAlgorithmicSentence(index, difficulty) {
                 return `By ${gerunds[i % 10]} ${adverbs[Math.floor(i/10) % 10]} we can ${verbs[Math.floor(i/100) % 10]} ${objects[Math.floor(i/1000) % 10]}`;
             }
         ],
-        medium: [
+        confident: [
             // Template 1: Subject + Verb + Object + Context
             (i) => {
                 const subjects = ["Effective communication", "Critical thinking", "Strategic planning", "Professional development", "Continuous improvement", "Innovation", "Collaboration", "Leadership", "Problem solving", "Decision making"];
@@ -611,7 +634,7 @@ function generateAlgorithmicSentence(index, difficulty) {
         ]
     };
     
-    const templates = sentenceTemplates[difficulty] || sentenceTemplates.basic;
+    const templates = sentenceTemplates[difficulty] || sentenceTemplates[DEFAULT_LEVEL];
     
     // Select template based on index to ensure variety
     const templateIndex = index % templates.length;
@@ -1348,7 +1371,7 @@ function parseAPIResponse(apiData) {
 }
 
 function getLocalWordData(word) {
-    const localWords = vocabularyData[state.currentDifficulty] || vocabularyData.basic;
+    const localWords = vocabularyData[state.currentDifficulty] || vocabularyData[DEFAULT_LEVEL];
     return localWords.find(w => w.word.toLowerCase() === word.toLowerCase()) ||
            localWords[state.currentWordIndex % localWords.length];
 }
@@ -1381,7 +1404,7 @@ function getDistractorDefinitions(correctDefinition, count) {
 
     try {
         const allLevels = typeof vocabularyData !== 'undefined' && vocabularyData ? vocabularyData : {};
-        const currentLevel = state && state.currentDifficulty ? state.currentDifficulty : 'basic';
+        const currentLevel = state && state.currentDifficulty ? state.currentDifficulty : DEFAULT_LEVEL;
         collect(allLevels[currentLevel], preferred);
         Object.keys(allLevels).forEach(level => {
             if (level !== currentLevel) collect(allLevels[level], others);
@@ -1736,6 +1759,50 @@ function switchSection(sectionName) {
     loaders[sectionName]?.();
 }
 
+/**
+ * Paint the difficulty selectors from state.currentDifficulty.
+ *
+ * index.html can no longer hardcode which button is active, because the tier is
+ * restored from storage now (see loadProgress). A hardcoded `active` class would
+ * label Confident content as Foundation on every reload.
+ *
+ * A tier with no authored content (`fluent` today) is marked unavailable rather
+ * than hidden: the four-tier scale is what the learner self-assesses against, so
+ * concealing the top of it is dishonest about where the ladder ends. It is
+ * `disabled` so it cannot be selected, and resolveDifficulty() would step it
+ * down to Confident anyway if anything ever did select it.
+ */
+function syncDifficultySelectors() {
+    const current = state.currentDifficulty;
+    document.querySelectorAll('.diff-btn').forEach(btn => {
+        const level = typeof canonicalLevel === 'function'
+            ? canonicalLevel(btn.dataset.level)
+            : btn.dataset.level;
+        const available = isLevelAvailable(level);
+        const active = available && level === current;
+
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-checked', active ? 'true' : 'false');
+
+        // levels.js owns the display label, so a tier can be renamed in one
+        // place. The text already in index.html is only the no-JS fallback.
+        if (typeof Levels !== 'undefined' && Levels && typeof Levels.levelLabel === 'function') {
+            const label = Levels.levelLabel(level);
+            if (label) btn.textContent = available ? label : label + ' (soon)';
+        }
+
+        if (!available) {
+            // styles.css has no :disabled rule for .diff-btn, so dim it here
+            // rather than leave a button that looks pressable and is not.
+            btn.disabled = true;
+            btn.setAttribute('aria-disabled', 'true');
+            btn.style.opacity = '0.45';
+            btn.style.cursor = 'not-allowed';
+            btn.title = 'Not available yet — content for this level is still being written.';
+        }
+    });
+}
+
 function initializeDifficultySelectors() {
     document.querySelectorAll('.diff-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -1743,19 +1810,25 @@ function initializeDifficultySelectors() {
             // it: a data-level typo or a level the content no longer has would
             // otherwise be written straight into state and crash every lookup.
             const level = resolveDifficulty(btn.dataset.level);
-            btn.parentElement.querySelectorAll('.diff-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
             state.currentDifficulty = level;
             state.currentWordIndex = 0;
             state.currentSentenceIndex = 0;
             state.currentPassageIndex = 0;
-            
+            // Repaint every selector, not just this section's: all three show the
+            // same single state.currentDifficulty, so highlighting one section's
+            // button and leaving the others stale is a lie about which level the
+            // other sections are showing.
+            syncDifficultySelectors();
+            saveProgress();
+
             const section = btn.closest('.section').id;
             if (section === 'vocabulary') loadVocabularyWord();
             if (section === 'sentences') loadSentenceExercise();
             if (section === 'reading') loadReadingPassage();
         });
     });
+
+    syncDifficultySelectors();
 }
 
 // ============================================
@@ -1879,7 +1952,7 @@ function getComparisonBadge(current, average) {
 // Generate unlimited vocabulary words algorithmically
 function generateVocabularyWord(index, difficulty) {
     const wordTemplates = {
-        basic: {
+        foundation: {
             prefixes: ["", "un", "re", "pre", "dis"],
             roots: ["happy", "kind", "clear", "bright", "quick", "soft", "warm", "cool", "fresh", "clean", "safe", "calm", "fair", "pure", "wise", "bold", "keen", "mild", "neat", "rich"],
             suffixes: ["", "ly", "ness", "ful", "less"],
@@ -1887,20 +1960,24 @@ function generateVocabularyWord(index, difficulty) {
             nouns: ["joy", "peace", "hope", "love", "trust", "faith", "care", "help", "light", "warmth", "smile", "dream", "gift", "friend", "home", "heart", "life", "time", "day", "way"],
             verbs: ["help", "learn", "play", "work", "read", "write", "speak", "listen", "think", "know", "feel", "see", "hear", "touch", "taste", "smell", "walk", "run", "jump", "dance"]
         },
-        intermediate: {
+        everyday: {
             words: ["achieve", "believe", "create", "develop", "explore", "improve", "inspire", "motivate", "organize", "practice", "progress", "realize", "succeed", "understand", "accomplish", "contribute", "demonstrate", "encourage", "facilitate", "participate"],
             concepts: ["achievement", "belief", "creation", "development", "exploration", "improvement", "inspiration", "motivation", "organization", "practice", "progress", "realization", "success", "understanding", "accomplishment", "contribution", "demonstration", "encouragement", "facilitation", "participation"]
         },
-        medium: {
+        confident: {
             words: ["analyze", "collaborate", "demonstrate", "evaluate", "implement", "integrate", "optimize", "synthesize", "transform", "validate", "articulate", "conceptualize", "differentiate", "elaborate", "formulate", "hypothesize", "illustrate", "justify", "negotiate", "prioritize"],
             abstract: ["analysis", "collaboration", "demonstration", "evaluation", "implementation", "integration", "optimization", "synthesis", "transformation", "validation", "articulation", "conceptualization", "differentiation", "elaboration", "formulation", "hypothesis", "illustration", "justification", "negotiation", "prioritization"]
         }
     };
     
-    const templates = wordTemplates[difficulty];
+    // Fall back rather than throw: this is called with state.currentDifficulty,
+    // and a tier with no template block (a new tier authored in data.js before
+    // its generator templates exist) must degrade, not take the section down.
+    const level = wordTemplates[difficulty] ? difficulty : DEFAULT_LEVEL;
+    const templates = wordTemplates[level];
     let word, definition, example;
-    
-    if (difficulty === 'basic') {
+
+    if (level === 'foundation') {
         const wordType = index % 3; // 0=adjective, 1=noun, 2=verb
         if (wordType === 0) {
             word = templates.adjectives[index % templates.adjectives.length];
@@ -1915,7 +1992,7 @@ function generateVocabularyWord(index, difficulty) {
             definition = `An action that people do regularly`;
             example = `I ${word} every day to improve myself.`;
         }
-    } else if (difficulty === 'intermediate') {
+    } else if (level === 'everyday') {
         const wordType = index % 2;
         if (wordType === 0) {
             word = templates.words[index % templates.words.length];
@@ -2715,7 +2792,7 @@ function showSentenceHint() {
 // Generate algorithmic reading passages for unlimited content
 function generateReadingPassage(index, difficulty) {
     const passageTemplates = {
-        basic: [
+        foundation: [
             (i) => {
                 const subjects = ["The park", "My school", "Our garden", "The library", "The beach"];
                 const activities = ["is a wonderful place", "has many things", "is very special", "makes me happy", "is my favorite"];
@@ -2751,7 +2828,7 @@ function generateReadingPassage(index, difficulty) {
                 };
             }
         ],
-        intermediate: [
+        everyday: [
             (i) => {
                 const topics = ["Reading books", "Learning languages", "Helping others", "Staying healthy", "Being creative"];
                 const benefits = ["improves your mind", "opens new opportunities", "makes a difference", "keeps you strong", "develops your talents"];
@@ -2787,7 +2864,7 @@ function generateReadingPassage(index, difficulty) {
                 };
             }
         ],
-        medium: [
+        confident: [
             (i) => {
                 const concepts = ["Effective communication", "Strategic thinking", "Continuous learning", "Team collaboration", "Problem solving"];
                 const importance = ["is essential in professional environments", "drives organizational success", "ensures long-term growth", "creates competitive advantages", "leads to innovative solutions"];
@@ -2825,7 +2902,7 @@ function generateReadingPassage(index, difficulty) {
         ]
     };
     
-    const templates = passageTemplates[difficulty] || passageTemplates.basic;
+    const templates = passageTemplates[difficulty] || passageTemplates[DEFAULT_LEVEL];
     const templateIndex = index % templates.length;
     const templateFunction = templates[templateIndex];
     
@@ -3459,7 +3536,7 @@ function initializeScrambleButtons() {
 // Generate unlimited matching pairs
 function generateMatchingPairs(index, difficulty) {
     const pairPools = {
-        basic: [
+        foundation: [
             { word: "Happy", meaning: "Feeling joyful" },
             { word: "Friend", meaning: "Someone you like" },
             { word: "Learn", meaning: "Gain knowledge" },
@@ -3476,7 +3553,7 @@ function generateMatchingPairs(index, difficulty) {
             { word: "Hope", meaning: "Positive expectation" },
             { word: "Joy", meaning: "Great happiness" }
         ],
-        intermediate: [
+        everyday: [
             { word: "Achieve", meaning: "Reach a goal" },
             { word: "Challenge", meaning: "Difficult task" },
             { word: "Develop", meaning: "Grow and improve" },
@@ -3493,7 +3570,7 @@ function generateMatchingPairs(index, difficulty) {
             { word: "Confident", meaning: "Self-assured" },
             { word: "Motivate", meaning: "Inspire action" }
         ],
-        medium: [
+        confident: [
             { word: "Collaborate", meaning: "Work together" },
             { word: "Demonstrate", meaning: "Show clearly" },
             { word: "Efficient", meaning: "Productive" },
@@ -3512,7 +3589,7 @@ function generateMatchingPairs(index, difficulty) {
         ]
     };
     
-    const pool = pairPools[difficulty];
+    const pool = pairPools[difficulty] || pairPools[DEFAULT_LEVEL];
     const startIndex = (index * 5) % pool.length;
     const pairs = [];
     
@@ -3834,6 +3911,11 @@ const KeyboardNavigation = {
 
 document.addEventListener('DOMContentLoaded', () => {
     loadProgress();
+    // Explicit SRS bootstrap. srs.js also loads at parse time, but only init()
+    // guarantees the legacy-key migration has run: at parse time it depends on
+    // migrations.js having been loaded first, which is a <script> ordering
+    // assumption that breaks silently. Idempotent, so calling both is safe.
+    if (window.SRS && typeof SRS.init === 'function') SRS.init();
     initializeNavigation();
     initializeDifficultySelectors();
     initializeVocabularyButtons();

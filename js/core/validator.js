@@ -256,13 +256,20 @@ class Validator {
      * @returns {Object} Validation result
      */
     static validateProgress(progress) {
+        // Levels come from js/core/levels.js, which is the single source of truth
+        // and also knows the permanent legacy aliases. This enum used to be
+        // hardcoded to ['basic','intermediate','medium']; after the CEFR rename
+        // that list would have rejected every valid record the app writes. This
+        // class is not currently wired into the app, so that was a latent trap
+        // rather than a live bug — resolved dynamically so it cannot drift again.
+        const knownLevels = (typeof LEVEL_ALIASES !== 'undefined' && LEVEL_ALIASES)
+            ? Object.keys(LEVEL_ALIASES)
+            : null;
         const schema = {
             currentSection: { type: 'string', required: true },
-            currentDifficulty: { 
-                type: 'string', 
-                required: true, 
-                enum: ['basic', 'intermediate', 'medium'] 
-            },
+            currentDifficulty: knownLevels
+                ? { type: 'string', required: true, enum: knownLevels }
+                : { type: 'string', required: true },
             currentWordIndex: { type: 'number', required: true, min: 0 },
             currentSentenceIndex: { type: 'number', required: true, min: 0 },
             currentPassageIndex: { type: 'number', required: true, min: 0 },

@@ -1,14 +1,21 @@
 /**
  * SRS — the spaced-repetition scheduler.
  *
- * These tests pin CURRENT behaviour, including the three couplings that Phase 4
- * will deliberately change (the `.word`-only key, the 6-field payload
- * whitelist, and the `data.quiz` filter in getDueWords). Where a test documents
- * a known defect rather than desired behaviour it says so, so that when Phase 4
- * flips it the failure reads as "expected change", not "regression".
+ * Phase 4 has now landed the three couplings this file used to pin as KNOWN
+ * DEFECTS: records are keyed `type:ref` (`vocab:happy`) instead of by bare word,
+ * the payload whitelist is the per-type PROJECTORS registry, and the hardcoded
+ * `data.quiz` filter is the per-type RENDERABLE predicate. The assertions that
+ * documented those defects have been flipped and are marked "was KNOWN DEFECT"
+ * so the change reads as intentional.
+ *
+ * Still pinned as a KNOWN DIVERGENCE: the interval ladder (1, 3, 8, 22 rather
+ * than the documented 1, 3, 7, 16, 35). That is a forward-only behaviour change
+ * with no data rewrite behind it, so it is deliberately NOT part of the
+ * migration wave.
  */
 
 const SRS = require('../../js/core/srs.js');
+const Migrations = require('../../js/core/migrations.js');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW = 1700000000000;   // fixed clock; Date.now() would make tests flaky
@@ -23,6 +30,7 @@ const word = (over = {}) => Object.assign({
 
 beforeEach(() => {
     SRS.records = {};
+    SRS._migrated = true;   // load() is exercised explicitly, not implicitly
     SRS._now = () => NOW;
 });
 
@@ -35,6 +43,15 @@ describe('_key', () => {
     it('returns empty string for nullish input', () => {
         expect(SRS._key(null)).toBe('');
         expect(SRS._key(undefined)).toBe('');
+    });
+
+    it('agrees with the migration about what key a word gets', () => {
+        // If these two ever diverge, the migration writes records the runtime
+        // cannot find — a learner's history present in storage and invisible.
+        ['Happy', '  ACHIEVE ', 'make a decision', 'iː-ɪ'].forEach(ref => {
+            expect(SRS._key(ref)).toBe(Migrations.srsRef(ref));
+            expect(SRS._typedKey('vocab', ref)).toBe(Migrations.srsTypedKey('vocab', ref));
+        });
     });
 });
 
@@ -96,8 +113,16 @@ describe('schedule — identity and payload', () => {
     it('treats different casings as the same item', () => {
         SRS.schedule(word({ word: 'Happy' }), true);
         SRS.schedule(word({ word: 'happy' }), true);
-        expect(Object.keys(SRS.records)).toEqual(['happy']);
-        expect(SRS.records.happy.reps).toBe(2);
+        expect(Object.keys(SRS.records)).toEqual(['vocab:happy']);
+        expect(SRS.records['vocab:happy'].reps).toBe(2);
+    });
+
+    it('keys records by type:ref (US-302)', () => {
+        const rec = SRS.schedule(word(), true);
+        expect(Object.keys(SRS.records)).toEqual(['vocab:happy']);
+        expect(rec.key).toBe('vocab:happy');
+        expect(rec.type).toBe('vocab');
+        expect(rec.ref).toBe('happy');
     });
 
     it('accepts a bare string but then stores no payload', () => {
@@ -109,26 +134,96 @@ describe('schedule — identity and payload', () => {
     it('rejects an unkeyable item', () => {
         expect(SRS.schedule(null, true)).toBeNull();
         expect(SRS.schedule('', true)).toBeNull();
+        expect(SRS.schedule('   ', true)).toBeNull();
+        expect(SRS.schedule({}, true)).toBeNull();
     });
 
-    it('stores only the six whitelisted payload fields', () => {
+    it('stores only the fields PROJECTORS declares for the type', () => {
         const rec = SRS.schedule(word({ collocations: ['very happy'], register: 'neutral' }), true);
         expect(Object.keys(rec.data).sort())
             .toEqual(['definition', 'difficulty', 'example', 'pronunciation', 'quiz', 'word']);
-        // KNOWN DEFECT: authored fields are silently dropped. Phase 4 replaces
-        // the whitelist with a per-type projector registry.
+        // Unchanged from the old inline whitelist ON PURPOSE, so this migration
+        // moves no vocabulary bytes. Adding a vocabulary field now means adding
+        // it to SRS.PROJECTORS.vocab — see docs/CONTENT_AUTHORING_GUIDE.md.
+        expect(SRS.PROJECTORS.vocab).toEqual(
+            ['word', 'pronunciation', 'definition', 'example', 'quiz', 'difficulty']);
         expect(rec.data.collocations).toBeUndefined();
         expect(rec.data.register).toBeUndefined();
     });
 
-    it('collides every non-word object onto one record', () => {
-        // KNOWN DEFECT (srs.js:76): `wordObj.word || wordObj` falls through to
-        // the object itself, which String()s to "[object object]". This is why
-        // grammar points and phoneme pairs cannot use the scheduler today, and
-        // it is the coupling Phase 4 fixes with typed keys.
-        SRS.schedule({ id: 'present-perfect', practice: [] }, true);
-        SRS.schedule({ id: 'articles', practice: [] }, true);
-        expect(Object.keys(SRS.records)).toEqual(['[object object]']);
+    it('refuses an object it cannot identify instead of colliding it', () => {
+        // was KNOWN DEFECT (srs.js:76): `wordObj.word || wordObj` fell through to
+        // the object itself, which String()s to "[object object]", so every
+        // grammar point and phoneme pair shared ONE record. Refusing is the
+        // honest alternative — a caller with a real item passes srsType/srsRef.
+        expect(SRS.schedule({ id: 'present-perfect', practice: [] }, true)).toBeNull();
+        expect(SRS.schedule({ id: 'articles', practice: [] }, true)).toBeNull();
+        expect(SRS.records['[object object]']).toBeUndefined();
+        expect(Object.keys(SRS.records)).toEqual([]);
+    });
+
+    it('adopts a pre-migration bare key instead of forking the schedule', () => {
+        // Safety net for a record that reached memory without going through
+        // load(): writing to `vocab:happy` while `happy` still existed would
+        // split one item into two competing schedules.
+        SRS.records = {
+            happy: {
+                word: 'Happy', reps: 4, interval: 16, ease: 2.6, lapses: 1,
+                due: NOW - 1, lastReviewed: NOW - DAY_MS, createdAt: NOW - 40 * DAY_MS,
+                data: { word: 'Happy', quiz: { question: 'q', options: ['a'], correct: 0 } }
+            }
+        };
+        const rec = SRS.schedule(word(), true);
+        expect(Object.keys(SRS.records)).toEqual(['vocab:happy']);
+        expect(rec.reps).toBe(5);        // continued, not restarted
+        expect(rec.lapses).toBe(1);
+        expect(rec.createdAt).toBe(NOW - 40 * DAY_MS);
+    });
+});
+
+describe('typed items — grammar, phonemes, collocations (US-302 / US-303)', () => {
+    it('keys each of the four types from TEACHING_METHODOLOGY.md §3', () => {
+        SRS.scheduleItem('vocab', 'Happy', { word: 'Happy', quiz: {} }, true);
+        SRS.scheduleItem('gram', 'present perfect', { id: 'pp', explanation: 'x' }, false);
+        SRS.scheduleItem('phon', 'iː-ɪ', { id: 'iː-ɪ', pair: ['sheep', 'ship'] }, false);
+        SRS.scheduleItem('coll', 'make a decision', { chunk: 'make a decision' }, false);
+        expect(Object.keys(SRS.records).sort()).toEqual([
+            'coll:make-a-decision', 'gram:present-perfect', 'phon:iː-ɪ', 'vocab:happy'
+        ]);
+    });
+
+    it('keeps IPA intact rather than slugifying it away', () => {
+        SRS.scheduleItem('phon', 'iː-ɪ', { id: 'iː-ɪ' }, false);
+        expect(SRS.records['phon:iː-ɪ']).toBeDefined();
+        expect(SRS.getRecord('iː-ɪ', 'phon')).not.toBeNull();
+    });
+
+    it('accepts an inline { srsType, srsRef } item through plain schedule()', () => {
+        const rec = SRS.schedule({ srsType: 'gram', srsRef: 'articles', explanation: 'a/an/the' }, false);
+        expect(rec.key).toBe('gram:articles');
+        expect(rec.data.explanation).toBe('a/an/the');
+    });
+
+    it('projects non-vocab payloads per type, dropping absent fields', () => {
+        const rec = SRS.scheduleItem('gram', 'articles',
+            { id: 'articles', title: 'Articles', explanation: 'x', junk: 'dropped' }, false);
+        expect(Object.keys(rec.data).sort()).toEqual(['explanation', 'id', 'title']);
+        expect(rec.data.junk).toBeUndefined();
+    });
+
+    it('is on the same ladder as vocabulary — one scheduler, four types', () => {
+        const rec = SRS.scheduleItem('gram', 'articles', { id: 'articles' }, true);
+        expect(rec.reps).toBe(1);
+        expect(rec.interval).toBe(1);
+        expect(rec.due).toBe(NOW + DAY_MS);
+    });
+
+    it('does not read a vocabulary word\'s part-of-speech as an SRS type', () => {
+        // A rich vocabulary entry may carry `type: 'noun'` — or, worse, a value
+        // that collides with one of our four type names. Filing the word under
+        // the wrong strand would hide it from the vocabulary review queue.
+        expect(SRS.schedule(word({ type: 'noun' }), true).key).toBe('vocab:happy');
+        expect(SRS.schedule(word({ word: 'Chunk', type: 'coll' }), true).key).toBe('vocab:chunk');
     });
 });
 
@@ -159,17 +254,30 @@ describe('getDueWords', () => {
         SRS.schedule(word(), false);         // due now
         const due = SRS.getDueWords();
         due[0].word = 'MUTATED';
-        expect(SRS.records.happy.data.word).toBe('Happy');
+        expect(SRS.records['vocab:happy'].data.word).toBe('Happy');
     });
 
     it('hides records with no quiz payload', () => {
-        // KNOWN CONSEQUENCE (srs.js:139): an item scheduled without a quiz is
-        // persisted but never surfaces and is never counted. Phase 4 replaces
-        // this filter with a per-type renderability predicate.
+        // Unchanged behaviour, reached differently: the hardcoded `data.quiz`
+        // filter is now RENDERABLE.vocab, which is exactly the same predicate.
+        // A vocabulary review card IS a quiz, so a record without one cannot be
+        // drawn. Non-vocab types are no longer caught by it — see getDue().
         SRS.schedule('orphan', false);
-        expect(SRS.records.orphan).toBeDefined();
+        expect(SRS.records['vocab:orphan']).toBeDefined();
         expect(SRS.getDueWords()).toHaveLength(0);
         expect(SRS.dueCount()).toBe(0);
+    });
+
+    it('still returns a non-vocab item that has no quiz, via getDue', () => {
+        // was KNOWN CONSEQUENCE (srs.js:139): a grammar point could be scheduled
+        // but never surfaced and was never counted, because the filter demanded a
+        // quiz. RENDERABLE.gram only asks for a payload.
+        SRS.scheduleItem('gram', 'articles', { id: 'articles', explanation: 'a/an/the' }, false);
+        expect(SRS.getDue('gram')).toHaveLength(1);
+        expect(SRS.getDue('gram')[0].data.explanation).toBe('a/an/the');
+        expect(SRS.countDue('gram')).toBe(1);
+        // ...and it does not leak into the vocabulary review flow.
+        expect(SRS.getDueWords()).toHaveLength(0);
     });
 });
 
@@ -397,15 +505,110 @@ describe('schedule — self-reported outcomes (US-306 / FR-SRS-5)', () => {
 });
 
 describe('dueCount vs stats().due', () => {
-    it('disagree, because they filter differently', () => {
-        // KNOWN INCONSISTENCY: dueCount() counts due-AND-renderable while
-        // stats().due counts due-regardless, so the review badge and the
-        // dashboard can differ with no explanation to the learner. Phase 4
-        // reconciles these into getDue / countDue / dueCount / stats.
+    it('are named, and each answers exactly one question', () => {
+        // was KNOWN INCONSISTENCY: dueCount() counted due-AND-renderable while
+        // stats().due counted due-regardless, and nothing said so. The figures
+        // still differ — they have to — but each now has a name and a meaning:
+        //   dueCount()          capped + renderable  -> what the badge promises
+        //   stats().actionable  renderable, uncapped -> work that could be shown
+        //   stats().due         due, uncapped        -> work that exists at all
         SRS.schedule(word(), false);   // due now, has a quiz
         SRS.schedule('orphan', false); // due now, no quiz
         expect(SRS.dueCount()).toBe(1);
+        expect(SRS.stats().actionable).toBe(1);
         expect(SRS.stats().due).toBe(2);
+    });
+
+    it('holds dueCount() <= actionable <= due, always', () => {
+        // "Review Due (7)" followed by a 3-item session is a trust bug, forbidden
+        // by methodology §3 as much as a false "Perfect!" is.
+        for (let i = 0; i < 30; i++) SRS.schedule(word({ word: 'w' + i }), false);
+        for (let i = 0; i < 5; i++) SRS.schedule('noquiz' + i, false);
+        SRS.scheduleItem('gram', 'g1', { id: 'g1' }, false);
+        const s = SRS.stats();
+        expect(SRS.dueCount()).toBeLessThanOrEqual(s.actionable);
+        expect(s.actionable).toBeLessThanOrEqual(s.due);
+        expect(SRS.dueCount()).toBe(SRS.getDueWords().length);
+    });
+
+    it('keeps the badge equal to the session review mode actually walks', () => {
+        // dueCount() defaults to vocab because startReview() walks getDueWords(),
+        // which is vocab-only. Counting grammar here would promise a longer
+        // session than the button opens.
+        for (let i = 0; i < 25; i++) SRS.schedule(word({ word: 'w' + i }), false);
+        SRS.scheduleItem('gram', 'g1', { id: 'g1' }, false);
+        expect(SRS.dueCount()).toBe(SRS.getDueWords().length);
+        expect(SRS.dueCount()).toBe(SRS.DAILY_REVIEW_CAP);
+        expect(SRS.dueCount(null)).toBe(SRS.getDue(null).length);
+    });
+});
+
+describe('getDue — interleaving across types (US-303)', () => {
+    const seed = (type, n, base) => {
+        for (let i = 0; i < n; i++) {
+            const key = type + ':' + type[0] + i;
+            SRS.records[key] = {
+                key: key, type: type, ref: type[0] + i,
+                reps: 1, interval: 1, ease: 2.5, lapses: 0,
+                due: NOW - base + i,
+                lastReviewed: NOW - DAY_MS, createdAt: NOW - DAY_MS,
+                data: type === 'vocab'
+                    ? { word: type[0] + i, quiz: { question: 'q', options: ['a'], correct: 0 } }
+                    : { id: type[0] + i }
+            };
+        }
+    };
+
+    it('does not let vocabulary starve the other strands', () => {
+        // A global oldest-first sort then slice(0,20) would fill all 20 slots with
+        // vocabulary, defeating CURRICULUM.md §3 ("every session touches at least
+        // three strands"). Round-robin instead.
+        SRS.records = {};
+        seed('vocab', 30, 100000);   // much more overdue than the rest
+        seed('gram', 5, 10);
+        const types = SRS.getDue(null).map(i => i.type);
+        expect(types).toHaveLength(SRS.DAILY_REVIEW_CAP);
+        expect(types.filter(t => t === 'gram')).toHaveLength(5);
+        expect(types.slice(0, 4)).toEqual(['vocab', 'gram', 'vocab', 'gram']);
+    });
+
+    it('keeps strict oldest-due-first order inside each strand', () => {
+        SRS.records = {};
+        seed('gram', 4, 1000);
+        expect(SRS.getDue('gram').map(i => i.ref)).toEqual(['g0', 'g1', 'g2', 'g3']);
+    });
+
+    it('respects the cap across types, not per type', () => {
+        SRS.records = {};
+        seed('vocab', 30, 100000);
+        seed('gram', 30, 50000);
+        expect(SRS.getDue(null)).toHaveLength(SRS.DAILY_REVIEW_CAP);
+        expect(SRS.getDue(null, { limit: 7 })).toHaveLength(7);
+        expect(SRS.getDue(null, { limit: 0 })).toHaveLength(0);
+    });
+
+    it('writes nothing — deferral stays read-only for typed items too', () => {
+        SRS.records = {};
+        seed('vocab', 25, 100000);
+        seed('phon', 25, 100000);
+        const before = JSON.stringify(SRS.records);
+        SRS.getDue(null);
+        SRS.getDue('phon');
+        SRS.countDue();
+        SRS.stats();
+        expect(JSON.stringify(SRS.records)).toBe(before);
+    });
+
+    it('fails closed on a record whose type this build does not know', () => {
+        // A record written by a newer release must not be poured into a card
+        // this build has no idea how to draw.
+        SRS.records = {
+            'mistake:xyz': { key: 'mistake:xyz', type: 'mistake', due: NOW - 1, data: { anything: 1 } }
+        };
+        expect(SRS.getDue(null)).toHaveLength(0);
+        expect(SRS.countDue()).toBe(0);
+        expect(SRS.stats().due).toBe(1);          // still counted honestly
+        expect(SRS.stats().actionable).toBe(0);
     });
 });
 
@@ -420,20 +623,138 @@ describe('stats', () => {
         expect(s.learned).toBe(1);
         expect(s.lapses).toBe(1);
     });
+
+    it('scopes to one type when asked', () => {
+        SRS.schedule(word(), true);
+        SRS.scheduleItem('gram', 'articles', { id: 'articles' }, false);
+        expect(SRS.stats('vocab').total).toBe(1);
+        expect(SRS.stats('gram').total).toBe(1);
+        expect(SRS.stats('gram').lapses).toBe(1);
+        expect(SRS.stats('vocab').lapses).toBe(0);
+        expect(SRS.stats().total).toBe(2);
+    });
 });
 
-describe('persistence', () => {
+describe('persistence and the legacy-key migration (US-302)', () => {
+    // A record exactly as the pre-typed-key code wrote it: bare lowercase key,
+    // legacy level name inside the payload, full scheduling state.
+    const legacyStored = () => ({
+        happy: {
+            word: 'Happy', reps: 3, interval: 8, ease: 2.8, lapses: 1,
+            due: NOW - 5000, lastReviewed: NOW - 8 * DAY_MS, createdAt: NOW - 30 * DAY_MS,
+            data: {
+                word: 'Happy', pronunciation: '/ˈhæpi/', definition: 'Feeling pleasure',
+                example: 'She was happy.',
+                quiz: { question: 'q', options: ['a', 'b'], correct: 1 },
+                difficulty: 'medium'
+            }
+        },
+        orphan: {
+            word: 'Orphan', reps: 0, interval: 0, ease: 1.9, lapses: 4,
+            due: NOW - 60000, lastReviewed: NOW - 3 * DAY_MS, createdAt: NOW - 10 * DAY_MS,
+            selfReported: true, selfReports: 2, lastSelfReported: NOW - 3 * DAY_MS
+        }
+    });
+
+    const loadFresh = () => {
+        SRS.records = {};
+        SRS._migrated = false;
+        SRS.load();
+    };
+
     it('round-trips through localStorage', () => {
         SRS.schedule(word(), true);
+        loadFresh();
+        expect(SRS.records['vocab:happy'].reps).toBe(1);
+    });
+
+    it('migrates legacy bare-word keys on load, losing nothing', () => {
+        const before = legacyStored();
+        localStorage.setItem('srsData', JSON.stringify(before));
+        loadFresh();
+
+        expect(Object.keys(SRS.records).sort()).toEqual(['vocab:happy', 'vocab:orphan']);
+        ['reps', 'interval', 'ease', 'lapses', 'due', 'lastReviewed', 'createdAt']
+            .forEach(f => expect(SRS.records['vocab:happy'][f]).toBe(before.happy[f]));
+        expect(SRS.records['vocab:orphan'].selfReports).toBe(2);
+        expect(SRS.records['vocab:orphan'].lapses).toBe(4);
+    });
+
+    it('renames the level cached in the payload while it is there', () => {
+        localStorage.setItem('srsData', JSON.stringify(legacyStored()));
+        loadFresh();
+        expect(SRS.records['vocab:happy'].data.difficulty).toBe('confident');
+    });
+
+    it('keeps the record findable by the word the app still holds', () => {
+        localStorage.setItem('srsData', JSON.stringify(legacyStored()));
+        loadFresh();
+        expect(SRS.getRecord('happy').reps).toBe(3);
+        expect(SRS.getRecord('Happy').reps).toBe(3);
+        expect(SRS.getRecord('vocab:happy').reps).toBe(3);
+        expect(SRS.isSelfReported('orphan')).toBe(true);
+    });
+
+    it('keeps the review queue working across the rename', () => {
+        localStorage.setItem('srsData', JSON.stringify(legacyStored()));
+        loadFresh();
+        expect(SRS.getDueWords().map(w => w.word)).toEqual(['Happy']);  // orphan has no payload
+        expect(SRS.dueCount()).toBe(1);
+        expect(SRS.stats().due).toBe(2);          // both are due; one is not showable
+    });
+
+    it('persists the migration once and is then byte-identical', () => {
+        localStorage.setItem('srsData', JSON.stringify(legacyStored()));
+        loadFresh();
+        const first = localStorage.getItem('srsData');
+        expect(first).toContain('vocab:happy');
+
+        loadFresh();
+        expect(localStorage.getItem('srsData')).toBe(first);
+        loadFresh();
+        expect(localStorage.getItem('srsData')).toBe(first);
+    });
+
+    it('backs the pristine store up exactly once', () => {
+        const raw = JSON.stringify(legacyStored());
+        localStorage.setItem('srsData', raw);
+        loadFresh();
+        expect(localStorage.getItem('srsData.bak.v1')).toBe(raw);
+        loadFresh();
+        expect(localStorage.getItem('srsData.bak.v1')).toBe(raw);   // not clobbered
+    });
+
+    it('leaves an already-migrated store completely untouched', () => {
+        SRS.schedule(word(), true);
+        const bytes = localStorage.getItem('srsData');
+        loadFresh();
+        expect(localStorage.getItem('srsData')).toBe(bytes);
+        expect(localStorage.getItem('srsData.bak.v1')).toBeNull();
+    });
+
+    it('init() is idempotent and does not clobber migrated memory', () => {
+        localStorage.setItem('srsData', JSON.stringify(legacyStored()));
         SRS.records = {};
-        SRS.load();
-        expect(SRS.records.happy.reps).toBe(1);
+        SRS._migrated = false;
+        SRS.init();
+        SRS.schedule(word({ word: 'later' }), true);
+        SRS.init();                                    // must not reload over it
+        expect(SRS.records['vocab:later']).toBeDefined();
+        expect(SRS.records['vocab:happy']).toBeDefined();
     });
 
     it('starts clean on corrupt stored JSON rather than throwing', () => {
         localStorage.setItem('srsData', '{not json');
-        expect(() => SRS.load()).not.toThrow();
+        expect(() => loadFresh()).not.toThrow();
         expect(SRS.records).toEqual({});
+    });
+
+    it('starts clean on any non-map stored value', () => {
+        ['"a string"', '0', '-1', 'null', 'true', '[]', '[1,2]'].forEach(raw => {
+            localStorage.setItem('srsData', raw);
+            expect(() => loadFresh()).not.toThrow();
+            expect(SRS.records).toEqual({});
+        });
     });
 
     it('reset clears memory and storage', () => {

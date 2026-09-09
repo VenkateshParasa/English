@@ -139,9 +139,16 @@
         <section id="vocabulary" class="section" role="region" aria-labelledby="vocabulary-title">
             <h2 id="vocabulary-title">📚 Daily Vocabulary Practice</h2>
             <div class="difficulty-selector" role="radiogroup" aria-label="Select difficulty level">
-                <button class="diff-btn active" data-level="basic" role="radio" aria-checked="true" aria-label="Basic difficulty">Basic</button>
-                <button class="diff-btn" data-level="intermediate" role="radio" aria-checked="false" aria-label="Intermediate difficulty">Intermediate</button>
-                <button class="diff-btn" data-level="medium" role="radio" aria-checked="false" aria-label="Medium difficulty">Medium</button>
+                <!-- The `active` state and the `disabled` state of these buttons are
+                     painted by syncDifficultySelectors() (app.js) from
+                     state.currentDifficulty, which is now restored from storage.
+                     Do not hardcode `active` here: it would label whatever tier
+                     the learner last chose as Foundation on every reload.
+                     Labels come from js/core/levels.js LEVELS[].label. -->
+                <button class="diff-btn" data-level="foundation" role="radio" aria-checked="false" aria-label="Foundation level, CEFR A1 to A2">Foundation</button>
+                <button class="diff-btn" data-level="everyday" role="radio" aria-checked="false" aria-label="Everyday level, CEFR B1">Everyday</button>
+                <button class="diff-btn" data-level="confident" role="radio" aria-checked="false" aria-label="Confident level, CEFR B2">Confident</button>
+                <button class="diff-btn" data-level="fluent" role="radio" aria-checked="false" disabled aria-disabled="true" aria-label="Fluent level, CEFR C1 — not available yet">Fluent <span class="level-soon">(soon)</span></button>
             </div>
             <div class="srs-review-bar" role="region" aria-label="Spaced repetition review">
                 <button class="btn-primary" id="startReview" aria-label="Start reviewing words that are due">
@@ -177,9 +184,16 @@
         <section id="sentences" class="section" role="region" aria-labelledby="sentences-title">
             <h2 id="sentences-title">✍️ Sentence Formation Practice</h2>
             <div class="difficulty-selector" role="radiogroup" aria-label="Select difficulty level">
-                <button class="diff-btn active" data-level="basic" role="radio" aria-checked="true" aria-label="Basic difficulty">Basic</button>
-                <button class="diff-btn" data-level="intermediate" role="radio" aria-checked="false" aria-label="Intermediate difficulty">Intermediate</button>
-                <button class="diff-btn" data-level="medium" role="radio" aria-checked="false" aria-label="Medium difficulty">Medium</button>
+                <!-- The `active` state and the `disabled` state of these buttons are
+                     painted by syncDifficultySelectors() (app.js) from
+                     state.currentDifficulty, which is now restored from storage.
+                     Do not hardcode `active` here: it would label whatever tier
+                     the learner last chose as Foundation on every reload.
+                     Labels come from js/core/levels.js LEVELS[].label. -->
+                <button class="diff-btn" data-level="foundation" role="radio" aria-checked="false" aria-label="Foundation level, CEFR A1 to A2">Foundation</button>
+                <button class="diff-btn" data-level="everyday" role="radio" aria-checked="false" aria-label="Everyday level, CEFR B1">Everyday</button>
+                <button class="diff-btn" data-level="confident" role="radio" aria-checked="false" aria-label="Confident level, CEFR B2">Confident</button>
+                <button class="diff-btn" data-level="fluent" role="radio" aria-checked="false" disabled aria-disabled="true" aria-label="Fluent level, CEFR C1 — not available yet">Fluent <span class="level-soon">(soon)</span></button>
             </div>
             <div class="sentence-container">
                 <!-- Drag and Drop Exercise -->
@@ -232,9 +246,16 @@
         <section id="reading" class="section" role="region" aria-labelledby="reading-title">
             <h2 id="reading-title">📖 Reading & Dictation Practice</h2>
             <div class="difficulty-selector" role="radiogroup" aria-label="Select difficulty level">
-                <button class="diff-btn active" data-level="basic" role="radio" aria-checked="true" aria-label="Basic difficulty">Basic</button>
-                <button class="diff-btn" data-level="intermediate" role="radio" aria-checked="false" aria-label="Intermediate difficulty">Intermediate</button>
-                <button class="diff-btn" data-level="medium" role="radio" aria-checked="false" aria-label="Medium difficulty">Medium</button>
+                <!-- The `active` state and the `disabled` state of these buttons are
+                     painted by syncDifficultySelectors() (app.js) from
+                     state.currentDifficulty, which is now restored from storage.
+                     Do not hardcode `active` here: it would label whatever tier
+                     the learner last chose as Foundation on every reload.
+                     Labels come from js/core/levels.js LEVELS[].label. -->
+                <button class="diff-btn" data-level="foundation" role="radio" aria-checked="false" aria-label="Foundation level, CEFR A1 to A2">Foundation</button>
+                <button class="diff-btn" data-level="everyday" role="radio" aria-checked="false" aria-label="Everyday level, CEFR B1">Everyday</button>
+                <button class="diff-btn" data-level="confident" role="radio" aria-checked="false" aria-label="Confident level, CEFR B2">Confident</button>
+                <button class="diff-btn" data-level="fluent" role="radio" aria-checked="false" disabled aria-disabled="true" aria-label="Fluent level, CEFR C1 — not available yet">Fluent <span class="level-soon">(soon)</span></button>
             </div>
             <div class="reading-container">
                 <div class="reading-passage" role="article" aria-labelledby="passageTitle">
@@ -378,8 +399,11 @@
     <script src="js/core/levels.js"></script>
     <script src="js/core/migrations.js"></script>
     <script src="js/core/srs.js"></script>
+    <script src="js/core/mistakes.js"></script><!-- US-305 mistake log by error type (FR-SRS-3). No dependencies; own localStorage key `mistakeLog`. -->
     <!-- Depends on migrations.js (schemaVersion, backupOnce) and srs.js (reset). -->
     <script src="js/core/portability.js"></script>
+    <!-- No dependencies: IndexedDB blob store for recordings (FR-DATA-6). -->
+    <script src="js/core/blobstore.js"></script>
     <script src="js/theme-toggle.js"></script>
     <script src="js/ui-enhancements.js"></script>
 
