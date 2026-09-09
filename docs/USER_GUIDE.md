@@ -7,12 +7,25 @@ Welcome to the English Learning Portal! This guide will help you make the most o
 ### First Time Setup
 
 1. **Open the Application**
-   - Simply open [`index.html`](index.html:1) in your web browser
-   - No installation or registration required!
 
-2. **Grant Permissions** (Optional but Recommended)
-   - **Microphone**: For speech recognition and recording features
-   - **Notifications**: For learning reminders (if implemented)
+   The portal needs to be served by a web server — over `http://` or `https://`. If you double-click [`index.html`](index.html:1) and it opens as `file:///…`, the app icons and the offline support will not load. It is an easy mistake to make, and nothing is wrong with your setup.
+
+   From the project folder, run:
+
+   ```bash
+   npm install   # once — this fetches the small local web server
+   npm start     # serves the portal on http://localhost:3000 and opens your browser
+   ```
+
+   If you would rather it did not open a browser tab for you, `npm run serve` does the same thing on http://localhost:8080. Either one is fine.
+
+   You can also just visit a deployed copy of the site, if someone has hosted it for you.
+
+   No account and no registration are needed — only the local server.
+
+2. **Grant Microphone Permission** (Optional but Recommended)
+   - Your browser will ask the first time you use the recording or speech-recognition exercises
+   - Those two features need a secure page: `https://`, or `http://localhost`, which is what `npm start` gives you
 
 3. **Start Learning**
    - Your progress is automatically saved
@@ -23,7 +36,7 @@ Welcome to the English Learning Portal! This guide will help you make the most o
 The Dashboard is your learning hub showing:
 
 ### Statistics Cards
-- **📚 Words Learned**: Total vocabulary words you've mastered
+- **📚 Words Learned**: Vocabulary words you've worked through
 - **✍️ Sentences Completed**: Number of sentence exercises finished
 - **📖 Reading Exercises**: Reading passages you've completed
 - **🧩 Puzzles Solved**: Total puzzles you've successfully solved
@@ -42,20 +55,22 @@ Shows your overall completion percentage for today's goals.
 ### Statistics Sections
 
 #### 📅 Today's Progress
-- Shows what you've accomplished today
-- Compares with your daily averages
+- Shows today's count for Words, Sentences, Reading, Listening and Puzzles
+- Compares each one with your daily average
 - Green badges (⬆️) mean you're above average
 - Orange badges (⬇️) mean below average
+- ➡️ means you're right at your average
+- In your first days there is no average yet, so no badge appears — that's expected
 
 #### 📊 Overall Statistics
 - Total days of learning
 - Current streak (consecutive days)
 - Best streak achieved
-- Lifetime totals
+- Total words
+- Total exercises (sentences, reading, listening and puzzles added together)
 
 #### 📈 Daily Averages
-- Average words learned per day
-- Average exercises completed
+- Your per-day average for each of the five activities
 - Helps you set realistic goals
 
 ## 📚 Vocabulary Section
@@ -69,7 +84,7 @@ Shows your overall completion percentage for today's goals.
 
 2. **Study the Word Card**
    - **Word**: The vocabulary word in large text
-   - **Pronunciation**: Phonetic spelling (e.g., /ˈhæpi/)
+   - **Pronunciation**: Phonetic spelling (e.g., /ˈhæpi/) — this line is hidden for the extra practice words, which don't have one
    - **Definition**: Clear explanation of meaning
    - **Example**: Word used in context
 
@@ -89,6 +104,18 @@ Shows your overall completion percentage for today's goals.
    - Use "Next →" to move to the next word
    - Use "← Previous" to review earlier words
 
+### Reviewing Words You've Seen
+
+Above the word card there's a "🔁 Review Due (N)" button. The number is how many of your earlier words are due for another look right now.
+
+- Click it to work through just those words, one at a time
+- Get one right and it leaves the queue; get it wrong and it comes back later in the same session, so you get another go
+- The count beside the button tells you how many are left
+- "✕ Exit Review" returns you to normal practice at any point
+- If the count is zero there's nothing to review yet — learn a few new words and the queue will fill up on its own
+
+This is the spaced repetition part, and it works offline.
+
 ### Tips for Success
 - 💡 Read the example sentence carefully
 - 💡 Try to use the word in your own sentence
@@ -99,7 +126,7 @@ Shows your overall completion percentage for today's goals.
 
 ### Exercise Types
 
-The system randomly selects from four exercise types:
+The exercises cycle through four types in turn, so you'll meet each one regularly:
 
 #### 1. Drag and Drop
 - **Goal**: Arrange words in correct order
@@ -203,6 +230,7 @@ After 3 incorrect attempts:
    - Click "🔄 Replay Recording"
    - Compare with the original
    - Practice until satisfied
+   - Playback is reliable in Chrome and Edge. In Safari the recording is saved but usually won't play back, so use Chrome or Edge for this exercise.
 
 ### Speech Recognition Practice
 
@@ -211,12 +239,13 @@ After 3 incorrect attempts:
 
 2. **Click "🎤 Start Speaking"**
    - Say the word clearly
-   - The system recognizes your speech
+   - The system listens and writes down what it heard
 
 3. **Get Feedback**
-   - See what the system heard
-   - ✓ Perfect! = Correct recognition
-   - Try again if not recognized correctly
+   - You'll see "The recogniser heard: …" with the words it picked up
+   - If it caught everything, it says it understood every word and the exercise is marked complete
+   - Otherwise it tells you how many words it missed and underlines them, so you can try just those again
+   - Remember this is the recogniser's opinion, not a verdict on your English — background noise and accents both affect it
 
 ### Tips for Better Recognition
 - 💡 Speak clearly and at normal pace
@@ -243,21 +272,20 @@ After 3 incorrect attempts:
 - 💡 Check all directions
 - 💡 Start with shorter words
 
-### Crossword Puzzle
+### Mini Crossword
 
-**Goal**: Fill the crossword grid using clues
+The Mini Crossword is the newest and least finished of the puzzles. Right now it shows one fixed 8×8 grid with the same two clues every time, and "Check Answers" credits a puzzle towards today's goal without marking your letters right or wrong.
 
 **How to Play**:
-1. Read clues for "Across" and "Down"
+1. Read the clues under "Across" and "Down"
 2. Click a cell to start typing
 3. Type one letter per cell
 4. Use Tab to move between cells
-5. Click "Check Answers" when complete
+5. Click "Check Answers" when you're done, or "New Puzzle" to clear the grid
 
 **Tips**:
-- 💡 Start with clues you know
-- 💡 Use crossing letters as hints
-- 💡 Think about word length
+- 💡 Because it doesn't grade your letters yet, treat it as a warm-up rather than a test
+- 💡 If you want a puzzle that tells you whether you're right, Word Search, Word Scramble and Word Matching all do
 
 ### Word Scramble
 
@@ -266,14 +294,14 @@ After 3 incorrect attempts:
 **How to Play**:
 1. View the scrambled letters
 2. Type your answer in the input box
-3. Click "Show Hint" if stuck
-4. Click "Check" to verify
+3. Click "Check" to verify
+4. Click "Show Answer" if you're stuck — this reveals the complete word
 5. Click "Next Word" for a new challenge
 
 **Tips**:
 - 💡 Look for common letter patterns
 - 💡 Try different combinations
-- 💡 Use the hint after trying yourself
+- 💡 "Show Answer" gives you the whole word, not a clue — so try a few guesses of your own first, then read the answer, then come back to that word later with "Next Word"
 
 ### Word Matching
 
@@ -317,18 +345,20 @@ After 3 incorrect attempts:
 
 ### Setting Personal Goals
 
+The app keeps your counts and your streak. Choosing what to aim for is up to you — here is a shape that works for many learners.
+
 1. **Short-term** (Weekly)
-   - Learn 50 new words
+   - Learn 20 new words
    - Complete 20 sentence exercises
-   - Finish 5 reading passages
+   - Finish 3 reading passages
 
 2. **Medium-term** (Monthly)
-   - Maintain 30-day streak
-   - Master one difficulty level
-   - Improve average daily scores
+   - Maintain a 30-day streak
+   - Spend a couple of weeks on one difficulty level before moving up
+   - Improve your daily averages
 
 3. **Long-term** (3-6 months)
-   - Complete all difficulty levels
+   - Work comfortably at the Medium level
    - Achieve consistent high scores
    - Feel confident in English communication
 
@@ -370,7 +400,7 @@ After 3 incorrect attempts:
 - ✅ Grant microphone permissions
 - ✅ Check system microphone settings
 - ✅ Test microphone in other apps
-- ✅ Use HTTPS connection (required for speech recognition)
+- ✅ Use an `https://` address, or `http://localhost` (needed for microphone and speech recognition)
 
 ### Progress Not Saving
 - ✅ Enable cookies and local storage
@@ -379,10 +409,10 @@ After 3 incorrect attempts:
 - ✅ Try a different browser
 
 ### Exercises Not Loading
-- ✅ Check internet connection (for API features)
+- ✅ Check that you opened the portal from a `http://` or `https://` address, not as a `file:///…` path
 - ✅ Refresh the page
 - ✅ Clear browser cache
-- ✅ Offline mode activates automatically if needed
+- ✅ Check internet connection (word definitions are looked up online for the hand-written vocabulary; the app falls back to its built-in text if the lookup fails)
 
 ## 💡 Best Practices
 
@@ -403,25 +433,29 @@ After 3 incorrect attempts:
 - Don't ignore pronunciation
 - Don't forget to review mistakes
 
-## 🎯 Achievement Milestones
+## 🎯 Milestones to Aim For
 
-### Beginner (Week 1-2)
-- ✨ Complete 50 vocabulary words
+A note first, so nothing catches you out: the portal has no badges, trophies or achievement screen. What it does keep for you is the counters and streaks on the Dashboard — words, sentences, reading, listening, puzzles, current streak and best streak. Nothing below is awarded or unlocked by the app; these are simply sensible targets you can check against those counters yourself.
+
+It also helps to know how much material there is. The hand-written content is 61 vocabulary words, 15 sentence exercises, 5 reading passages, 30 listening exercises, and 30 items each for the scramble and matching puzzles. Vocabulary, sentences, reading, listening and word matching all carry on past the end of that set — the app builds further practice from patterns, so you will never hit a wall, though you will start to notice familiar shapes. The scramble and word search draw from their fixed sets and simply come round again. Either way, repetition is not a dead end: it is how the words stick.
+
+### First couple of weeks
+- ✨ Work through 20 vocabulary words
 - ✨ Finish 20 sentence exercises
-- ✨ Read 10 passages
-- ✨ Maintain 7-day streak
+- ✨ Read 5 passages
+- ✨ Reach a 7-day streak
 
-### Intermediate (Month 1-2)
-- ⭐ Complete 200 vocabulary words
+### First couple of months
+- ⭐ Work through all 61 hand-written vocabulary words
 - ⭐ Finish 100 sentence exercises
-- ⭐ Read 50 passages
-- ⭐ Maintain 30-day streak
+- ⭐ Re-read each passage until you can answer every question without looking back
+- ⭐ Reach a 30-day streak
 
-### Advanced (Month 3+)
-- 🏆 Master all difficulty levels
-- 🏆 Complete 500+ exercises
-- 🏆 Maintain 90-day streak
-- 🏆 Achieve consistent high scores
+### Beyond that
+- 🏆 Practise comfortably at the Medium level in every section
+- 🏆 Pass 500 exercises on your Total Exercises counter
+- 🏆 Reach a 90-day streak
+- 🏆 Notice your daily averages holding steady rather than spiking
 
 ## 📞 Getting Help
 
@@ -434,7 +468,7 @@ A: Aim for 30-45 minutes split into 2-3 sessions.
 A: Drop down to an easier level and build confidence first.
 
 **Q: Can I use this offline?**
-A: Yes! Core features work offline with local data.
+A: Yes, once you've loaded the portal at least once from a proper web address — `npm start`, `npm run serve`, or a hosted copy. The offline support installs itself on that first visit, and after that the lessons, puzzles and your saved progress all work with no connection. It cannot install if you've opened the file directly as `file:///…`, so that route stays online-only.
 
 **Q: How is my progress calculated?**
 A: Based on completed exercises, correct answers, and daily consistency.
