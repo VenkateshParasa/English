@@ -110,7 +110,7 @@ behaviours that teach errors.
 | ✅ **US-101** | Fix vocabulary quiz grading — **done 2026-09-08** | `FR-VOC-1` | 2 | M |
 | ✅ **US-102** | Delete fabricated IPA — **done 2026-09-09** | `FR-VOC-3` | 1 | M |
 | ✅ **US-103** | **Word-level read-aloud diff** replacing the substring match, LCS-aligned — **done 2026-09-09** | `FR-SPK-1` | 5 | M |
-| **US-104** | Stable, retryable speaking target | `FR-SPK-2` | 2 | M |
+| ✅ **US-104** | Stable, retryable speaking target — **done 2026-09-09** | `FR-SPK-2` | 2 | M |
 | ✅ **US-105** | Real quiz distractors — **done 2026-09-08** | `FR-VOC-2` | 2 | M |
 | ✅ **US-106** | Differentiated speech-recognition errors — **done 2026-09-09** | `NFR-3` | 1 | M |
 | ✅ **US-107** | Remove the unverified WCAG compliance claim — **done 2026-09-09** | `NFR-11` | 1 | M |
@@ -120,15 +120,21 @@ behaviours that teach errors.
 | ✅ **US-111** | Guard the quiz counters against re-clicking a correct answer — **done 2026-09-09** | `FR-VOC-1` | 1 | M |
 | ✅ **US-112** | Stop dictation double-counting the reading passage — **done 2026-09-09** | `FR-DATA-3` | 1 | M |
 | ✅ **US-113** | Correct `docs/README.md`'s false testing claims — **done 2026-09-09** | `NFR-16` | 1 | M |
-| **US-114** | `exercise.fillBlank` can be `undefined`, so `case 'fillblank'` breaks. Now reproducible at `index % 4 === 1` rather than intermittent | `FR-RDW-4` | 2 | M |
-| **US-115** | Scramble: repeated "Check" clicks on a correct answer each count a solve — no per-render guard exists | `FR-DATA-3` | 1 | S |
+| ✅ **US-114** | `exercise.fillBlank` crash fixed — blanks are now derived from the exercise's own words when the supplied prompt is missing or corrupt, with drag-and-drop as last resort — **done 2026-09-09** | `FR-RDW-4` | 2 | M |
+| ✅ **US-115** | Scramble solve-per-click inflation fixed via a once-per-render dataset flag — **done 2026-09-09** | `FR-DATA-3` | 1 | S |
 | **US-116** | Scramble's "Show Answer" reveals the solution and the authored `hint` field is never displayed (D4) | `FR-VOC-7` | 2 | S |
 | ✅ **US-117** | Correct `TECHNICAL_DOCUMENTATION.md` stale line refs and the nonexistent `capitalize()` (D6) — **done 2026-09-09** | — | 2 | S |
 | ✅ **US-118** | Correct `USER_GUIDE.md` promises the app cannot keep — the nonexistent achievement system, the `file://` instructions, "Show Hint" vs "Show Answer", the Safari replay caveat, and an unactionable notification-permission step — **done 2026-09-09** | — | 3 | S |
-| **US-119** | **The read-aloud target is one random vocabulary word, unrelated to the sentence played.** So "the recogniser understood every word" is trivially achievable on a 1-word target, and saying a whole sentence containing it still passes. The real fix is to make the target the sentence in `listenSentence` | `FR-SPK-1`, `FR-SPK-2` | 3 | M |
-| **US-120** | Read-aloud failure records **no SRS lapse**, though `TEACHING_METHODOLOGY.md §3` says it should reset the vocabulary item | `FR-SRS-1` | 2 | S |
-| **US-121** | `AppErrorHandler.validateInput`'s pattern `/^[a-zA-Z0-9\s.,!?'\-]+$/` rejects ordinary transcripts (curly apostrophes, `&`, accented characters) and then shows "Invalid speech input detected" — a false accusation of the learner | `NFR-3`, `BR-3` | 2 | M |
-| **US-122** | `migrations.js` **downgrades a future schema version**: a record written by a newer release is stamped back down to the current version by an older client. Recoverable via backup, but the guard belongs in the module | `FR-DATA-2` | 2 | S |
+| ✅ **US-119** | **Read-aloud target is now the sentence**, read from the same string handed to `speechAPI.speak`, so target and audio cannot drift — **done 2026-09-09** | `FR-SPK-1`, `FR-SPK-2` | 3 | M |
+| ✅ **US-120** | SRS lapse on read-aloud failure — lapses only vocabulary words the diff reports missed, and only when the recogniser matched over half the sentence — **done 2026-09-09** | `FR-SRS-1` | 2 | S |
+| ✅ **US-121** | `validateInput` no longer rejects ordinary speech; denylist + length cap replaces the allowlist, and the blaming message is gone — **done 2026-09-09** | `NFR-3`, `BR-3` | 2 | M |
+| ✅ **US-122** | `migrations.js` no longer downgrades a future schema version, and `saveProgress()` no longer re-stamps it downwards — **done 2026-09-09** | `FR-DATA-2` | 2 | S |
+| **US-124** | `generateAlgorithmicSentence` corrupts fill-blanks at the source: `correct.replace(words[mid], "___")` is a first-occurrence *substring* replace, so it blanks mid-word (`underst___ing`). 81 of 3000 swept indices were affected. US-114 neutralised the symptom downstream; this is the cause | `FR-RDW-4` | 2 | M |
+| **US-125** | `classifyError` never returns `VALIDATION`, so a validation failure produces **two** toasts — the call site's specific one plus a generic "Something went wrong" | `NFR-3` | 1 | M |
+| **US-126** | `sanitizeInput`'s entity-encoding leaks into `textContent` display, so a word containing `&` renders as `&amp;` | — | 1 | S |
+| **US-127** | `updateCompletionIndicator` builds `innerHTML` with an inline `onclick` — a live HTML sink in a file that has otherwise moved to `textContent` | `NFR-12` | 2 | S |
+| **US-128** | `USER_GUIDE.md` listening section is now stale: it still describes "Speech Recognition Practice" and saying a single word, which US-119 replaced | — | 1 | S |
+| **US-129** | Generated listening sentences ("The trees love beautiful moments") violate the meaningful-input principle — and US-119 now asks learners to **read them aloud**, which raises the stakes | `FR-CNT-4` | 2 | M |
 | **US-123** | Word Search selection never clears on a wrong guess, so leftover `.selected` cells silently poison later attempts (related to the unwinnable-puzzle defect D3) | — | 2 | S |
 
 ### Stories in full
@@ -211,11 +217,11 @@ sounds.**
   converts an intermittent bug into a visible one — but it needs a follow-up. See `US-114`.
 
 **US-108 — As Lakshmi, I want to retry an exercise in the mode I failed it in.**
-**Sprint 1 total: 44 points across 23 stories** — **14 done, 30 remaining.** It has grown
-15 → 23 → 30 → 44 as each wave of fixes exposed the next defect. That is the honest shape of
-repairing an unaudited codebase, and the growth is decelerating: Wave 1 found 10 new defects,
-Wave 2 found 4, Wave 3 found 5. **Sprint 0 is now 4 of 6 points done** — only `US-001` remains,
-and it needs network access this environment does not have.
+**Sprint 1 total: 53 points across 29 stories — 38 points done, 15 remaining.** It has grown
+15 → 23 → 30 → 44 → 53 as each wave exposed the next defect, but the growth is decelerating and
+the *character* of what remains has shifted: the early waves found things that actively misled
+learners, whereas most of what is left (US-124…US-129) is code hygiene and doc staleness.
+**Sprint 0 is 4 of 6 points done** — only `US-001` remains, and it needs network access.
 
 ---
 
@@ -517,15 +523,15 @@ one with a spike attached.
 | Sprint | Theme | Points | Cumulative |
 |---|---|---|---|
 | 0 | Unblock | 6 | 6 |
-| 1 | Honesty | 44 | 50 |
-| 2 | Data integrity | 19 | 69 |
-| 3 | Extensibility | 22 | 91 |
-| 4 | Pronunciation | 33 | 124 |
-| 5 | Grammar | 33 | 157 |
-| 6 | Speaking | 36 | 193 |
-| 7 | Listening & vocabulary | 40 | 233 |
-| 8 | Session & platform | 44 | 277 |
+| 1 | Honesty | 53 | 59 |
+| 2 | Data integrity | 19 | 78 |
+| 3 | Extensibility | 22 | 100 |
+| 4 | Pronunciation | 33 | 133 |
+| 5 | Grammar | 33 | 166 |
+| 6 | Speaking | 36 | 202 |
+| 7 | Listening & vocabulary | 40 | 242 |
+| 8 | Session & platform | 44 | 286 |
 
-**277 points total, of which 29 are done** (16 stories). At 8–12 points a week of evenings that is
+**286 points total, of which 43 are done** (23 stories). At 8–12 points a week of evenings that is
 roughly **5–7 months** for everything. Sprint 1 is the one to finish first: it is where every
 honesty defect lives.

@@ -34,16 +34,17 @@ it points at them:
 
 ## 1. Where the project stands, in one paragraph
 
-Phase 0 and all seven planning docs are **committed**. **Sprint 0 is 4 of 6 points done and
-Sprint 1 is 14 of 44**: the quiz-grading corruption, the fabricated IPA, the unearned WCAG claim,
-the random exercise mode, the inert statistics pipeline, the inflating counters, the double-counted
-reading passage, the substring speech check and the generic recognition errors are all fixed — and
-**`levels.js` and `migrations.js` are finally wired in**, so the CEFR framework and the migration
-spine now actually run rather than existing only in tests. The remaining honesty defect worth
-naming is `US-119`: the read-aloud target is still a single random vocabulary word unrelated to the
-sentence played, so "the recogniser understood every word" is trivially achievable. One blocker is
-left and it is not code: **`npm test` still cannot run** because Jest was never added to
-`devDependencies`, so nothing in three waves of changes is covered by an automated test (`US-001`).
+Phase 0 and all seven planning docs are **committed**. **Sprint 0 is 4 of 6 points and Sprint 1 is
+38 of 53.** Everything that actively misled a learner is now fixed: the quiz-grading corruption,
+the fabricated IPA, the unearned WCAG claim, the substring speech check and its "✓ Perfect!", the
+random exercise mode, the inert statistics pipeline, the inflating counters, the double-counted
+reading passage, the solve-per-click scramble, the crashing fill-blank, and the validator that
+accused learners of "invalid speech input" for saying *café*. `levels.js` and `migrations.js` now
+actually run, and **the read-aloud exercise finally reads the sentence aloud** rather than a random
+unrelated word. What remains in Sprint 1 is mostly hygiene and doc staleness (`US-124`–`US-129`),
+plus `US-110` — the crossword still credits a solve on a blank grid, and it waits on `OQ-7`. One
+blocker is unchanged and is not code: **`npm test` still cannot run** (`US-001`), so four waves of
+changes to `app.js` rest on `node --check` and hand-verification alone.
 
 ---
 
@@ -179,6 +180,35 @@ Also: read-aloud failure records no SRS lapse (`US-120`); `validateInput`'s char
 rejects ordinary transcripts with curly apostrophes or accents and then accuses the learner of
 "invalid speech input" (`US-121`); `migrations.js` downgrades a future schema version (`US-122`);
 and Word Search selection never clears on a wrong guess (`US-123`).
+
+---
+
+### 2.8 Wave 4 — the read-aloud exercise becomes real (2026-09-09)
+
+| # | Item | Evidence |
+|---|---|---|
+| ✅ | **US-119 + US-104 — the read-aloud target is now the sentence.** `getListeningSentence(index, difficulty)` produces the string once; the `startSpeech` handler reads `playListening.dataset.text` — literally what `speechAPI.speak` was handed — so the target **is** the played sentence rather than a copy that can drift | Traced across 8 indices: target matched the played sentence every time, identical across 5 consecutive re-renders. No `Math.random()` remains in the target path. The word-level diff now does real work, reporting which words of the sentence were missed |
+| ✅ | **US-120 — SRS lapse on read-aloud failure**, gated honestly: lapses only vocabulary words the diff reports missed, and only when the recogniser matched **more than half** the sentence. Below that, the evidence is about the microphone or noise, not about specific words | Asymmetric on purpose — never `schedule(word, true)`, because a recogniser match is not evidence the learner knows a word. The lapse is surfaced to the learner ("Added back to your review queue: Weather"), not silent |
+| ✅ | **US-121 — the validator stopped accusing learners.** The allowlist `/^[a-zA-Z0-9\s.,!?'\-]+$/` rejected curly apostrophes, ampersands and every accented letter, then displayed *"Invalid speech input detected"*. Replaced with a denylist of genuinely unsafe characters plus a hard 2000-char cap | Verified in node: `don't stop`, `fish & chips`, `café naïve résumé`, em-dashes, CJK and `50% of £5 @ #1` all pass; control characters and bidi overrides are stripped; `<script>` is defanged. Escaping is at the point of use — `renderSpeechDiff` is `textContent`-only |
+| ✅ | **US-122 — no more silent schema downgrade.** `migrateProgress` now leaves a future version untouched instead of stamping it down, and exposes `isFutureVersion()` | ⚠️ The agent flagged that its own fix was **incomplete**: `saveProgress()` re-stamped `SCHEMA_VERSION` unconditionally, undoing it on the next save. Closed separately — the stamp is now `Math.max(state.schemaVersion, SCHEMA_VERSION)`. Verified end to end: a v2 record survives load *and* save at 2 |
+| ✅ | **US-114 — the fill-blank crash is fixed at the point of use.** Blanks are derived from the exercise's own words (blanked **by position**, not by substring replace) when the supplied prompt is missing or corrupt; drag-and-drop is the last resort | Swept all 3000 fill-blank indices × 3 levels: **81 corrupt prompts rejected and rebuilt, 0 left unrenderable.** Determinism preserved — 5 repeat renders of indices 0-59 byte-identical |
+| ✅ | **US-115 — scramble no longer counts a solve per click.** A once-per-render `dataset.counted` flag, reset in `loadWordScramble` | Measured against `git show HEAD:app.js`: 4 clicks recorded **4** solves before, **1** after. Advancing to the next scramble still counts |
+| ✅ | 10 new assertions added to `__tests__/unit/migrations.test.js` for the future-version behaviour | 🔶 **Unrun as jest tests** — jest is still not installed. They were exercised through a throwaway `describe/it/expect` shim in plain node and all 34 blocks held, which checks the assertions' logic but not jest compatibility |
+
+**Why the guard patterns differ across sections, since it looks inconsistent:** scramble could not
+use `isExerciseCompleted` because `loadWordScramble` picks with `Math.random()` and so has no stable
+id, and `state.completedExercises` has no `scramble` bucket. It could not use a closure local
+because `initializeScrambleButtons` runs once at startup while `loadWordScramble` runs per puzzle —
+the lifetimes do not match. The dataset flag is the vocabulary quiz's once-per-render semantics,
+stored where both closures can reach it, and deliberately kept out of `state` because
+`saveProgress()` spreads `state` and would persist a transient flag.
+
+**Six new items → `US-124`–`US-129`.** The one that matters is **`US-124`**: the fill-blank
+corruption has a *source*, not just a symptom. `generateAlgorithmicSentence` does
+`correct.replace(words[mid], "___")` — a first-occurrence **substring** replace — which blanks
+mid-word (`underst___ing`). US-114 rejects and rebuilds those downstream; the generator is still
+wrong. Also found: `classifyError` never returns `VALIDATION`, so every validation failure shows
+**two** toasts, one of them a useless "Something went wrong" (`US-125`).
 
 ---
 
@@ -870,3 +900,4 @@ Decisions already taken, so they are not re-litigated later.
 | 2026-09-09 | **Wave 2 — Sprint 1 taken from 4 to 13 of 30 points.** Fixed the fabricated IPA (US-102), the unearned WCAG log (US-107), the random exercise mode (US-108), the inert statistics pipeline (US-109 — all five types now reach `updateStatistics`, eight `state.stats.*` writes removed), the inflating quiz counters (US-111), the double-counted reading passage (US-112) and the README's false testing claims (US-113). Also closed two gaps found while verifying: `updateStatistics` had **no `default` case** (silent miscounts), and **listening never counted at all** despite the switch supporting it. Four new defects surfaced by the fixes became US-114…US-117; Sprint 1 grew 23 → 30 points. Citations renumbered again (3160 → 3213 lines). `US-110` deliberately deferred pending `OQ-7`. |
 | 2026-09-09 | **CI/CD and Netlify.** Disabled the CI test job (commented out with restore steps, tracked as `US-001`) after finding the pipeline failed at *"Install dependencies"* in **all three jobs** — `npm ci` needs a committed `package-lock.json` and the lockfile is gitignored, so `deploy` was blocked too and GitHub Pages had stopped updating. Removed npm from build/deploy (static site, no runtime deps) and added a zero-dependency `node --check` syntax gate. **Found and fixed a production-only Netlify bug:** `Permissions-Policy: microphone=()` denied the microphone to all origins including self, which would have silently disabled speech recognition and voice recording on the deployed site while working on localhost. Now `microphone=(self)`. Compared against the Vite/Tailwind reference project at `~/Documents/Manual/manual-testing-app` and documented three of its patterns as **deliberately not adopted**: `base`/`publish = "dist"`, the SPA catch-all redirect, and `immutable` caching for un-hashed filenames. |
 | 2026-09-09 | **Wave 3.** Landed the word-level speech diff with LCS alignment (`US-103`, ending the substring match and "✓ Perfect!"), differentiated recognition errors (`US-106`), and finally **wired `levels.js` and `migrations.js` into the app** (`US-003`, `US-004`) — independently verified: migration idempotent and byte-identical on rerun, backup equals the pristine record, and `resolveDifficulty` is identity on the three real data keys while every degraded input still yields populated content. Corrected `USER_GUIDE.md` (`US-118`). Five new defects → `US-119`–`US-123`, the notable one being that the read-aloud target is still a single random word unrelated to the sentence, so honest *feedback* has not yet made the *exercise* meaningful. **Also replaced all 83 `app.js:NNNN` citations with function-name anchors** after they rotted for the third time — and had to repair that conversion, which initially resolved stale numbers against the current file and produced confidently-wrong function names. Where the correct function was not derivable from context, the citation is now plain `app.js` rather than falsely precise. |
+| 2026-09-09 | **Wave 4.** The read-aloud exercise now reads the **sentence** rather than a random unrelated vocabulary word (`US-119`, `US-104`), so the word-level diff finally does real work. Added an honestly-gated SRS lapse on read-aloud failure (`US-120`), replaced the input validator's allowlist that rejected *café* and then blamed the learner (`US-121`), stopped `migrations.js` silently downgrading a future schema version (`US-122`), fixed the fill-blank crash by deriving blanks by position (`US-114`, 81 of 3000 corrupt prompts rebuilt, 0 unrenderable), and stopped scramble counting a solve per click (`US-115`). **Caught an incomplete fix:** the US-122 change was defeated by `saveProgress()` re-stamping the version unconditionally — closed separately and verified end to end. Sprint 1 is now 38 of 53 points. Six new items → `US-124`–`US-129`, the notable one being that the fill-blank corruption has a source in `generateAlgorithmicSentence`, not just the symptom US-114 patched. |
