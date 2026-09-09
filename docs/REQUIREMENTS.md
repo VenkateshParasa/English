@@ -9,7 +9,15 @@ Companions: [PROGRESS.md](PROGRESS.md) (state of play, open decisions) ·
 [TEACHING_METHODOLOGY.md](TEACHING_METHODOLOGY.md) (pedagogy contract) ·
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) (build plan)
 
-**Version:** 1.0 · **Date:** 2026-09-08
+**Version:** 1.1 · **Date:** 2026-09-09
+
+> **1.1 (wave 6 reconciliation)** — two changes, both where six waves of implementation had moved
+> past this document. `FR-DATA-6` / `OQ-6`: the recording-eviction rule is amended from
+> oldest-beyond-N to **pinned baseline + N−1 most recent**, because the original rule destroyed
+> the feature it served (the code was right; the requirement was wrong). `FR-SRS-2`: the interval
+> ladder specified here has never matched the shipped scheduler, so **both ladders are now stated
+> and the choice is an open decision** (`OQ-10`, implemented by `US-131`) rather than being
+> silently resolved in favour of the code.
 
 **Identifier scheme:** `BR-#` business · `FR-<STRAND>-#` functional · `NFR-#` non-functional ·
 `CON-#` constraint · `AS-#` assumption · `OQ-#` open question.
@@ -361,10 +369,60 @@ Per [CURRICULUM.md §6](CURRICULUM.md), each deferred item has a **substitute** 
 | # | Requirement | Acceptance criteria | Pri |
 |---|---|---|---|
 | **FR-SRS-1** | The scheduler is **generalised** beyond vocabulary | Keys namespaced `vocab:` / `gram:` / `phon:` / `coll:`; existing records migrate without loss | M |
-| **FR-SRS-2** | Lapse resets to 1 day and lowers ease; success advances 1 → 3 → 7 → 16 → 35 | Verified by unit test | M |
+| **FR-SRS-2** | Lapse resets to 1 day and lowers ease; success advances along a documented interval ladder | **The specified ladder and the shipped ladder differ — see the note below. `OQ-10` decides which one is correct; `US-131` implements the decision.** Lapse behaviour is met and verified by unit test | M |
 | **FR-SRS-3** | A **mistake log** by error type, with a top-5 view | Mistakes are categorised (article omission, /v/–/w/, past-tense agreement …) and the learner can see their top 5 for the last 30 days | M |
 | **FR-SRS-4** | The daily queue is **capped at ~20 items**; the rest defer | Queue never exceeds the cap; deferred items are not lost | M |
 | **FR-SRS-5** | **Self-reported** outcomes may schedule but never certify | A self-marked production task can shorten an interval; it is stored flagged as self-reported and never counted as verified-correct | M |
+
+#### `FR-SRS-2` — open discrepancy on the interval ladder. Tracked as `US-131`, decided by `OQ-10`.
+
+This requirement and [TEACHING_METHODOLOGY.md §3](TEACHING_METHODOLOGY.md) have specified
+**1 → 3 → 7 → 16 → 35** days since they were written. `js/core/srs.js` has never produced that
+sequence. The two have disagreed from the start; this note states the disagreement rather than
+resolving it by quietly rewriting one side.
+
+| | Ladder | Where it is written |
+|---|---|---|
+| **Specified** | 1 → 3 → **7 → 16 → 35** | `FR-SRS-2`, `TEACHING_METHODOLOGY.md` §3 |
+| **Shipped** | 1 → 3 → **8 → 22 → 62** | `SRS._applyGraded()` in `js/core/srs.js`, pinned by `__tests__/unit/srs.test.js` |
+
+**How the shipped numbers arise.** `_applyGraded()` hardcodes only the first two rungs
+(`reps === 1` → `interval = 1`, `reps === 2` → `interval = 3`) and from the third success onwards
+computes `Math.round(rec.interval * rec.ease)`. `ease` starts at `DEFAULT_EASE = 2.5` and gains
+`+0.1` on every success, clamped to `MAX_EASE = 2.8`; a lapse subtracts `0.2`, floored at
+`MIN_EASE = 1.3`. So for an item answered correctly every time: `round(3 × 2.7) = 8`,
+`round(8 × 2.8) = 22`, `round(22 × 2.8) = 62`. The test suite documents this openly — the
+assertion `expect(rec.interval).toBe(8)` carries a `KNOWN DIVERGENCE` comment naming
+`TEACHING_METHODOLOGY.md` §3 — so the tests currently enshrine the code, and changing the code
+means changing that assertion in the same commit.
+
+**Consequence of each, stated honestly.**
+
+- **SM-2 multiplicative growth (shipped).** The interval is a function of the item's own history,
+  so a word the learner keeps getting right accelerates away and a word they keep lapsing on
+  stays close. Per-item adaptation is the whole point of SM-2 and it is why the algorithm won.
+  The cost is unboundedness and unpredictability: `ease` caps at 2.8 but the interval does not cap
+  at all, so the ladder continues 62 → 174 → 487 → 1,364 days. Seven consecutive right answers put
+  an item **16 months** out; eight put it nearly four years out. On a four-option quiz a run that
+  long is reachable by luck, and a self-study learner has no "I actually forgot this" control to
+  pull it back with — so neither they nor the author can say when a given word will next appear.
+- **Fixed ladder (specified).** Predictable, inspectable, and it caps how far any item can drift:
+  the sequence is the same for every item, so "35 days" is the furthest anything goes before the
+  ladder is extended deliberately. That makes the schedule explainable to a learner and testable
+  without simulating ease. The cost is that it discards per-item adaptation — a word the learner
+  finds trivial and one they find hard are asked for on the same schedule — which is a real loss
+  of scheduling efficiency, though `ease` can still be retained as a *tie-break* on queue order
+  without driving the intervals.
+
+Note also that a fixed ladder needs a defined behaviour **past its last rung** (repeat 35 days
+forever, or multiply from there), and that whichever ladder wins, the existing `srsData` records
+carry the intervals the old rule produced. Changing the rule is forward-only — nothing recomputes
+history — which is why `US-131` is deliberately **not** part of the migration wave.
+
+The rest of `FR-SRS-2` — "a lapse resets to 1 day and lowers ease" — **is** met: `_applyGraded()`
+sets `reps = 0`, `interval = 0`, `due = now` and `ease = Math.max(MIN_EASE, ease - 0.2)` on a
+wrong answer, so the item stays in the current session's queue and comes back at the 1-day rung on
+its next success. That half needs no decision.
 
 ### 6.8 Session & levels — `SES`
 
@@ -385,7 +443,39 @@ Per [CURRICULUM.md §6](CURRICULUM.md), each deferred item has a **substitute** 
 | **FR-DATA-3** | Metrics `M-1`–`M-8` are computed **locally** and shown to the learner | No metric requires a network call | M |
 | **FR-DATA-4** | Learner can **export and re-import** all their data | One action produces a JSON file; importing it restores progress, SRS and settings | M |
 | **FR-DATA-5** | Learner can **reset review history** without losing settings | A one-time "reset my review history" action exists, because pre-fix `srsData` is unreliable | M |
-| **FR-DATA-6** | Recordings are stored as **blobs in IndexedDB**, with a size cap and eviction | Archive respects a documented cap; oldest-beyond-N evicted per prompt | S |
+| **FR-DATA-6** | Recordings are stored as **blobs in IndexedDB**, with a size cap and **pinned-baseline** eviction | Per prompt, `N` slots hold **the first recording ever made for that prompt (the pinned baseline) plus the `N−1` most recent**. Eviction takes the oldest *unprotected* recording. A prompt's newest recording and any pinned baseline are never deleted to make room for a different prompt; when only protected rows remain, the write is **refused with a clear message**, not forced. Total-bytes cap enforced separately from the browser's own quota | S |
+
+**Amendment (wave 6) — why this is no longer "oldest-beyond-N".** This requirement previously
+read *"oldest-beyond-N evicted per prompt"*, i.e. a plain ring buffer. That is the one eviction
+policy that destroys the feature it serves. [CURRICULUM.md](CURRICULUM.md) Strand E.7 asks for
+the archive so a learner "can hear month-one against month-three" and calls that comparison the
+strand's strongest motivator — but a ring buffer at `N=3` deletes the month-one recording on the
+**fourth** attempt at a prompt, so by month three there is nothing left to compare against. The
+motivator destroys itself on the fourth use, at no saving: the pinned-baseline allocation costs
+exactly the same `N` slots.
+
+`js/core/blobstore.js` therefore implements the pinned-baseline rule and flagged the divergence
+rather than shipping it silently. The requirement is the thing that was wrong, so the requirement
+has been amended. Verified against the code:
+
+- `MAX_PER_PROMPT = 3`, `PIN_BASELINE = true`; `PIN_BASELINE = false` restores the literal
+  ring-buffer behaviour if this is ever judged the wrong call.
+- `planRetention()` keeps `ordered[0]` (the baseline) then fills the remaining slots from the
+  newest end. The `baseline` flag is persisted on the metadata row by `commit()` (`row.baseline =
+  PIN_BASELINE && mine.length === 0`), so later writes do not have to re-derive which row it was.
+- `evictionCandidates()` protects, and says why for each: any pinned baseline, each prompt's
+  most recent recording (otherwise recording at prompt B silently wipes what the learner just
+  did at prompt A), and anything already in this write's own retention plan.
+- `planForSpace()` returns `{ ok: false }` when the cap cannot be honoured without deleting
+  something protected, and `commit()` then aborts the whole transaction — so "there is no room"
+  can never cost a learner a recording they already had. This is the `NFR-10` path.
+- Eviction, the metadata row and the audio payload are one IndexedDB transaction, so a failed
+  write rolls back its own eviction too.
+
+**Not versioned together.** `BlobStore.DB_VERSION` is IndexedDB's own object-store-shape version
+and is unrelated to `Migrations.SCHEMA_VERSION` (the shape of `learningProgress` / `srsData` in
+`localStorage`). The two are never compared or bumped together — see
+[TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) "Storage model".
 
 ### 6.10 Accessibility — `A11Y`
 
@@ -509,10 +599,11 @@ Each blocks something specific. Recommendations given; decisions are the maintai
 | **OQ-3** | Offer **Telugu-language** glosses and UI? | Scope of every content schema | Not this release. English UI with plain-English IPA glosses covers all four personas adequately |
 | **OQ-4** | Migrate or **reset** the existing `srsData`? | The CEFR migration | **Migrate with a backup** — the *set* of words seen is still signal — and expose `FR-DATA-5` so the learner can choose |
 | **OQ-5** | **Placement test scoring** thresholds | `FR-SES-2` | Defer until the grammar and pronunciation strands exist; the test needs items to draw from |
-| **OQ-6** | Recording archive: what is **N**, and what is the size cap? | `FR-DATA-6` | Start at N=3 per prompt and a 50MB cap, then measure |
+| **OQ-6** | Recording archive: what is **N**, what is the size cap, and how are the `N` slots **allocated**? | `FR-DATA-6` | **Resolved for now, measure later.** `N=3` per prompt and a 50MB total cap, both adopted as `blobstore.js` defaults. The slot *allocation* question is the one the original wording got wrong: it must be **one pinned baseline + the `N−1` most recent**, not oldest-beyond-N — a ring buffer deletes the month-one recording on the fourth attempt and destroys Strand E.7's stated motivator. See the amendment under `FR-DATA-6`. What still needs measuring is `N` and the cap against real recording sizes (`MAX_RECORDING_BYTES` is 10MB, ~1 hour of webm/opus mono) |
 | **OQ-7** | Do **puzzles** (word search, crossword, scramble, matching) belong to any strand? | Whether they are maintained through refactors | Keep matching and scramble as warm-ups; retire word search and crossword. They are the most code per unit of teaching value |
 | **OQ-8** | Which **frequency list** for `FR-VOC-6`? | Vocabulary ordering | A freely-licensed list (new-GSL or SUBTLEX-derived). Not Oxford 3000/5000 — copyrighted, and this repo is MIT |
 | **OQ-9** | Which **audio source** for prosody (`FR-PRN-8`)? | Sentence stress, linking, intonation | None is free and adequate. Teach by noticing; if recording, use a native speaker, not a Telugu-L1 voice |
+| **OQ-10** | **Which interval ladder is correct** — the fixed `1 → 3 → 7 → 16 → 35` that `FR-SRS-2` and `TEACHING_METHODOLOGY.md` §3 specify, or the SM-2 multiplicative `1 → 3 → 8 → 22 → 62` that `js/core/srs.js` actually ships? | `FR-SRS-2`, `US-131`, and every acceptance test that asserts an interval | **Adopt the fixed ladder, and keep `ease` for ordering only.** Reasons, in order: (1) it is what the pedagogy contract says, and a methodology document that the scheduler ignores is worse than no document; (2) `ease` caps at 2.8 but the interval does not cap at all, so seven consecutive right answers put an item 16 months out (62 → 174 → 487 days) and eight put it nearly four years out — on a four-option quiz a run that long is reachable by luck, and a self-study learner has no "I actually forgot this" control to pull it back with, so the ladder must not be able to run away; (3) a fixed ladder is testable without simulating ease, and `FR-SRS-2`'s acceptance criterion is "verified by unit test". Implement as an explicit `INTERVAL_STEPS` array with a defined past-the-end rule (recommendation: hold at the last rung rather than multiply, so the cap is real), keep `ease` as the `_dueRecords()` tie-break so per-item difficulty still influences *order* within a day, and flip the `KNOWN DIVERGENCE` assertion in `__tests__/unit/srs.test.js` in the same commit. Forward-only: no stored record is recomputed |
 
 ---
 
@@ -525,4 +616,4 @@ Each blocks something specific. Recommendations given; decisions are the maintai
 | Non-functional (`NFR`) | 17 |
 | Constraints (`CON`) | 8 |
 | Assumptions (`AS`) | 6 |
-| Open questions (`OQ`) | 9 |
+| Open questions (`OQ`) | 10 |

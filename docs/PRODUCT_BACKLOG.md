@@ -117,7 +117,7 @@ behaviours that teach errors.
 | ✅ **US-108** | Deterministic sentence exercise mode — **done 2026-09-09** | `FR-RDW-4` | 1 | M |
 | ✅ **US-109** | **Statistics pipeline repaired** — all five types now route through `updateStatistics()`; `state.stats` retained for loading old saves but no longer written — **done 2026-09-09** | `FR-DATA-3`, `BR-8` | 3 | M |
 | **US-130** | `loadProgress()` pushes `loaded.dailyStats` into `dailyHistory` and then overwrites `dailyHistory` from storage two lines later, dropping yesterday's stats on any day rollover | `FR-DATA-3` | 2 | M |
-| **US-131** | `FR-SRS-2` is **not met**: the code yields intervals 1→3→8→22→62, not the specified 1→3→7→16→35. The existing suite pins `8` as a known divergence | `FR-SRS-2` | 3 | M |
+| ✅ **US-131** | `FR-SRS-2` discrepancy documented rather than laundered; both ladders stated, recommendation recorded as `OQ-10` — **done 2026-09-09** | `FR-SRS-2` | 3 | M |
 | **US-132** | Dictation and scramble toast a hardcoded "Please enter your answer" for *any* validation failure, contradicting the inline message (paste 600 chars and it tells you to enter an answer you did enter) | `NFR-3` | 1 | S |
 | **US-133** | Drag/drop toasts blame the learner for app-supplied data: "Invalid word detected", "Invalid drop operation" | `BR-3` | 1 | S |
 | **US-134** | `js/core/srs.js` closes its IIFE over `this` rather than `globalThis`, so `require()` never publishes `SRS` — harmless in browser, breaks Node-based checks | — | 1 | S |
@@ -125,11 +125,19 @@ behaviours that teach errors.
 | **US-136** | Wire `js/core/blobstore.js` into the recording UI. Note `promptId` must be **stable content identity**, not `state.currentListeningIndex` — an index renumbers when content is inserted, and month-one recordings would then belong to someone else's sentence | `FR-DATA-6`, `FR-SPK-6` | 3 | S |
 | **US-137** | Wire `js/core/mistakes.js` into the wrong-answer paths and add the dashboard panel. Calls must sit behind the existing single-answer guards or one stubborn item becomes a whole diagnosis | `FR-SRS-3` | 3 | M |
 | **US-138** | `FR-DATA-4` export does not cover recordings. With blobs in IndexedDB, `CON-3`'s "export is the only backup" is now false for them | `FR-DATA-4` | 3 | M |
-| **US-139** | `FR-DATA-6`/`OQ-6` specify ring-buffer eviction, which deletes the month-one recording the feature exists to keep. `blobstore.js` deliberately pins the baseline instead — the requirement text needs amending to match | `FR-DATA-6` | 1 | M |
+| ✅ **US-139** | `FR-DATA-6`/`OQ-6` amended to the pinned-baseline retention the code implements — **done 2026-09-09** | `FR-DATA-6` | 1 | M |
 | **US-140** | `checkDictation`'s similarity is fake: `sim = exact ? 1 : 0.5` then `if (sim > 0.8)`. The name implies fuzzy matching that does not exist, and the failure branch shows the answer with no reason or contrast | `FR-GRM-2` | 2 | M |
 | **US-141** | `checkComprehension` gives a red mark with no fix on screen — violates `FR-A11Y-5` and `FR-GRM-2`; also still prints "✓ Perfect!" | `FR-A11Y-5` | 2 | M |
 | **US-142** | Grammar authoring: 6 practice items is too few for high-frequency points. Recommend 6 as a floor and 12 for the top four points | `FR-GRM-1` | 2 | S |
 | **US-143** | `data/l1/telugu.js` does not exist, so the 21 `T-`coded mistake categories live inline in `mistakes.js` rather than in a pluggable L1 profile | `FR-CNT-3` | 2 | S |
+| **US-144** | **`window.AppErrorHandler` was undefined**, because `const` at the top level of a classic script is a lexical global, not a `window` property. Every `global.AppErrorHandler` guard in `srs.js`, `blobstore.js`, `mistakes.js` and `portability.js` was permanently false — core-module error logging was a silent no-op. Fixed 2026-09-09 | `NFR-3` | 1 | M |
+| **US-145** | `markExerciseComplete` is never called for `vocabulary` or `puzzles`, so those completion sets stay permanently empty and vocabulary never shows ✓/Retake however many quizzes are answered | `FR-DATA-3` | 2 | M |
+| **US-146** | `loadProgress` does `Object.assign(state.dailyGoals, loaded.dailyGoals \|\| {})`, accepting arbitrary keys from storage, so the dashboard progress bar can exceed 100% | `FR-DATA-1` | 1 | S |
+| **US-147** | `updateStatisticsDisplay` still hardcodes all five sections across three `innerHTML` blocks — the last un-collapsed site after the registry refactor | — | 2 | S |
+| **US-148** | `PROJECTORS.gram` still omits `review` (needed by `FR-GRM-3`) and `cefr`; `PROJECTORS.phon` has never been matched against real content and is a guess | `FR-GRM-3` | 1 | M |
+| **US-149** | `data/grammar.js` is in neither `index.html` nor `STATIC_ASSETS` — the content exists and nothing reads it. Needs the Grammar section shell (`US-501`) | `FR-GRM-1` | 1 | M |
+| **US-150** | Author `data/pronunciation.js` — minimal pairs for the Telugu priority pairs, stress families, schwa/rhythm noticing material. Agent died mid-task this wave; nothing landed | `FR-PRN-1` | 5 | M |
+| **US-151** | Author grammar points 1, 2 and 4 (copula `T-G2`, stative progressive `T-G3`, uncountables `T-G4`) — the highest-impact Telugu interference points. Agent died mid-task this wave | `FR-GRM-1` | 5 | M |
 | **US-110** | **Stop the crossword awarding the daily goal for a blank grid** (D2) | `BR-3` | 2 | M |
 | ✅ **US-111** | Guard the quiz counters against re-clicking a correct answer — **done 2026-09-09** | `FR-VOC-1` | 1 | M |
 | ✅ **US-112** | Stop dictation double-counting the reading passage — **done 2026-09-09** | `FR-DATA-3` | 1 | M |
@@ -275,7 +283,7 @@ Enables E5 and E6. No user-visible feature — and that is deliberate.
 
 | # | Story | FR | Pts | MoSCoW |
 |---|---|---|---|---|
-| **US-301** | `SECTIONS` registry, additive, zero new sections | — | 5 | M |
+| ✅ **US-301** | `SECTIONS` registry, additive, zero new sections — adding a section drops from **23 `app.js` edits to 1** — **done 2026-09-09** | — | 5 | M |
 | ✅ **US-302** | SRS keys namespaced `vocab:`/`gram:`/`phon:`/`coll:`; `getDueWords` no longer hardcodes a `quiz` filter — **done 2026-09-09** | `FR-SRS-1` | 5 | M |
 | ✅ **US-303** | Existing bare-word `srsData` migrated to `vocab:<word>` with **zero drift** across all scheduling fields — **done 2026-09-09** | `FR-SRS-1`, `FR-DATA-2` | 3 | M |
 | ✅ **US-304** | Daily review queue capped at 20, read-time only so deferral writes nothing — **done 2026-09-09** | `FR-SRS-4` | 2 | M |
@@ -535,15 +543,15 @@ one with a spike attached.
 | Sprint | Theme | Points | Cumulative |
 |---|---|---|---|
 | 0 | Unblock | 6 | 6 |
-| 1 | Honesty | 80 | 86 |
-| 2 | Data integrity | 19 | 105 |
-| 3 | Extensibility | 22 | 127 |
-| 4 | Pronunciation | 33 | 160 |
-| 5 | Grammar | 33 | 193 |
-| 6 | Speaking | 28 | 221 |
-| 7 | Listening & vocabulary | 40 | 261 |
-| 8 | Session & platform | 44 | 305 |
+| 1 | Honesty | 98 | 104 |
+| 2 | Data integrity | 19 | 123 |
+| 3 | Extensibility | 22 | 145 |
+| 4 | Pronunciation | 33 | 178 |
+| 5 | Grammar | 33 | 211 |
+| 6 | Speaking | 28 | 239 |
+| 7 | Listening & vocabulary | 40 | 279 |
+| 8 | Session & platform | 44 | 323 |
 
-**305 points total, of which 88 are done — 28%.** **Sprint 2 is complete** and Sprint 3 is 17 of 22.** At 8–12 points a week of evenings that is
+**323 points total, of which 97 are done — 30%.** **Sprints 2 and 3 are both complete.** ** **Sprint 2 is complete** and Sprint 3 is 17 of 22.** At 8–12 points a week of evenings that is
 roughly **5–7 months** for everything. Sprint 1 is the one to finish first: it is where every
 honesty defect lives.
