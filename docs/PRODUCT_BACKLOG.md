@@ -136,7 +136,7 @@ behaviours that teach errors.
 | **US-147** | `updateStatisticsDisplay` still hardcodes all five sections across three `innerHTML` blocks — the last un-collapsed site after the registry refactor | — | 2 | S |
 | ✅ **US-148** | `PROJECTORS.gram` now carries `review` and `cefr`; added `auditProjection()` so a dropped authored field warns in development instead of vanishing silently — **done 2026-09-09** | `FR-GRM-3` | 1 | M |
 | ✅ **US-149** | `data/grammar.js` is now loaded and precached; the Grammar section reads it — **done 2026-09-09** | `FR-GRM-1` | 1 | M |
-| 🔶 **US-150** | **Partially done 2026-09-10.** `data/pronunciation/vowels-stress.js` landed: vowel pairs T-P7/T-P8/T-P9 with feelable articulatory cues, 21 word-stress items, 15 prosody noticing items. **Still missing: the consonant sets** — T-P5 /v/–/w/, T-P6 /θ/,/ð/, T-P10 /z/, T-P11 /f/–/p/. Agent died twice before writing them | `FR-PRN-1` | 5 | M |
+| ✅ **US-150** | **Done 2026-09-10.** All 8 pair sets: vowels T-P7/8/9 + consonants T-P5/T-P6(×2)/T-P10/T-P11, 78 minimal pairs, plus 21 stress items and 15 prosody noticing items | `FR-PRN-1` | 5 | M |
 | 🔶 **US-151** | **1 of 3 done 2026-09-10.** `data/grammar/countability.js` (T-G4) landed complete and wired. **`be` (T-G2) and stative progressive (T-G3) did not** — both agents died leaving only PLACEHOLDER skeletons, which were deleted rather than shipped | `FR-GRM-1` | 5 | M |
 | ✅ **US-501** | **Grammar section exists** — registry row, markup, loader, and feedback that teaches: every wrong answer shows the authored reason, a contrast pair and a retry, with defensible alternatives accepted. Scheduled as a `gram:` SRS item — **done 2026-09-09** | `FR-GRM-1`, `FR-GRM-2`, `FR-GRM-5` | 3 | M |
 | **US-152** | Grammar can **double-count across tiers**: only `foundation` has content, so selecting Everyday shows the Foundation point, and `markExerciseComplete` builds its id from `state.currentDifficulty`, so the same point counts twice | `FR-DATA-3` | 2 | M |
@@ -146,10 +146,17 @@ behaviours that teach errors.
 | **US-156** | `data/grammar.js`'s own SRS PROJECTION CONTRACT recommends `difficulty`, which no grammar lesson has — following it would re-introduce the phantom-field bug | — | 1 | S |
 | **US-157** | Grammar practice modes `choose`, `repair` and `order` are reserved in the schema but unimplemented; the section shows an honest count of skipped items | `FR-GRM-1` | 3 | S |
 | **US-158** | No `state.learnerL1`, so the Telugu note renders only when content offers exactly one L1. A real profile field replaces one line | `FR-CNT-3` | 1 | S |
-| **US-159** | The *a work* / *a meat* error routes to **two different categories and two different drills** depending on which lesson surfaced it: `articles` logs `gram.articles`, `countability` logs `gram.uncountable-plural`. `mistakes.js` has no row for "uncountable treated as countable with an article" — a suggested row is in `data/grammar/countability.js`'s report | `FR-SRS-3` | 2 | M |
-| **US-160** | `data/grammar.js`'s `MISTAKE_CATEGORIES` array omits `gram.register-indian`, so it is not the full grammar subset it claims to be and the typo check it exists to provide is incomplete | — | 1 | S |
-| **US-161** | `data/grammar.js`'s `SRS PROJECTION CONTRACT` comment is **stale** — it still says `rule` and `review` are unprojected and recommends the phantom `difficulty`. Both were fixed in `srs.js`; a content author following this comment would re-introduce the bug | — | 1 | M |
-| **US-162** | `articles` lists `countable-uncountable` as a prerequisite while sitting at syllabus 3 to its 4 — a cycle for any loader that orders by prerequisites. `countability` left `prerequisites: []` to avoid it | `FR-GRM-1` | 1 | S |
+| ✅ **US-159** | Routing reconciled — `gram.uncountable-plural` widened to cover `-s`, article and bare-number shapes rather than adding a second row that would split one habit across two drills — **done 2026-09-10** | `FR-SRS-3` | 2 | M |
+| ✅ **US-160** | `Mistakes.categoryIds({strand})` and `unknownCategories()` added so the content file can ask the module instead of duplicating a list — **done 2026-09-10** | — | 1 | S |
+| ✅ **US-161** | Stale projection-contract comment rewritten to point at `srs.js` and `auditProjection()` as the authority rather than copying a list — **done 2026-09-10** | — | 1 | M |
+| ✅ **US-162** | Prerequisite cycle removed; acyclicity proven by Kahn + DFS — **done 2026-09-10** | `FR-GRM-1` | 1 | S |
+| **US-163** | `js/core/sections.js`'s header claims US-154 made the dashboard registry-driven. **It did not** — `updateDashboard()` and `updateStatisticsDisplay()` are still hardcoded per section, so the silent-failure class the registry exists to kill is still live in those two functions | — | 2 | M |
+| **US-164** | `'ð-d'` is not a `drill.target` in `mistakes.js` — only `'θ-t'` is, under the single `prn.th` category. `phon:ð-d` schedules fine but nothing in the mistake log routes back to it | `FR-SRS-3` | 1 | M |
+| **US-165** | Four `logAs: "gram.articles"` entries in `data/grammar.js` (those with `errorKind: "uncountable-treated-as-countable"`) must move to `gram.uncountable-plural` to converge the split. Match on `errorKind`, not line number | `FR-SRS-3` | 1 | M |
+| **US-166** | `data/grammar/countability.js` accepts answers not present in the item's `options` (*some advice*, *bits of information*, *work experience*). The grader must check `accept` before falling through to `fallbackFeedback`, or defensible answers are treated as unrecognised | `FR-GRM-5` | 2 | M |
+| **US-167** | Pronunciation `stress[]` (21 items) and `noticing[]` (15 items) are authored but have no surface. `phon:rhythm`/`final-vowel`/`cluster` also have **no projector**, so they would store under the vowel-pair field list and render empty cards | `FR-PRN-3`, `FR-PRN-8` | 5 | M |
+| **US-168** | `audio.ttsHint` names TTS-unsafe pairs in prose only. Needs a machine-readable `ttsSafe: false` on the affected `minimalPairs` rows so the drill can skip them | `FR-PRN-1` | 2 | S |
+| **US-169** | Fixed-tint panels (`--*-50`) do not follow the dark theme; the `.grammar-*` block has the same latent contrast bug the new `.pron-*` panels worked around | `NFR-11` | 1 | S |
 | **US-110** | **Stop the crossword awarding the daily goal for a blank grid** (D2) | `BR-3` | 2 | M |
 | ✅ **US-111** | Guard the quiz counters against re-clicking a correct answer — **done 2026-09-09** | `FR-VOC-1` | 1 | M |
 | ✅ **US-112** | Stop dictation double-counting the reading passage — **done 2026-09-09** | `FR-DATA-3` | 1 | M |
@@ -321,7 +328,7 @@ discrimination is the only speech task we can grade honestly. **Blocked on AS-3.
 | # | Story | FR | Pts | MoSCoW |
 |---|---|---|---|---|
 | **US-400** | **Spike:** validate TTS renders minimal pairs distinguishably on real Android + iPhone | `AS-3` | 2 | M |
-| **US-401** | Minimal-pair discrimination drill for T-P5…T-P11 | `FR-PRN-1` | 5 | M |
+| ✅ **US-401** | **Pronunciation section exists** — minimal-pair discrimination drill, per-pair SRS (`phon:`), production gated at 80% discrimination, text-only fallback when audio is unusable — **done 2026-09-10** | `FR-PRN-1` | 5 | M |
 | **US-402** | Per-phoneme-pair accuracy tracking and profile view | `FR-PRN-2` | 3 | M |
 | **US-403** | Word stress marked and drillable | `FR-PRN-3` | 3 | M |
 | **US-404** | Self-comparison: A→B→A playback with an articulatory cue | `FR-PRN-4`, `FR-PRN-5` | 5 | M |
@@ -555,15 +562,15 @@ one with a spike attached.
 | Sprint | Theme | Points | Cumulative |
 |---|---|---|---|
 | 0 | Unblock | 6 | 6 |
-| 1 | Honesty | 110 | 116 |
-| 2 | Data integrity | 19 | 135 |
-| 3 | Extensibility | 22 | 157 |
-| 4 | Pronunciation | 33 | 190 |
-| 5 | Grammar | 36 | 226 |
-| 6 | Speaking | 28 | 254 |
-| 7 | Listening & vocabulary | 40 | 294 |
-| 8 | Session & platform | 44 | 338 |
+| 1 | Honesty | 129 | 135 |
+| 2 | Data integrity | 19 | 154 |
+| 3 | Extensibility | 22 | 176 |
+| 4 | Pronunciation | 33 | 209 |
+| 5 | Grammar | 36 | 245 |
+| 6 | Speaking | 28 | 273 |
+| 7 | Listening & vocabulary | 40 | 313 |
+| 8 | Session & platform | 44 | 357 |
 
-**338 points total, of which 103 are done — 30%.** Sprints 2 and 3 are complete; the Grammar section now exists. ** **Sprints 2 and 3 are both complete.** ** **Sprint 2 is complete** and Sprint 3 is 17 of 22.** At 8–12 points a week of evenings that is
+**357 points total, of which 118 are done — 33%.** Sprints 2 and 3 complete; Grammar and Pronunciation both now exist as sections. ** Sprints 2 and 3 are complete; the Grammar section now exists. ** **Sprints 2 and 3 are both complete.** ** **Sprint 2 is complete** and Sprint 3 is 17 of 22.** At 8–12 points a week of evenings that is
 roughly **5–7 months** for everything. Sprint 1 is the one to finish first: it is where every
 honesty defect lives.
