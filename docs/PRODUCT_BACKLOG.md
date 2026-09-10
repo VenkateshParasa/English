@@ -132,31 +132,38 @@ behaviours that teach errors.
 | **US-143** | `data/l1/telugu.js` does not exist, so the 21 `T-`coded mistake categories live inline in `mistakes.js` rather than in a pluggable L1 profile | `FR-CNT-3` | 2 | S |
 | **US-144** | **`window.AppErrorHandler` was undefined**, because `const` at the top level of a classic script is a lexical global, not a `window` property. Every `global.AppErrorHandler` guard in `srs.js`, `blobstore.js`, `mistakes.js` and `portability.js` was permanently false — core-module error logging was a silent no-op. Fixed 2026-09-09 | `NFR-3` | 1 | M |
 | **US-145** | `markExerciseComplete` is never called for `vocabulary` or `puzzles`, so those completion sets stay permanently empty and vocabulary never shows ✓/Retake however many quizzes are answered | `FR-DATA-3` | 2 | M |
-| **US-146** | `loadProgress` does `Object.assign(state.dailyGoals, loaded.dailyGoals \|\| {})`, accepting arbitrary keys from storage, so the dashboard progress bar can exceed 100% | `FR-DATA-1` | 1 | S |
+| ✅ **US-146** | Progress bar could exceed 100% (8 ticked of 7) when a restored backup carried a goal key no section owns — fixed as part of US-163 — **done 2026-09-10** |\| {})`, accepting arbitrary keys from storage, so the dashboard progress bar can exceed 100% | `FR-DATA-1` | 1 | S |
 | **US-147** | `updateStatisticsDisplay` still hardcodes all five sections across three `innerHTML` blocks — the last un-collapsed site after the registry refactor | — | 2 | S |
 | ✅ **US-148** | `PROJECTORS.gram` now carries `review` and `cefr`; added `auditProjection()` so a dropped authored field warns in development instead of vanishing silently — **done 2026-09-09** | `FR-GRM-3` | 1 | M |
 | ✅ **US-149** | `data/grammar.js` is now loaded and precached; the Grammar section reads it — **done 2026-09-09** | `FR-GRM-1` | 1 | M |
 | ✅ **US-150** | **Done 2026-09-10.** All 8 pair sets: vowels T-P7/8/9 + consonants T-P5/T-P6(×2)/T-P10/T-P11, 78 minimal pairs, plus 21 stress items and 15 prosody noticing items | `FR-PRN-1` | 5 | M |
 | 🔶 **US-151** | **1 of 3 done 2026-09-10.** `data/grammar/countability.js` (T-G4) landed complete and wired. **`be` (T-G2) and stative progressive (T-G3) did not** — both agents died leaving only PLACEHOLDER skeletons, which were deleted rather than shipped | `FR-GRM-1` | 5 | M |
 | ✅ **US-501** | **Grammar section exists** — registry row, markup, loader, and feedback that teaches: every wrong answer shows the authored reason, a contrast pair and a retry, with defensible alternatives accepted. Scheduled as a `gram:` SRS item — **done 2026-09-09** | `FR-GRM-1`, `FR-GRM-2`, `FR-GRM-5` | 3 | M |
-| **US-152** | Grammar can **double-count across tiers**: only `foundation` has content, so selecting Everyday shows the Foundation point, and `markExerciseComplete` builds its id from `state.currentDifficulty`, so the same point counts twice | `FR-DATA-3` | 2 | M |
-| **US-153** | `resolveDifficulty`/`isLevelAvailable` probe `vocabularyData` as the content oracle — wrong now that a second content map exists with different tier coverage | `FR-SES-3` | 2 | M |
+| ✅ **US-152** | Grammar tier double-count fixed via an additive optional level parameter — verified 2 → 1 — **done 2026-09-10** | `FR-DATA-3` | 2 | M |
+| ✅ **US-153** | Tier availability resolves against each section's own content via `Sections.registerContent()`; the grammar loader's local workaround removed — **done 2026-09-10** | `FR-SES-3` | 2 | M |
 | **US-154** | `updateDashboard`/`updateStatisticsDisplay` are the last non-registry-driven per-section code; grammar had to be added to three blocks by hand | — | 2 | S |
 | **US-155** | `srs.js` lapse sets `interval = 0, due = now`, but `TEACHING_METHODOLOGY.md` §3 and `FR-GRM-3` both say a lapse resets to **1 day**. Related to `OQ-10` | `FR-SRS-2` | 1 | S |
 | **US-156** | `data/grammar.js`'s own SRS PROJECTION CONTRACT recommends `difficulty`, which no grammar lesson has — following it would re-introduce the phantom-field bug | — | 1 | S |
 | **US-157** | Grammar practice modes `choose`, `repair` and `order` are reserved in the schema but unimplemented; the section shows an honest count of skipped items | `FR-GRM-1` | 3 | S |
 | **US-158** | No `state.learnerL1`, so the Telugu note renders only when content offers exactly one L1. A real profile field replaces one line | `FR-CNT-3` | 1 | S |
 | ✅ **US-159** | Routing reconciled — `gram.uncountable-plural` widened to cover `-s`, article and bare-number shapes rather than adding a second row that would split one habit across two drills — **done 2026-09-10** | `FR-SRS-3` | 2 | M |
-| ✅ **US-160** | `Mistakes.categoryIds({strand})` and `unknownCategories()` added so the content file can ask the module instead of duplicating a list — **done 2026-09-10** | — | 1 | S |
+| ✅ **US-160** | `MISTAKE_CATEGORIES` deleted; the guard now asks `Mistakes.unknownCategories()` about ids the content actually declares — **done 2026-09-10** | — | 1 | S |
 | ✅ **US-161** | Stale projection-contract comment rewritten to point at `srs.js` and `auditProjection()` as the authority rather than copying a list — **done 2026-09-10** | — | 1 | M |
 | ✅ **US-162** | Prerequisite cycle removed; acyclicity proven by Kahn + DFS — **done 2026-09-10** | `FR-GRM-1` | 1 | S |
-| **US-163** | `js/core/sections.js`'s header claims US-154 made the dashboard registry-driven. **It did not** — `updateDashboard()` and `updateStatisticsDisplay()` are still hardcoded per section, so the silent-failure class the registry exists to kill is still live in those two functions | — | 2 | M |
-| **US-164** | `'ð-d'` is not a `drill.target` in `mistakes.js` — only `'θ-t'` is, under the single `prn.th` category. `phon:ð-d` schedules fine but nothing in the mistake log routes back to it | `FR-SRS-3` | 1 | M |
-| **US-165** | Four `logAs: "gram.articles"` entries in `data/grammar.js` (those with `errorKind: "uncountable-treated-as-countable"`) must move to `gram.uncountable-plural` to converge the split. Match on `errorKind`, not line number | `FR-SRS-3` | 1 | M |
+| ✅ **US-163** | `updateDashboard` and `updateStatisticsDisplay` now registry-driven; the false header claim in `sections.js` corrected. Adding a section drops **8 edits → 4** — **done 2026-09-10** | — | 2 | M |
+| ✅ **US-164** | `ð-d` now reachable — `prn.th` gained `alsoTargets`, keeping one category and one count while routing both drills — **done 2026-09-10** | `FR-SRS-3` | 1 | M |
+| ✅ **US-165** | Four `logAs` sites converged; all five uncountable shapes now produce one finding, one count, one drill — **done 2026-09-10** | `FR-SRS-3` | 1 | M |
 | **US-166** | `data/grammar/countability.js` accepts answers not present in the item's `options` (*some advice*, *bits of information*, *work experience*). The grader must check `accept` before falling through to `fallbackFeedback`, or defensible answers are treated as unrecognised | `FR-GRM-5` | 2 | M |
 | **US-167** | Pronunciation `stress[]` (21 items) and `noticing[]` (15 items) are authored but have no surface. `phon:rhythm`/`final-vowel`/`cluster` also have **no projector**, so they would store under the vowel-pair field list and render empty cards | `FR-PRN-3`, `FR-PRN-8` | 5 | M |
-| **US-168** | `audio.ttsHint` names TTS-unsafe pairs in prose only. Needs a machine-readable `ttsSafe: false` on the affected `minimalPairs` rows so the drill can skip them | `FR-PRN-1` | 2 | S |
-| **US-169** | Fixed-tint panels (`--*-50`) do not follow the dark theme; the `.grammar-*` block has the same latent contrast bug the new `.pron-*` panels worked around | `NFR-11` | 1 | S |
+| ✅ **US-168** | `ttsUse` enum added per `minimalPairs` row (58 of 78 flagged: 42 prefer, 7 clip-only, 6 verify, 3 clip-first) — **done 2026-09-10** | `FR-PRN-1` | 2 | S |
+| ✅ **US-169** | Five theme-aware `--panel-*` tokens plus `--text-accent`; the `.pron-*` workaround removed. **Contrast computed, not asserted** — worst case 5.93:1 light / 5.95:1 dark, all AA — **done 2026-09-10** | `NFR-11` | 1 | S |
+| **US-170** | Build the "Start today's session" UI on top of `js/core/session.js`: the button, session chrome (step N of M, strand, advisory minutes), per-step Done/Skip, the three-way speaking choice, a resume banner, and the wrap-up card | `FR-SES-1`, `FR-SES-5` | 5 | M |
+| **US-171** | **Grammar and phoneme SRS reviews are structurally unreachable.** Review mode walks `SRS.getDueWords()`, which is vocab-only, so due `gram:`/`phon:` records are scheduled correctly and no screen ever draws them. The sequencer reports them as held back rather than hiding them | `FR-SRS-1`, `FR-GRM-3` | 5 | M |
+| **US-172** | `markExerciseComplete` pushes to `exerciseHistory` unconditionally while counters are guarded, so re-completing appends a duplicate record. Affects all seven sections; the field is undocumented either way | `FR-DATA-3` | 1 | S |
+| **US-173** | `.exercise-card` hard-codes `background: #f9f9f9` and `.instruction` `#555`. Fixed scoped to grammar/pronunciation only, because the legacy blocks below hard-code `background: white` — flipping the card globally would trade light-on-light for dark-on-dark | `NFR-11` | 2 | S |
+| **US-174** | Decorative 4px accent stripes are below the 3:1 non-text threshold on light tints (2.07–2.43). Pre-existing, unchanged by the theme fix | `NFR-11` | 1 | C |
+| **US-175** | Listening still has no dashboard stat card (`totalCardId: null`). Now a two-line fix — markup plus id — since no `app.js` line names it | — | 1 | S |
+| **US-176** | The Alt+N shortcut ceiling is a single-character comparison, so it silently stops working at 10 sections | — | 1 | C |
 | **US-110** | **Stop the crossword awarding the daily goal for a blank grid** (D2) | `BR-3` | 2 | M |
 | ✅ **US-111** | Guard the quiz counters against re-clicking a correct answer — **done 2026-09-09** | `FR-VOC-1` | 1 | M |
 | ✅ **US-112** | Stop dictation double-counting the reading passage — **done 2026-09-09** | `FR-DATA-3` | 1 | M |
@@ -466,7 +473,7 @@ decision rather than an oversight.
 
 | # | Story | FR | Pts | MoSCoW |
 |---|---|---|---|---|
-| **US-801** | "Start today's session" sequencer — 20 min, ≥3 strands, one Speaking | `FR-SES-1` | 5 | M |
+| ✅ **US-801** | Session sequencer built as `js/core/session.js` and wired — plans ≥3 strands ending in production, count-boxed not time-boxed, resumable, own storage key — **done 2026-09-10** (UI pending, `US-170`) | `FR-SES-1` | 5 | M |
 | **US-802** | Dashboard: streak, fluency trend, tomorrow's preview | `FR-SES-5` | 3 | S |
 | **US-803** | Local metrics M-1…M-8 computed and surfaced | `FR-DATA-3` | 5 | S |
 | **US-804** | Placement check, 12 items | `FR-SES-2` | 5 | S |
@@ -562,15 +569,15 @@ one with a spike attached.
 | Sprint | Theme | Points | Cumulative |
 |---|---|---|---|
 | 0 | Unblock | 6 | 6 |
-| 1 | Honesty | 129 | 135 |
-| 2 | Data integrity | 19 | 154 |
-| 3 | Extensibility | 22 | 176 |
-| 4 | Pronunciation | 33 | 209 |
-| 5 | Grammar | 36 | 245 |
-| 6 | Speaking | 28 | 273 |
-| 7 | Listening & vocabulary | 40 | 313 |
-| 8 | Session & platform | 44 | 357 |
+| 1 | Honesty | 145 | 151 |
+| 2 | Data integrity | 19 | 170 |
+| 3 | Extensibility | 22 | 192 |
+| 4 | Pronunciation | 33 | 225 |
+| 5 | Grammar | 36 | 261 |
+| 6 | Speaking | 28 | 289 |
+| 7 | Listening & vocabulary | 40 | 329 |
+| 8 | Session & platform | 44 | 373 |
 
-**357 points total, of which 118 are done — 33%.** Sprints 2 and 3 complete; Grammar and Pronunciation both now exist as sections. ** Sprints 2 and 3 are complete; the Grammar section now exists. ** **Sprints 2 and 3 are both complete.** ** **Sprint 2 is complete** and Sprint 3 is 17 of 22.** At 8–12 points a week of evenings that is
+**373 points total, of which 135 are done — 36%.** Sprints 2 and 3 complete; Grammar and Pronunciation exist as sections; the session sequencer exists as a module. ** Sprints 2 and 3 complete; Grammar and Pronunciation both now exist as sections. ** Sprints 2 and 3 are complete; the Grammar section now exists. ** **Sprints 2 and 3 are both complete.** ** **Sprint 2 is complete** and Sprint 3 is 17 of 22.** At 8–12 points a week of evenings that is
 roughly **5–7 months** for everything. Sprint 1 is the one to finish first: it is where every
 honesty defect lives.
