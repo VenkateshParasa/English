@@ -29,12 +29,33 @@
  * null/false and it is excluded from exercises()/exerciseIds()/goalKeys().
  * Read `ids()` as "nav targets" and `exerciseIds()` as "learning sections".
  *
+ * WHY CONTENT PROBES ARE NOT IN THE LITERAL EITHER (US-153)
+ * Availability used to be decided for every section by probing `vocabularyData`,
+ * which was only ever true because vocabulary was the widest content map. It
+ * stopped being true the moment `grammarLessons` shipped with content for one
+ * tier and empty arrays for three: a tier can be "available" per vocabulary and
+ * empty for grammar, which is why the grammar loader had to grow its own local
+ * resolveGrammarLevel(). Each row now NAMES its own content map in
+ * `contentGlobal`, and app.js registers one probe per section via
+ * registerContent() so that "does this tier have content" is answered against
+ * the section actually being asked about.
+ *
+ * The probes cannot live in the literal for the same reason the loaders cannot,
+ * only worse: data.js and data/grammar.js declare `const vocabularyData` etc.,
+ * which are *lexical* globals — not properties of `window` — so a name string
+ * here cannot be dereferenced from this file at all, and both files load AFTER
+ * this one. `contentGlobal` is therefore documentation and a greppable join key;
+ * the accessor is behaviour and lives with the data-shape knowledge in app.js.
+ *
  * ADDING A SECTION
  *   1. add a row below
  *   2. add the markup to index.html (see the contract note under CONTRACT)
  *   3. add its loader to the registerRuntime() block in app.js
- * Nothing else in app.js needs touching. __tests__/unit/sections.test.js checks
- * step 2 against step 1 so a mis-wired section fails a test, not a learner.
+ *   4. add its content probe to the registerContent() block in app.js
+ * Nothing else in app.js needs touching — including the dashboard, which builds
+ * its stat cards and all three stat blocks from these rows (US-154).
+ * __tests__/unit/sections.test.js checks step 2 against step 1 so a mis-wired
+ * section fails a test, not a learner.
  *
  * CONTRACT (enforced by __tests__/unit/sections.test.js)
  *   - `#{id}` exists and is a `.section`
@@ -42,6 +63,7 @@
  *   - `#{id}` has a DIRECT-CHILD `h2`. updateCompletionIndicator does
  *     `section.querySelector('h2').after(...)` (app.js), which throws on null.
  *   - `#{prevBtnId}` / `#{nextBtnId}` exist when non-null
+ *   - `#{totalCardId}` exists and is a `.stat-number` when non-null
  *
  * FIELDS
  *   id              nav id; also the #element id, the [data-section] value,
@@ -56,6 +78,20 @@
  *   dailyStatKey    the state.dailyStats.* counter
  *   totalStatKey    the state.overallStats.* counter
  *   avgKey          the state.overallStats.averageDaily.* field
+ *   statLabel       the word the dashboard stat rows use for this section. NOT
+ *                   `label`: vocabulary's rows say "Words" / "Total Words",
+ *                   because a learner counts words, not "vocabularies".
+ *   totalCardId     id of the big #dashboard .stat-number for this section's
+ *                   lifetime total, or null when the dashboard has no card for
+ *                   it (listening, today — a real gap, not a design decision;
+ *                   adding the markup plus an id here is the whole fix)
+ *   countsInTotalExercises
+ *                   whether this section's total feeds the "Total Exercises"
+ *                   row. False for vocabulary, which is reported on its own
+ *                   "Total Words" row instead. Preserves the pre-registry split.
+ *   contentGlobal   name of the content map this section's items come from. Read
+ *                   the note above: this is the join key for registerContent(),
+ *                   not something this file can dereference.
  *   srsType         js/core/srs.js item type, or null if this section does not
  *                   feed the scheduler
  *   tracksExercises whether state.completedExercises has a Set for it
@@ -80,6 +116,10 @@
             dailyStatKey: null,
             totalStatKey: null,
             avgKey: null,
+            statLabel: null,
+            totalCardId: null,
+            countsInTotalExercises: false,
+            contentGlobal: null,
             srsType: null,
             tracksExercises: false,
             hasDifficulty: false
@@ -96,6 +136,14 @@
             dailyStatKey: 'wordsLearned',
             totalStatKey: 'totalWords',
             avgKey: 'words',
+            statLabel: 'Words',
+            totalCardId: 'wordsLearned',
+            // Reported as its own "Total Words" row, so it must not also be
+            // inside the "Total Exercises" sum — that is how the hand-written
+            // dashboard did it, and double-counting it would silently restate
+            // every learner's history.
+            countsInTotalExercises: false,
+            contentGlobal: 'vocabularyData',
             // The only section wired to the scheduler today; srs.js keys its
             // records 'vocab:<word>'.
             srsType: 'vocab',
@@ -114,6 +162,10 @@
             dailyStatKey: 'sentencesCompleted',
             totalStatKey: 'totalSentences',
             avgKey: 'sentences',
+            statLabel: 'Sentences',
+            totalCardId: 'sentencesCompleted',
+            countsInTotalExercises: true,
+            contentGlobal: 'sentenceExercises',
             srsType: null,
             tracksExercises: true,
             hasDifficulty: true
@@ -130,6 +182,10 @@
             dailyStatKey: 'readingCompleted',
             totalStatKey: 'totalReading',
             avgKey: 'reading',
+            statLabel: 'Reading',
+            totalCardId: 'readingCompleted',
+            countsInTotalExercises: true,
+            contentGlobal: 'readingPassages',
             srsType: null,
             tracksExercises: true,
             hasDifficulty: true
@@ -146,6 +202,15 @@
             dailyStatKey: 'listeningCompleted',
             totalStatKey: 'totalListening',
             avgKey: 'listening',
+            statLabel: 'Listening',
+            // Deliberately null, and deliberately NOT quietly fixed here: the
+            // dashboard has never had a Listening card, and inventing one would
+            // change what every existing learner sees on the very commit that
+            // was supposed to change nothing. It appears in all three stat
+            // blocks, so the number is not hidden. See US-154.
+            totalCardId: null,
+            countsInTotalExercises: true,
+            contentGlobal: 'listeningExercises',
             srsType: null,
             tracksExercises: true,
             // Deliberately false: this section has no .diff-btn group of its own
@@ -170,6 +235,13 @@
             dailyStatKey: 'puzzlesSolved',
             totalStatKey: 'totalPuzzles',
             avgKey: 'puzzles',
+            statLabel: 'Puzzles',
+            totalCardId: 'puzzlesSolved',
+            countsInTotalExercises: true,
+            // The one two-level map: puzzleData is keyed by puzzle TYPE first
+            // and level second, so its probe in app.js looks one layer deeper
+            // than the others'.
+            contentGlobal: 'puzzleData',
             srsType: null,
             tracksExercises: true,
             hasDifficulty: false
@@ -190,6 +262,12 @@
             dailyStatKey: 'grammarCompleted',
             totalStatKey: 'totalGrammar',
             avgKey: 'grammar',
+            statLabel: 'Grammar',
+            totalCardId: 'grammarCompleted',
+            countsInTotalExercises: true,
+            // The map that broke the old vocabulary-only oracle: content for
+            // `foundation`, deliberately empty arrays for the other three tiers.
+            contentGlobal: 'grammarLessons',
             // The second section wired to the scheduler: one record per grammar
             // point, keyed 'gram:<lesson id>' (data/grammar.js `srsKey`).
             srsType: 'gram',
@@ -212,6 +290,13 @@
      * read before app.js exists, the loaders are behaviour that cannot.
      */
     const LOADERS = Object.create(null);
+
+    /**
+     * id -> function(level) -> item count, populated by registerContent() from
+     * app.js. See the "WHY CONTENT PROBES ARE NOT IN THE LITERAL EITHER" note at
+     * the top of this file for why the accessor cannot live in the row.
+     */
+    const CONTENT = Object.create(null);
 
     /** The full row for a nav id, or null. Never throws on junk input. */
     function get(id) {
@@ -303,6 +388,66 @@
         return LOADERS[id];
     }
 
+    /**
+     * Attach the per-section content probes. Same shape, same loudness and the
+     * same once-only call site discipline as registerRuntime(); a probe is
+     * `function (levelId) -> number of authored items`.
+     */
+    function registerContent(map) {
+        if (!map || typeof map !== 'object') return;
+        Object.keys(map).forEach(function (id) {
+            const fn = map[id];
+            if (!BY_ID[id]) {
+                console.warn('Sections.registerContent: unknown section "' + id +
+                             '" — add a row to js/core/sections.js');
+                return;
+            }
+            if (typeof fn !== 'function') {
+                console.warn('Sections.registerContent: probe for "' + id +
+                             '" is not a function');
+                return;
+            }
+            CONTENT[id] = fn;
+        });
+    }
+
+    /**
+     * True when this section can answer "how much content is at this tier".
+     *
+     * Callers need this separately from contentCount(): "no probe registered"
+     * and "zero items authored" are different facts, and conflating them would
+     * make an unregistered section look permanently empty — which is exactly the
+     * silent-failure mode this file exists to prevent. `dashboard` has no probe
+     * because it has no content.
+     */
+    function knowsContent(id) {
+        return typeof CONTENT[id] === 'function';
+    }
+
+    /**
+     * Authored item count for `level` in this section's own content, or -1 when
+     * the section has no probe. Never throws: a probe that blows up on a junk
+     * level (or on a content file that failed to load) counts as zero, because
+     * an availability question must not be able to take a section down.
+     */
+    function contentCount(id, level) {
+        const probe = CONTENT[id];
+        if (typeof probe !== 'function') return -1;
+        let n;
+        try {
+            n = probe(level);
+        } catch (e) {
+            console.warn('Sections.contentCount: probe for "' + id + '" threw', e);
+            return 0;
+        }
+        return (typeof n === 'number' && isFinite(n) && n > 0) ? n : 0;
+    }
+
+    /** True when this section has at least one authored item at `level`. */
+    function hasContent(id, level) {
+        return contentCount(id, level) > 0;
+    }
+
     const Sections = {
         SECTIONS: SECTIONS,
         get: get,
@@ -314,7 +459,11 @@
         indexKeys: indexKeys,
         zeroMap: zeroMap,
         registerRuntime: registerRuntime,
-        loader: loader
+        loader: loader,
+        registerContent: registerContent,
+        knowsContent: knowsContent,
+        contentCount: contentCount,
+        hasContent: hasContent
     };
 
     global.Sections = Sections;

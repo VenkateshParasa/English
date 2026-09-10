@@ -467,6 +467,16 @@
          `grammarLessons`; app.js's grammar loader guards on
          `typeof grammarLessons`, so this must load before app.js runs. -->
     <script src="data/grammar.js"></script>
+    <!-- Additional grammar points, one file each. Each self-registers into
+         `grammarLessons` by pushing onto its tier array, so ORDER MATTERS: these
+         must come after data/grammar.js and before app.js. Authoring one point
+         per file keeps a long authoring run from losing more than one point if it
+         fails. -->
+    <script src="data/grammar/countability.js"></script>
+    <!-- Strand C pronunciation content. Declares `PRONUNCIATION_VOWELS_STRESS`
+         (vowel minimal pairs, word stress, prosody noticing). Not yet read by a
+         section — the Pronunciation section is US-401. -->
+    <script src="data/pronunciation/vowels-stress.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

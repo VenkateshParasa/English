@@ -109,13 +109,20 @@
         gram:  ['id', 'title', 'tier', 'cefr', 'rule', 'explain', 'contrast',
                 'practice', 'review', 'produce', 'caveats', 'l1Notes',
                 'mistakeCategory'],
-        // ⚠️ UNVERIFIED — this list is a guess and has never been checked against
-        // authored content, because data/pronunciation.js does not exist yet. It
-        // is left as-is rather than re-guessed: a second guess is not better than
-        // the first. Whoever lands data/pronunciation.js must diff this against
-        // the real schema; auditProjection() will report the mismatch on the
-        // first phon item scheduled in development, which is the backstop.
-        phon:  ['id', 'pair', 'label', 'examples', 'minimalPairs', 'difficulty'],
+        // Validated 2026-09-10 against data/pronunciation/vowels-stress.js — the
+        // first real phon content to exist. The earlier guess had no phantom
+        // fields, but it dropped 16 authored ones including `articulatoryCue`,
+        // `feelChecks`, `mirrorCheck`, `discrimination` and `productionGate` —
+        // i.e. all of the actual teaching. A phoneme review card without the
+        // articulatory cue is useless: PROGRESS.md §6.aa rule 2 makes the feelable
+        // cue load-bearing precisely because a learner who cannot yet HEAR a
+        // contrast can still check their mouth. Same class of defect as `gram`
+        // omitting `rule`; auditProjection() is what surfaced it.
+        phon:  ['id', 'pair', 'label', 'code', 'phonemes', 'contrastFeature',
+                'articulatoryCue', 'mirrorCheck', 'feelChecks', 'lengthNote',
+                'minimalPairs', 'examples', 'sentences', 'textOnlyFallback',
+                'discrimination', 'productionGate', 'caveats', 'mistakeCategory',
+                'difficulty'],
         // Also unverified: data/collocations.js does not exist yet either.
         coll:  ['id', 'chunk', 'meaning', 'example', 'practice', 'difficulty']
     };
@@ -146,7 +153,7 @@
         vocab: [],
         gram:  ['notice', 'decide', 'whyItMatters', 'spokenNote', 'commonErrors',
                 'prerequisites', 'syllabusNumber', 'tags'],
-        phon:  [],
+        phon:  ['priority', 'audio', 'tags'],
         coll:  []
     };
 

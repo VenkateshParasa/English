@@ -2,7 +2,7 @@
 // Provides offline functionality and caching
 
 const CACHE_NAME = 'english-portal-v1.0.2';
-const STATIC_CACHE = 'english-portal-static-v8';
+const STATIC_CACHE = 'english-portal-static-v9';
 const DYNAMIC_CACHE = 'english-portal-dynamic-v3';
 const API_CACHE = 'english-portal-api-v3';
 
@@ -41,6 +41,8 @@ const STATIC_ASSETS = [
     '/data.js',
     // Strand B grammar content, loaded by index.html before app.js.
     '/data/grammar.js',
+    '/data/grammar/countability.js',
+    '/data/pronunciation/vowels-stress.js',
     '/app.js',
     // Shell metadata and icons referenced directly by index.html
     '/manifest.json',

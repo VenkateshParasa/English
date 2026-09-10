@@ -124,48 +124,95 @@ const state = {
 // that does have content (confident) instead of rendering an empty section. See
 // the disabled "Fluent" buttons in index.html.
 
-// vocabularyData is the widest of the content maps and every other content map
-// (sentenceExercises, readingPassages, listeningExercises, puzzleData.*) uses
-// the same key set, so it is a fair probe for "is there content under this key".
-function hasContentForLevel(key) {
+// vocabularyData used to be the oracle for every section, on the grounds that it
+// was the widest content map and every other map used the same key set. That was
+// true until `grammarLessons` shipped: it has content for `foundation` and
+// deliberately EMPTY arrays for the other three tiers, so "Everyday is
+// available" was simultaneously true (per vocabulary) and false (per grammar).
+// The visible symptom was that the grammar loader had to grow its own local
+// resolveGrammarLevel(); the invisible one was statistics counting the same
+// grammar point twice (US-152).
+//
+// So availability is now asked of a SECTION, and each section names its own
+// content map in js/core/sections.js (`contentGlobal`) with the accessor
+// registered from the registerContent() block near the bottom of this file.
+
+/**
+ * Does `key` have authored content?
+ *
+ * With `sectionId`, the question is answered against that section's own content.
+ * Without it, the question is app-wide — "does ANY learning section have
+ * something at this tier" — because the callers with no section to name are the
+ * ones acting on state.currentDifficulty, which is one app-wide setting shared
+ * by every section, and on the .diff-btn selectors that paint it. Disabling a
+ * shared, app-wide button per section would be incoherent: clicking Foundation
+ * inside Grammar also moves Vocabulary.
+ *
+ * For the content shipping today the union answers identically to the old
+ * vocabularyData probe (vocabulary is still the widest map). It is written as a
+ * union so that it stays honest when that stops being true.
+ */
+function hasContentForLevel(key, sectionId) {
     if (typeof key !== 'string' || key.length === 0) return false;
-    return typeof vocabularyData !== 'undefined' && !!vocabularyData &&
-           Object.prototype.hasOwnProperty.call(vocabularyData, key);
+
+    if (sectionId && Sections.knowsContent(sectionId)) {
+        return Sections.hasContent(sectionId, key);
+    }
+
+    const probed = Sections.exerciseIds().filter(id => Sections.knowsContent(id));
+    if (probed.length === 0) {
+        // registerContent() has not run (a script-order or partial-parse
+        // mistake). Degrade to the pre-US-153 probe rather than report every
+        // tier empty, which would leave the learner with no selectable level.
+        return typeof vocabularyData !== 'undefined' && !!vocabularyData &&
+               Object.prototype.hasOwnProperty.call(vocabularyData, key);
+    }
+    return probed.some(id => Sections.hasContent(id, key));
 }
 
 // The tiers that actually have content behind them, in ascending order. Derived
 // from levels.js rather than hardcoded, so authoring `fluent` content is the
-// only step needed to make the tier live.
-function playableLevels() {
+// only step needed to make the tier live. Scoped to one section when asked.
+function playableLevels(sectionId) {
     if (typeof LEVELS === 'undefined' || !Array.isArray(LEVELS)) return [];
     return LEVELS.slice()
         .sort((a, b) => a.order - b.order)
         .map(l => l.id)
-        .filter(hasContentForLevel);
+        .filter(id => hasContentForLevel(id, sectionId));
 }
 
 /** True when this tier is a real level with no authored content yet. */
-function isLevelAvailable(value) {
-    if (typeof canonicalLevel !== 'function') return hasContentForLevel(value);
-    return hasContentForLevel(canonicalLevel(value));
+function isLevelAvailable(value, sectionId) {
+    if (typeof canonicalLevel !== 'function') return hasContentForLevel(value, sectionId);
+    return hasContentForLevel(canonicalLevel(value), sectionId);
 }
 
-function resolveDifficulty(value) {
+/**
+ * The tier whose content the learner will actually be shown.
+ *
+ * `sectionId` is optional and additive: omitting it keeps the exact pre-US-153
+ * contract (app-wide availability), which is what the three existing callers —
+ * two normalisations of state.currentDifficulty and the .diff-btn handler —
+ * want, since all three are about the single shared setting rather than about
+ * one section's content. Passing it answers for that section alone, which is
+ * what the grammar loader needs and what makes exercise ids honest (US-152).
+ */
+function resolveDifficulty(value, sectionId) {
     // Guard for levels.js being absent (script-order mistake). Degrade to the
     // previous behaviour of trusting the value, but still never hand back a key
     // that has no content behind it.
     if (typeof canonicalLevel !== 'function') {
-        return hasContentForLevel(value) ? value : 'foundation';
+        return hasContentForLevel(value, sectionId) ? value : 'foundation';
     }
 
     const canonical = canonicalLevel(value);
-    if (hasContentForLevel(canonical)) return canonical;
+    if (hasContentForLevel(canonical, sectionId)) return canonical;
 
     // No content for this tier. Step DOWN to the nearest lower tier that has
     // some — easier content the learner can still use beats an empty screen,
     // and stepping down never shows them something above the level they asked
     // for. Only if nothing lower exists do we step up.
-    const playable = playableLevels();
+    const playable = playableLevels(sectionId);
     const wanted = (typeof LEVELS !== 'undefined' && Array.isArray(LEVELS))
         ? (LEVELS.find(l => l.id === canonical) || {}).order
         : undefined;
@@ -177,7 +224,7 @@ function resolveDifficulty(value) {
         return playable[0];
     }
 
-    if (hasContentForLevel(DEFAULT_LEVEL)) return DEFAULT_LEVEL;
+    if (hasContentForLevel(DEFAULT_LEVEL, sectionId)) return DEFAULT_LEVEL;
     return playable[0] || 'foundation';
 }
 
@@ -442,14 +489,60 @@ function getExerciseId(type, index, difficulty) {
     return `${type}_${difficulty}_${index}`;
 }
 
+/**
+ * The level an exercise id is stamped with — US-152.
+ *
+ * The three helpers below used to read `state.currentDifficulty` themselves.
+ * That is wrong for any section whose content does not cover every tier: with
+ * grammar authored only for `foundation`, selecting Everyday shows the very same
+ * Foundation point (renderGrammarTeaching says so out loud), yet completing it
+ * stored `grammar_everyday_0` alongside `grammar_foundation_0` and
+ * updateStatistics counted it a second time. One point, two ✓s, two increments
+ * to `totalGrammar` — and those counters now feed the dashboard.
+ *
+ * The level therefore has to come from the section's CONTENT, not from the
+ * global button state: `resolveDifficulty(state.currentDifficulty, type)` is
+ * exactly the tier the section is showing, so both selected tiers now stamp
+ * `grammar_foundation_0` and the point counts once.
+ *
+ * WHY AN OPTIONAL PARAMETER AND NOT A SIGNATURE CHANGE
+ * These helpers are shared by all six exercise sections. Changing their contract
+ * would mean editing every call site in five sections I have no reason to touch,
+ * and any call site missed would silently read `undefined` and stamp ids like
+ * `sentences_undefined_3` — a data-corrupting failure that renders perfectly.
+ * The added third parameter is therefore optional, and OMITTING it is the
+ * correct call for every existing caller: the derived default is identical to
+ * the old `state.currentDifficulty` for any section whose content covers the
+ * selected tier, which is all five of the others at every tier a learner can
+ * select. Grammar's own call sites pass the level explicitly anyway, so the
+ * stored id and the ✓ indicator cannot drift apart even if the derivation
+ * changes later.
+ *
+ * WHY NOT FIX THIS INSIDE THE GRAMMAR LOADER
+ * Because the loader is not the only reader. updateNavigationButtons() ->
+ * isExerciseCompleted() paints the ✓, retakeExercise() clears it, and
+ * markExerciseComplete() writes it. Correcting the level in one of them desyncs
+ * the indicator from what is stored, which is worse than counting twice.
+ */
+function exerciseLevel(type, level) {
+    if (level) {
+        return typeof canonicalLevel === 'function' ? canonicalLevel(level) : level;
+    }
+    return resolveDifficulty(state.currentDifficulty, type);
+}
+
 // Mark exercise as complete
-function markExerciseComplete(type, index) {
-    const id = getExerciseId(type, index, state.currentDifficulty);
+function markExerciseComplete(type, index, level) {
+    const difficulty = exerciseLevel(type, level);
+    const id = getExerciseId(type, index, difficulty);
     state.completedExercises[type].add(id);
     state.exerciseHistory.push({
         type,
         index,
-        difficulty: state.currentDifficulty,
+        // The tier whose content was actually practised, which is what `id`
+        // encodes. Recording the selected button instead would leave history
+        // disagreeing with the id sitting next to it in the same record.
+        difficulty,
         timestamp: Date.now(),
         id
     });
@@ -458,14 +551,14 @@ function markExerciseComplete(type, index) {
 }
 
 // Check if exercise is completed
-function isExerciseCompleted(type, index) {
-    const id = getExerciseId(type, index, state.currentDifficulty);
+function isExerciseCompleted(type, index, level) {
+    const id = getExerciseId(type, index, exerciseLevel(type, level));
     return state.completedExercises[type].has(id);
 }
 
 // Retake exercise
-function retakeExercise(type, index) {
-    const id = getExerciseId(type, index, state.currentDifficulty);
+function retakeExercise(type, index, level) {
+    const id = getExerciseId(type, index, exerciseLevel(type, level));
     state.completedExercises[type].delete(id);
     saveProgress();
     updateNavigationButtons(type);
@@ -3723,31 +3816,27 @@ function grammarLessonsFor(level) {
 }
 
 /**
- * The tier whose grammar points the learner will actually be shown, or null when
- * no tier has any.
+ * The tier whose grammar points the learner will actually be shown.
  *
- * Grammar cannot use resolveDifficulty(): that probes `vocabularyData`, which has
- * content for three tiers, while grammar today has content for one. Asking it
- * would return 'confident' and render an empty section. Same policy as
- * resolveDifficulty otherwise — step DOWN first, because easier content the
- * learner can use beats an empty screen and never shows them something above the
- * level they asked for.
+ * US-153 removed this function's body. It existed because resolveDifficulty()
+ * probed `vocabularyData` — content for three tiers — while grammar has content
+ * for one, so asking it returned 'confident' and rendered an empty section.
+ * resolveDifficulty() now takes the section, so the general helper gives the
+ * right answer and the local copy of the step-down policy is gone.
+ *
+ * Kept as a one-line alias rather than inlined at the four call sites, because
+ * every one of them must ask the same question the same way; a section that
+ * resolves its level two different ways is how the ✓ indicator and the stored
+ * exercise id drifted apart in the first place (US-152).
+ *
+ * NOTE the one contract change: this used to return `null` when no tier had any
+ * grammar content. It now returns a level id always. Every caller consumed the
+ * null only as "falsy, therefore zero lessons", and grammarLessonsFor() on the
+ * returned tier is `[]` in exactly that case — so the "No grammar points yet"
+ * screen and the disabled Prev/Next still appear, via `lessons.length` instead.
  */
 function resolveGrammarLevel(requested) {
-    const canonical = (typeof canonicalLevel === 'function')
-        ? canonicalLevel(requested)
-        : requested;
-    if (grammarLessonsFor(canonical).length > 0) return canonical;
-
-    const ordered = (typeof LEVELS !== 'undefined' && Array.isArray(LEVELS))
-        ? LEVELS.slice().sort((a, b) => a.order - b.order).map(l => l.id)
-        : ['foundation', 'everyday', 'confident', 'fluent'];
-    const authored = ordered.filter(id => grammarLessonsFor(id).length > 0);
-    if (authored.length === 0) return null;
-
-    const wanted = ordered.indexOf(canonical);
-    const lower = authored.filter(id => ordered.indexOf(id) < wanted);
-    return lower.length > 0 ? lower[lower.length - 1] : authored[0];
+    return resolveDifficulty(requested, 'grammar');
 }
 
 /**
@@ -4107,10 +4196,18 @@ function renderGrammarWrong(lesson, item, answer, feedbackHost) {
  * reads the registry row, so `grammarCompleted` / `totalGrammar` / the
  * `grammar` daily average all move without a line of section-specific code.
  * Guarded by isExerciseCompleted so redoing a point cannot inflate the counters.
+ *
+ * Both calls pass `grammarSession.level` — the tier this point was actually
+ * loaded from, not the tier whose button is lit. With grammar authored for
+ * `foundation` only, selecting Everyday shows the same Foundation point, and
+ * reading the button here counted it a second time under a second exercise id
+ * (US-152). Passing the session's own level makes the check and the write agree
+ * with each other and with what is on screen, whatever the selector says.
  */
 function completeGrammarPoint(lesson) {
     const index = grammarSession.index;
-    const alreadyDone = isExerciseCompleted('grammar', index);
+    const level = grammarSession.level;
+    const alreadyDone = isExerciseCompleted('grammar', index, level);
 
     scheduleGrammarSuccess(lesson);
     if (typeof updateDueCount === 'function') updateDueCount();
@@ -4119,7 +4216,7 @@ function completeGrammarPoint(lesson) {
         state.dailyGoals.grammar = true;
         updateStatistics('grammar');
     }
-    markExerciseComplete('grammar', index);
+    markExerciseComplete('grammar', index, level);
     updateDashboard();
     saveProgress();
 
@@ -4422,7 +4519,11 @@ function loadGrammarPoint() {
         ? canonicalLevel(state.currentDifficulty)
         : state.currentDifficulty;
     const level = resolveGrammarLevel(state.currentDifficulty);
-    const lessons = level ? grammarLessonsFor(level) : [];
+    // No `level ? … : []` any more: resolveGrammarLevel() no longer returns null
+    // (see its note). grammarLessonsFor() already returns [] for a tier with no
+    // authored points and for data/grammar.js failing to load, which is the same
+    // empty array the null branch produced.
+    const lessons = grammarLessonsFor(level);
 
     const feedbackEl = document.getElementById('grammarFeedback');
     if (feedbackEl) feedbackEl.className = 'feedback';
@@ -4523,7 +4624,7 @@ function initializeGrammarButtons() {
     if (next) {
         next.onclick = () => {
             const level = resolveGrammarLevel(state.currentDifficulty);
-            const total = level ? grammarLessonsFor(level).length : 0;
+            const total = grammarLessonsFor(level).length;
             if ((state.currentGrammarIndex || 0) < total - 1) {
                 state.currentGrammarIndex++;
                 loadGrammarPoint();
@@ -4559,6 +4660,68 @@ Sections.registerRuntime({
     // Wrapped, not bare: puzzles reload whichever sub-puzzle is selected.
     puzzles: () => loadPuzzle(state.currentPuzzle)
 });
+
+// ============================================
+// SECTION CONTENT REGISTRATION
+// ============================================
+//
+// US-153. One probe per section answering "how many items are authored at this
+// tier", which is what hasContentForLevel() / isLevelAvailable() /
+// resolveDifficulty() now ask instead of probing `vocabularyData` for everybody.
+//
+// Here rather than in js/core/sections.js for two reasons. data.js and
+// data/grammar.js declare `const vocabularyData` / `const grammarLessons`, which
+// are LEXICAL globals — not properties of `window` — so sections.js cannot turn
+// its `contentGlobal` name string into a value at all; and both files load after
+// sections.js, so a value read at that file's parse time would be a TDZ
+// ReferenceError anyway. Each row names its map, this block knows its shape.
+//
+// Every body is lazy: the map is dereferenced when a probe is CALLED, never at
+// this statement's parse time, so load order below app.js cannot matter.
+// `typeof` guards throughout, as data/grammar.js's header requires.
+Sections.registerContent({
+    vocabulary: level => contentCountAt(
+        typeof vocabularyData !== 'undefined' ? vocabularyData : null, level),
+    sentences: level => contentCountAt(
+        typeof sentenceExercises !== 'undefined' ? sentenceExercises : null, level),
+    reading: level => contentCountAt(
+        typeof readingPassages !== 'undefined' ? readingPassages : null, level),
+    listening: level => contentCountAt(
+        typeof listeningExercises !== 'undefined' ? listeningExercises : null, level),
+    // puzzleData is the one two-level map: puzzle TYPE first, level second. A
+    // tier counts as playable when ANY puzzle type has something at it, because
+    // that is one working puzzle rather than an empty screen — and the section
+    // has no per-type level selector that could report a partly-authored tier.
+    puzzles: level => {
+        if (typeof puzzleData === 'undefined' || !puzzleData) return 0;
+        return Object.keys(puzzleData).reduce(
+            (n, type) => n + contentCountAt(puzzleData[type], level), 0);
+    },
+    // The map that motivated all of this: `foundation` has one point, the other
+    // three tiers are authored as empty arrays on purpose.
+    grammar: level => grammarLessonsFor(level).length
+});
+
+/**
+ * Items under `map[level]`, tolerating both shapes the content files use: an
+ * array of items (every map except puzzleData's sub-maps) or a single non-empty
+ * object describing one activity (puzzleData.wordSearch[level] is
+ * `{ words, gridSize }`). Never throws — an availability question must not be
+ * able to take a section down.
+ *
+ * Counting rather than mere key presence, deliberately. The old oracle asked
+ * `hasOwnProperty`, which reports `grammarLessons.everyday` — an empty array,
+ * present only so `grammarLessons[level]` never throws — as content. For the
+ * four flat maps the two questions give the same answer today because every tier
+ * they list is non-empty; counting is what also makes it right for grammar.
+ */
+function contentCountAt(map, level) {
+    if (!map || typeof map !== 'object' || typeof level !== 'string') return 0;
+    const at = map[level];
+    if (Array.isArray(at)) return at.length;
+    if (at && typeof at === 'object') return Object.keys(at).length > 0 ? 1 : 0;
+    return 0;
+}
 
 // ============================================
 // KEYBOARD NAVIGATION SYSTEM
