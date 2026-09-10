@@ -13,12 +13,19 @@
  *      (BR-3, FR-SRS-5, FR-PRN-5);
  *   5. a category id is learner data, so a row's WORDING widens and its id
  *      never changes — and an entry whose id has left the taxonomy is kept and
- *      unranked, not dropped (US-159).
+ *      unranked, not dropped (US-159);
+ *   6. one habit is one finding with one count and one drill (US-165), and one
+ *      finding may still have more than one drill destination where the same
+ *      error is fixed by two items (US-164, /θ/ and /ð/ under T-P6).
  *
  * Where a test pins a *policy number* rather than a behaviour it reads the
  * constant off the module, so retuning the policy does not look like a
  * regression. Where the number itself is the contract (30 days, top 5, from
  * FR-SRS-3) it is written out literally.
+ *
+ * The US-165 block requires the two grammar content files, so this suite is the
+ * one place where the taxonomy and the content that references it are checked
+ * against each other rather than against a transcription of each other.
  */
 
 const Mistakes = require('../../js/core/mistakes.js');
@@ -247,15 +254,206 @@ describe('countability: one error, one routing (US-159 / T-G4)', () => {
         expect(top[0].share).toBe(1);
     });
 
-    it('still ranks separately from gram.articles while content has not converged', () => {
-        // Documents the CURRENT state honestly rather than asserting a fix that
-        // needs an edit in data/grammar.js: the articles point still logs
-        // "a work" as gram.articles, so today the learner sees two rows. This
-        // test is the one that flips to a single row when that edit lands.
-        Mistakes.record('gram.articles', { at: daysAgo(2), given: 'a work' });
+    it('still ranks two DIFFERENT habits separately', () => {
+        // US-165 closed the split in data/grammar.js — the articles point's "a
+        // work" / "a meat" / "an work" / "an meat" entries now carry
+        // `logAs: "gram.uncountable-plural"`, so the five shapes converge (see
+        // the content-driven test below). What must NOT happen is the taxonomy
+        // collapsing two genuinely different errors: a real article error and a
+        // countability error are still two findings with two drills.
+        Mistakes.record('gram.articles', { at: daysAgo(2), given: 'I went to shop' });
         Mistakes.record('gram.uncountable-plural', { at: daysAgo(1), given: 'an advice' });
-        expect(Mistakes.topCategories().map(r => r.id).sort())
+        const top = Mistakes.topCategories();
+        expect(top.map(r => r.id).sort())
             .toEqual(['gram.articles', 'gram.uncountable-plural']);
+        expect(new Set(top.map(r => r.drill.srsKey)).size).toBe(2);
+    });
+});
+
+describe('US-165 — the split routing converges, driven by the content itself', () => {
+    // The point of this block is that it reads the routing OFF data/grammar.js and
+    // data/grammar/countability.js rather than restating it. If someone re-points
+    // one of those four `logAs` entries back at `gram.articles`, this fails.
+    //
+    // The two content files are classic scripts that share a lexical scope in the
+    // browser: countability.js pushes itself into `grammarLessons.foundation` by
+    // bare name. Under CommonJS each file gets its own module scope, so that
+    // self-registration cannot fire and the test assembles the tiers by hand —
+    // which is also why it asserts the point is present before relying on it.
+    const grammar = require('../../data/grammar.js');
+    const countability = require('../../data/grammar/countability.js');
+
+    const lessons = {
+        foundation: grammar.grammarLessons.foundation
+            .concat(grammar.grammarLessons.foundation
+                .some(p => p.id === countability.GRAMMAR_COUNTABILITY.id)
+                ? []
+                : [countability.GRAMMAR_COUNTABILITY]),
+        everyday: [], confident: [], fluent: []
+    };
+
+    /** Every practice item, with the point it came from. */
+    const items = () => {
+        const out = [];
+        Object.keys(lessons).forEach(tier => (lessons[tier] || []).forEach(point =>
+            (point.practice || []).forEach(item => out.push({ point, item }))));
+        return out;
+    };
+
+    /** What the CONTENT says to log when the learner picks `answer` on `itemId`. */
+    const routeOf = (itemId, answer) => {
+        const found = items().find(x => x.item.id === itemId);
+        expect(found).toBeDefined();
+        const fb = (found.item.feedback || []).find(f => f.forAnswer === answer);
+        expect(fb).toBeDefined();
+        return fb.logAs || found.point.mistakeCategory;
+    };
+
+    const byPrompt = needle => {
+        const found = items().find(x => (x.item.prompt || '').indexOf(needle) >= 0);
+        expect(found).toBeDefined();
+        return found.item.id;
+    };
+
+    it('assembled both grammar points', () => {
+        expect(lessons.foundation.map(p => p.id))
+            .toEqual(expect.arrayContaining(['articles', 'countable-uncountable']));
+    });
+
+    it('routes the article-shaped uncountable error to the countability id', () => {
+        // The four sites US-165 changed, identified by item and answer — never by
+        // line number, because other work renumbers the items.
+        expect(routeOf('articles-p4', 'a')).toBe('gram.uncountable-plural');   // "a meat"
+        expect(routeOf('articles-p4', 'an')).toBe('gram.uncountable-plural');  // "an meat"
+        expect(routeOf('articles-p6', 'a')).toBe('gram.uncountable-plural');   // "a work"
+        expect(routeOf('articles-p6', 'an')).toBe('gram.uncountable-plural');  // "an work"
+    });
+
+    it('leaves every genuine article error on gram.articles', () => {
+        // The other entries in the very same two items are article errors and
+        // must not have been swept along: "the meat" and "the work" are real
+        // English that mean something else here.
+        expect(routeOf('articles-p4', 'the')).toBe('gram.articles');
+        expect(routeOf('articles-p6', 'the')).toBe('gram.articles');
+        // And nothing outside the uncountable shape moved: every remaining
+        // gram.articles site is an omission or a wrong choice.
+        items().forEach(({ item }) => (item.feedback || []).forEach(f => {
+            if (f.logAs === 'gram.articles') {
+                expect(['omission', 'wrong-choice']).toContain(f.errorKind);
+            }
+        }));
+    });
+
+    it('gives ONE finding, ONE count and ONE drill for all five shapes', () => {
+        const shapes = [
+            ['a work',            routeOf('articles-p6', 'a')],
+            ['a meat',            routeOf('articles-p4', 'a')],
+            ['an advice',         routeOf(byPrompt('get ___ from a lawyer'), 'an advice')],
+            ['a luggage',         routeOf(byPrompt('luggage'), 'a')],
+            ['three information', routeOf(byPrompt('The email left out three'), 'information')]
+        ];
+        shapes.forEach(([given, id], i) => Mistakes.record(id, { at: daysAgo(i + 1), given }));
+
+        const top = Mistakes.topCategories();
+        expect(top).toHaveLength(1);                                   // one finding
+        expect(top[0].id).toBe('gram.uncountable-plural');
+        expect(top[0].count).toBe(5);                                  // one count
+        expect(top[0].share).toBe(1);
+        expect(new Set(top.map(r => r.drill.srsKey)).size).toBe(1);    // one drill
+        expect(top[0].drill.srsKey).toBe('gram:countable-uncountable');
+    });
+
+    it('declares no mistake id that record() would refuse (US-160)', () => {
+        // This replaces the deleted MISTAKE_CATEGORIES array. It compares the ids
+        // the content ACTUALLY writes against the module that owns the taxonomy,
+        // so it catches a typo the hand-copied list could not — and cannot itself
+        // go stale, which that list had (it omitted gram.register-indian).
+        const declared = grammar.grammarMistakeCategoryIds(lessons);
+        expect(declared.length).toBeGreaterThan(0);
+        expect(Mistakes.unknownCategories(declared)).toEqual([]);
+        expect(declared).toContain('gram.uncountable-plural');
+        // The alias table's targets have to resolve too.
+        expect(Mistakes.unknownCategories(Object.values(grammar.MISTAKE_CATEGORY_ALIASES)))
+            .toEqual([]);
+        // A stale local list is exactly what was removed; prove the module knows
+        // the id that list was missing.
+        expect(Mistakes.categoryIds({ strand: 'grammar' })).toContain('gram.register-indian');
+        expect(grammar.MISTAKE_CATEGORIES).toBeUndefined();
+    });
+});
+
+describe('US-164 — a /ð/ miss has somewhere to go', () => {
+    // consonants.js authors T-P6 as two pair sets, θ-t and ð-d, and gives BOTH
+    // `mistakeCategory: 'prn.th'`. Only θ-t was a drill target, so phon:ð-d
+    // scheduled fine and nothing in the log routed back to it.
+    //
+    // The fix is a second target under the one category, not a second category:
+    // a new id would have no producer while consonants.js (read-only here) points
+    // both sets at prn.th, and splitting would hand the learner two half-counts of
+    // one habit. The two pair SETS stay separate, as that file's author argued.
+
+    it('keeps one category for T-P6, with its id and its label intact', () => {
+        expect(Mistakes.isKnownCategory('prn.th')).toBe(true);
+        expect(Mistakes.getCategory('prn.th').code).toBe('T-P6');
+        // The label has to stay true of both sounds, because both arrive here.
+        expect(Mistakes.getCategory('prn.th').label).toMatch(/"t"/);
+        expect(Mistakes.getCategory('prn.th').label).toMatch(/"d"/);
+        // No second row was invented for the voiced half.
+        expect(Mistakes.isKnownCategory('prn.th-voiced')).toBe(false);
+        expect(Mistakes.isKnownCategory('prn.dh')).toBe(false);
+    });
+
+    it('hands a drill both halves, with the θ-t primary unchanged', () => {
+        const t = Mistakes.drillTarget('prn.th');
+        // Unchanged for every existing caller.
+        expect(t.target).toBe('θ-t');
+        expect(t.srsKey).toBe('phon:θ-t');
+        // ...and now routable for /ð/.
+        expect(t.targets).toEqual(['θ-t', 'ð-d']);
+        expect(t.srsKeys).toEqual(['phon:θ-t', 'phon:ð-d']);
+    });
+
+    it('carries both keys through the ranked row a learner would act on', () => {
+        seed('prn.th', [1, 2, 3, 6], { item: 'ð-d/then', given: 'den', expected: 'then' });
+        const row = Mistakes.topCategories()[0];
+        expect(row.id).toBe('prn.th');
+        expect(row.drillable).toBe(true);
+        expect(row.drill.srsKeys).toContain('phon:ð-d');
+    });
+
+    it('leaves every single-target row exactly as it was', () => {
+        expect(Mistakes.drillTarget('prn.v-w')).toMatchObject({
+            target: 'v-w', srsKey: 'phon:v-w', targets: ['v-w'], srsKeys: ['phon:v-w']
+        });
+        expect(Mistakes.drillTarget('gram.articles')).toMatchObject({
+            target: 'articles', srsKey: 'gram:articles', targets: ['articles']
+        });
+        // A whole-strand drill still has no addressable item, so no keys.
+        expect(Mistakes.drillTarget('vocab.meaning')).toMatchObject({
+            target: null, srsKey: null, targets: [], srsKeys: []
+        });
+        expect(Mistakes.drillTarget('prn.retroflex')).toBeNull();
+    });
+
+    it('accepts either authoring shape, deduplicates, and returns copies', () => {
+        Mistakes.registerCategories([
+            { id: 'x.also', strand: 'pronunciation', label: 'alsoTargets form',
+              drill: { strand: 'pronunciation', target: 'a', alsoTargets: ['b', 'a', '', null] } },
+            { id: 'x.list', strand: 'pronunciation', label: 'bare targets form',
+              drill: { strand: 'pronunciation', targets: ['c', 'd'] } }
+        ]);
+        expect(Mistakes.drillTarget('x.also').targets).toEqual(['a', 'b']);
+        // A bare list promotes its first entry to the primary, so `srsKey` is
+        // never null just because the author used the other shape.
+        expect(Mistakes.drillTarget('x.list')).toMatchObject({
+            target: 'c', srsKey: 'phon:c', targets: ['c', 'd']
+        });
+
+        const copy = Mistakes.getCategory('prn.th');
+        copy.drill.targets.push('MUTATED');
+        expect(Mistakes.drillTarget('prn.th').targets).toEqual(['θ-t', 'ð-d']);
+        Mistakes.drillTarget('prn.th').srsKeys.push('MUTATED');
+        expect(Mistakes.drillTarget('prn.th').srsKeys).toHaveLength(2);
     });
 });
 
@@ -304,10 +502,11 @@ describe('an id that is no longer registered still resolves (id stability)', () 
 });
 
 describe('the taxonomy answers the typo guard itself (US-160)', () => {
-    // data/grammar.js keeps a literal MISTAKE_CATEGORIES array so an author's
-    // `logAs` typo fails a test. A duplicated list goes stale — that one is
-    // missing gram.register-indian, so the guard would reject a valid id. These
-    // pin the module-side replacement for it.
+    // data/grammar.js used to keep a literal MISTAKE_CATEGORIES array so an
+    // author's `logAs` typo would fail a test. A duplicated list goes stale —
+    // that one was missing gram.register-indian, so the guard would have rejected
+    // a valid id. It has been deleted; these pin the module-side replacement, and
+    // the US-165 block above runs it against the real content.
 
     it('filters ids by strand, so a content file need not keep its own list', () => {
         const grammarIds = Mistakes.categoryIds({ strand: 'grammar' });

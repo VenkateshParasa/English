@@ -1945,9 +1945,10 @@ function initializeDifficultySelectors() {
             saveProgress();
 
             const section = btn.closest('.section').id;
-            // Only vocabulary/sentences/reading carry a .diff-btn group today
-            // (Sections.hasDifficulty), and those are exactly the three loaders
-            // the old three `if`s called.
+            // Whichever section this button lives in — read from the DOM, so the
+            // set is whatever `hasDifficulty` is true for in js/core/sections.js
+            // (vocabulary, sentences, reading and grammar today; the comment here
+            // used to say "the three" and had been wrong since Grammar shipped).
             Sections.loader(section)?.();
         });
     });
@@ -1959,31 +1960,90 @@ function initializeDifficultySelectors() {
 // DASHBOARD
 // ============================================
 
+// US-163. The dashboard was the last part of app.js still describing sections by
+// hand, and the worst possible place for it: updateDashboard() and
+// updateStatisticsDisplay() below are the two functions that display everything,
+// so a section missing from them counts correctly in state and reads as zero to
+// the learner — the silent failure the registry exists to make unrepresentable,
+// still live after US-154 moved the counters. Grammar and Pronunciation each had
+// to be hand-added in three places here (a stat card line, a "Today" row, an
+// "Averages" row) plus a term in the Total Exercises sum. Both now read
+// Sections.exercises().
+//
+// The markup these build is byte-for-byte what the hand-written template
+// literals produced — including the indentation, which is why statRow()/statBox()
+// carry explicit indent strings rather than relying on how they are written.
+// Verified by rendering both versions against a fake DOM built from index.html's
+// own id set and diffing every innerHTML/textContent; see the US-163 note in the
+// commit. `.stat-row` and `.stat-box` are styled in styles.css and read aloud by
+// the aria-live regions in index.html, so "close enough" markup is a visual and
+// an accessibility regression, not a cosmetic one.
+
+// The indentation the old template literals sat at. Two levels: rows are indented
+// one step further, badges one step past their row's opening tag.
+const STAT_INDENT = '            ';
+
+/**
+ * One `.stat-row`. `badge` omitted (not empty-string) means this block has no
+ * comparison badges at all — the Overall and Averages blocks — and the badge line
+ * is then absent rather than blank, which is what those two literals did.
+ */
+function statRow(label, value, badge) {
+    return STAT_INDENT + '<div class="stat-row">\n' +
+        STAT_INDENT + '    <span>' + label + ':</span> <strong>' + value + '</strong>\n' +
+        (badge === undefined ? '' : STAT_INDENT + '    ' + badge + '\n') +
+        STAT_INDENT + '</div>\n';
+}
+
+/** Fill one `.stat-box`, or do nothing if an older cached index.html lacks it. */
+function statBox(id, heading, rows) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = '\n' + STAT_INDENT + '<h4>' + heading + '</h4>\n' +
+        rows.join('') + '        ';
+}
+
 function updateDashboard() {
-    // Overall stats
-    document.getElementById('wordsLearned').textContent = state.overallStats.totalWords;
-    document.getElementById('sentencesCompleted').textContent = state.overallStats.totalSentences;
-    document.getElementById('readingCompleted').textContent = state.overallStats.totalReading;
-    document.getElementById('puzzlesSolved').textContent = state.overallStats.totalPuzzles;
-    // Guarded, unlike the four above: this card arrived with the Grammar section
-    // (US-501) and an older cached index.html would not have it.
-    const grammarCard = document.getElementById('grammarCompleted');
-    if (grammarCard) grammarCard.textContent = state.overallStats.totalGrammar || 0;
-    // Same guard, same reason: this card arrived with the Pronunciation section
-    // (US-401) and an older cached index.html would not have it.
-    const pronCard = document.getElementById('pronunciationCompleted');
-    if (pronCard) pronCard.textContent = state.overallStats.totalPronunciation || 0;
-    
-    // Daily goals
-    Object.keys(state.dailyGoals).forEach(key => {
-        const el = document.getElementById(`goal${key.charAt(0).toUpperCase() + key.slice(1)}`);
-        if (el) el.checked = state.dailyGoals[key];
+    // Lifetime-total stat cards, one per row that has one. `totalCardId: null`
+    // (listening) is a section with no card, which is a gap in index.html rather
+    // than a section to skip in code — see the note on that field in
+    // js/core/sections.js.
+    Sections.exercises().forEach(section => {
+        if (!section.totalCardId) return;
+        const card = document.getElementById(section.totalCardId);
+        if (!card) {
+            // Every card is asserted present by __tests__/unit/sections.test.js,
+            // so reaching this means a stale cached index.html (the reason the
+            // Grammar and Pronunciation cards were individually guarded before)
+            // or a row naming an id that does not exist. Warn rather than throw:
+            // the four original cards were unguarded, and one missing card taking
+            // the whole dashboard — goals, progress bar and all three stat blocks
+            // — down with it is a worse outcome than one stale number.
+            console.warn('updateDashboard: no #' + section.totalCardId +
+                         ' card for section "' + section.id + '"');
+            return;
+        }
+        card.textContent = state.overallStats[section.totalStatKey] || 0;
     });
-    
-    const completedGoals = Object.values(state.dailyGoals).filter(g => g).length;
-    // Denominator from the registry, not a hardcoded 5: a new section with a
-    // daily goal would otherwise push the bar past 100%.
-    const progressPercent = (completedGoals / Sections.goalKeys().length) * 100;
+
+    // Daily goals. Driven from the registry rather than from the keys present in
+    // state.dailyGoals, so a goal a legacy save has never heard of still paints.
+    Sections.goalKeys().forEach(key => {
+        const el = document.getElementById(`goal${key.charAt(0).toUpperCase() + key.slice(1)}`);
+        if (el) el.checked = !!state.dailyGoals[key];
+    });
+
+    // Numerator AND denominator from the registry. The denominator already was
+    // (US-154); the numerator was `Object.values(state.dailyGoals)`, which counts
+    // whatever keys the object happens to have. loadProgress does
+    // `Object.assign(state.dailyGoals, loaded.dailyGoals)`, and Portability
+    // restores that field from a file, so a backup written when a since-removed
+    // section had a goal adds a key the registry has never heard of — 8 ticked out
+    // of 7 goals, a progress bar past 100%. Counting the registry's keys makes the
+    // fraction unable to disagree with itself.
+    const goalKeys = Sections.goalKeys();
+    const completedGoals = goalKeys.filter(key => state.dailyGoals[key]).length;
+    const progressPercent = (completedGoals / goalKeys.length) * 100;
     document.getElementById('overallProgress').style.width = `${progressPercent}%`;
     document.getElementById('progressPercent').textContent = `${Math.round(progressPercent)}%`;
     
@@ -1992,93 +2052,45 @@ function updateDashboard() {
 }
 
 function updateStatisticsDisplay() {
-    // Today's stats
-    const todayEl = document.getElementById('todayStats');
-    if (todayEl) {
-        todayEl.innerHTML = `
-            <h4>📅 Today's Progress</h4>
-            <div class="stat-row">
-                <span>Words:</span> <strong>${state.dailyStats.wordsLearned}</strong>
-                ${getComparisonBadge(state.dailyStats.wordsLearned, state.overallStats.averageDaily.words)}
-            </div>
-            <div class="stat-row">
-                <span>Sentences:</span> <strong>${state.dailyStats.sentencesCompleted}</strong>
-                ${getComparisonBadge(state.dailyStats.sentencesCompleted, state.overallStats.averageDaily.sentences)}
-            </div>
-            <div class="stat-row">
-                <span>Reading:</span> <strong>${state.dailyStats.readingCompleted}</strong>
-                ${getComparisonBadge(state.dailyStats.readingCompleted, state.overallStats.averageDaily.reading)}
-            </div>
-            <div class="stat-row">
-                <span>Listening:</span> <strong>${state.dailyStats.listeningCompleted}</strong>
-                ${getComparisonBadge(state.dailyStats.listeningCompleted, state.overallStats.averageDaily.listening)}
-            </div>
-            <div class="stat-row">
-                <span>Puzzles:</span> <strong>${state.dailyStats.puzzlesSolved}</strong>
-                ${getComparisonBadge(state.dailyStats.puzzlesSolved, state.overallStats.averageDaily.puzzles)}
-            </div>
-            <div class="stat-row">
-                <span>Grammar:</span> <strong>${state.dailyStats.grammarCompleted || 0}</strong>
-                ${getComparisonBadge(state.dailyStats.grammarCompleted || 0, state.overallStats.averageDaily.grammar || 0)}
-            </div>
-            <div class="stat-row">
-                <span>Pronunciation:</span> <strong>${state.dailyStats.pronunciationCompleted || 0}</strong>
-                ${getComparisonBadge(state.dailyStats.pronunciationCompleted || 0, state.overallStats.averageDaily.pronunciation || 0)}
-            </div>
-        `;
-    }
-    
-    // Overall stats
-    const overallEl = document.getElementById('overallStats');
-    if (overallEl) {
-        overallEl.innerHTML = `
-            <h4>📊 Overall Statistics</h4>
-            <div class="stat-row">
-                <span>Total Days:</span> <strong>${state.overallStats.totalDays}</strong>
-            </div>
-            <div class="stat-row">
-                <span>Current Streak:</span> <strong>${state.overallStats.currentStreak} days 🔥</strong>
-            </div>
-            <div class="stat-row">
-                <span>Best Streak:</span> <strong>${state.overallStats.bestStreak} days 🏆</strong>
-            </div>
-            <div class="stat-row">
-                <span>Total Words:</span> <strong>${state.overallStats.totalWords}</strong>
-            </div>
-            <div class="stat-row">
-                <span>Total Exercises:</span> <strong>${state.overallStats.totalSentences + state.overallStats.totalReading + state.overallStats.totalListening + state.overallStats.totalPuzzles + (state.overallStats.totalGrammar || 0) + (state.overallStats.totalPronunciation || 0)}</strong>
-            </div>
-        `;
-    }
-    
-    // Averages
-    const avgEl = document.getElementById('averageStats');
-    if (avgEl) {
-        avgEl.innerHTML = `
-            <h4>📈 Daily Averages</h4>
-            <div class="stat-row">
-                <span>Words:</span> <strong>${state.overallStats.averageDaily.words}</strong>
-            </div>
-            <div class="stat-row">
-                <span>Sentences:</span> <strong>${state.overallStats.averageDaily.sentences}</strong>
-            </div>
-            <div class="stat-row">
-                <span>Reading:</span> <strong>${state.overallStats.averageDaily.reading}</strong>
-            </div>
-            <div class="stat-row">
-                <span>Listening:</span> <strong>${state.overallStats.averageDaily.listening}</strong>
-            </div>
-            <div class="stat-row">
-                <span>Puzzles:</span> <strong>${state.overallStats.averageDaily.puzzles}</strong>
-            </div>
-            <div class="stat-row">
-                <span>Grammar:</span> <strong>${state.overallStats.averageDaily.grammar || 0}</strong>
-            </div>
-            <div class="stat-row">
-                <span>Pronunciation:</span> <strong>${state.overallStats.averageDaily.pronunciation || 0}</strong>
-            </div>
-        `;
-    }
+    // Nav order throughout, which is the order all three blocks were written in
+    // by hand, so the learner sees no reshuffle.
+    const sections = Sections.exercises();
+
+    // Today's stats. `|| 0` on every counter now, where the five original rows
+    // read the field bare and only the two newest used it. The values are always
+    // numbers for a state built by freshCompletedExercises()/zeroMap(), so this
+    // renders identically — it just means a save predating a section shows 0
+    // rather than the string "undefined".
+    statBox('todayStats', "📅 Today's Progress", sections.map(section => {
+        const today = state.dailyStats[section.dailyStatKey] || 0;
+        const average = state.overallStats.averageDaily[section.avgKey] || 0;
+        // statLabel, not label: a learner counts "Words", not "Vocabulary".
+        return statRow(section.statLabel, today, getComparisonBadge(today, average));
+    }));
+
+    // Overall stats. The first three rows are not per-section facts, so they stay
+    // hand-written and visible; the rest come from the rows.
+    const overallRows = [
+        statRow('Total Days', state.overallStats.totalDays),
+        statRow('Current Streak', `${state.overallStats.currentStreak} days 🔥`),
+        statRow('Best Streak', `${state.overallStats.bestStreak} days 🏆`)
+    ];
+    // A section reported on its own "Total X" row instead of inside the sum —
+    // vocabulary, and only vocabulary today. `countsInTotalExercises` is what
+    // preserves that split; before the registry it was the fact that somebody
+    // remembered to leave totalWords out of the addition.
+    sections.filter(section => !section.countsInTotalExercises).forEach(section => {
+        overallRows.push(statRow('Total ' + section.statLabel,
+                                 state.overallStats[section.totalStatKey] || 0));
+    });
+    overallRows.push(statRow('Total Exercises', sections
+        .filter(section => section.countsInTotalExercises)
+        .reduce((sum, section) => sum + (state.overallStats[section.totalStatKey] || 0), 0)));
+    statBox('overallStats', '📊 Overall Statistics', overallRows);
+
+    // Averages. No badges here — there is nothing to compare an average against.
+    statBox('averageStats', '📈 Daily Averages', sections.map(section =>
+        statRow(section.statLabel, state.overallStats.averageDaily[section.avgKey] || 0)));
 }
 
 function getComparisonBadge(current, average) {
@@ -3858,36 +3870,44 @@ function showFeedback(id, msg, type) {
 // 'order'; an item in one of those modes is skipped with a visible note rather
 // than mis-rendered as a gap.
 
-/** The authored points for a tier, always an array. */
+/**
+ * The authored points for a tier, always an array.
+ *
+ * This is also the section's content probe — Sections.registerContent() at the
+ * bottom of this file registers `grammar: level => grammarLessonsFor(level).length`
+ * — so "which tier does Grammar show" and "how much content has Grammar got" are
+ * answered from one function, and cannot disagree.
+ */
 function grammarLessonsFor(level) {
     if (typeof grammarLessons === 'undefined' || !grammarLessons) return [];
     const list = grammarLessons[level];
     return Array.isArray(list) ? list : [];
 }
 
-/**
- * The tier whose grammar points the learner will actually be shown.
- *
- * US-153 removed this function's body. It existed because resolveDifficulty()
- * probed `vocabularyData` — content for three tiers — while grammar has content
- * for one, so asking it returned 'confident' and rendered an empty section.
- * resolveDifficulty() now takes the section, so the general helper gives the
- * right answer and the local copy of the step-down policy is gone.
- *
- * Kept as a one-line alias rather than inlined at the four call sites, because
- * every one of them must ask the same question the same way; a section that
- * resolves its level two different ways is how the ✓ indicator and the stored
- * exercise id drifted apart in the first place (US-152).
- *
- * NOTE the one contract change: this used to return `null` when no tier had any
- * grammar content. It now returns a level id always. Every caller consumed the
- * null only as "falsy, therefore zero lessons", and grammarLessonsFor() on the
- * returned tier is `[]` in exactly that case — so the "No grammar points yet"
- * screen and the disabled Prev/Next still appear, via `lessons.length` instead.
- */
-function resolveGrammarLevel(requested) {
-    return resolveDifficulty(requested, 'grammar');
-}
+// resolveGrammarLevel() USED TO BE HERE, and is gone — US-153.
+//
+// It was this section's local copy of the step-down policy, needed because
+// resolveDifficulty() probed `vocabularyData` (content for three tiers) while
+// grammar has content for one: asking the general helper for `confident` returned
+// `confident` and rendered an empty section. Grammar's call sites therefore asked
+// a different function than every other section's, and that split is what let the
+// stored exercise id and the ✓ indicator disagree (US-152).
+//
+// resolveDifficulty() now takes a section id and answers against that section's
+// own registered content, so the local policy had nothing left to do; the last
+// commit left it as a one-line alias, and an alias whose only content is 20 lines
+// of history is a second name for one question — exactly the shape that let the
+// two answers drift. Both remaining call sites now call
+// `resolveDifficulty(state.currentDifficulty, 'grammar')` directly, which is the
+// same call markExerciseComplete()/isExerciseCompleted() make through
+// exerciseLevel(), so there is one expression and no policy to keep in sync.
+//
+// NOTE the contract change that came with it: the old function returned `null`
+// when no tier had any grammar content, where resolveDifficulty() always returns
+// a level id. Every caller consumed the null only as "falsy, therefore zero
+// lessons", and grammarLessonsFor() on the returned tier is `[]` in exactly that
+// case — so the "No grammar points yet" screen and the disabled Prev/Next still
+// appear, now via `lessons.length`.
 
 /**
  * Append authored text to `el`, honouring the content markup convention:
@@ -4568,11 +4588,12 @@ function loadGrammarPoint() {
     const requested = (typeof canonicalLevel === 'function')
         ? canonicalLevel(state.currentDifficulty)
         : state.currentDifficulty;
-    const level = resolveGrammarLevel(state.currentDifficulty);
-    // No `level ? … : []` any more: resolveGrammarLevel() no longer returns null
-    // (see its note). grammarLessonsFor() already returns [] for a tier with no
-    // authored points and for data/grammar.js failing to load, which is the same
-    // empty array the null branch produced.
+    const level = resolveDifficulty(state.currentDifficulty, 'grammar');
+    // No `level ? … : []` any more: resolveDifficulty() never returns null (see
+    // the note where resolveGrammarLevel() used to be). grammarLessonsFor()
+    // already returns [] for a tier with no authored points and for
+    // data/grammar.js failing to load, which is the same empty array the null
+    // branch produced.
     const lessons = grammarLessonsFor(level);
 
     const feedbackEl = document.getElementById('grammarFeedback');
@@ -4673,7 +4694,7 @@ function initializeGrammarButtons() {
 
     if (next) {
         next.onclick = () => {
-            const level = resolveGrammarLevel(state.currentDifficulty);
+            const level = resolveDifficulty(state.currentDifficulty, 'grammar');
             const total = grammarLessonsFor(level).length;
             if ((state.currentGrammarIndex || 0) < total - 1) {
                 state.currentGrammarIndex++;

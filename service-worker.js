@@ -2,7 +2,7 @@
 // Provides offline functionality and caching
 
 const CACHE_NAME = 'english-portal-v1.0.2';
-const STATIC_CACHE = 'english-portal-static-v11';
+const STATIC_CACHE = 'english-portal-static-v12';
 const DYNAMIC_CACHE = 'english-portal-dynamic-v3';
 const API_CACHE = 'english-portal-api-v3';
 
@@ -32,6 +32,7 @@ const STATIC_ASSETS = [
     '/js/core/migrations.js',
     '/js/core/srs.js',
     '/js/core/mistakes.js',
+    '/js/core/session.js',
     '/js/core/portability.js',
     '/js/core/blobstore.js',
     // UI

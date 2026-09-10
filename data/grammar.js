@@ -2,8 +2,13 @@
  * Grammar lessons — Strand B content
  * =============================================================================
  * Classic non-module script (CON-4). Declares the lexical globals
- * `grammarLessons`, `MISTAKE_CATEGORIES`, `ZERO_ARTICLE`, `ZERO_ARTICLE_LABEL`
- * and `GRAMMAR_SCHEMA_VERSION`.
+ * `grammarLessons`, `grammarMistakeCategoryIds`, `ZERO_ARTICLE`,
+ * `ZERO_ARTICLE_LABEL`, `MISTAKE_CATEGORY_ALIASES` and `GRAMMAR_SCHEMA_VERSION`.
+ *
+ * There is no `MISTAKE_CATEGORIES` array any more — js/core/mistakes.js owns the
+ * taxonomy and answers `categoryIds({ strand: 'grammar' })`; see the note above
+ * `grammarMistakeCategoryIds` for why the local copy was deleted rather than
+ * refreshed.
  *
  * ⚠️ A top-level `const` in a classic script is a *lexical* global, not a
  * property of `window`. Guard access with bare `typeof grammarLessons !==
@@ -30,8 +35,8 @@
  *   srsType            always 'gram'. Feeds SRS.scheduleItem('gram', id, …).
  *   srsRef             equals `id`. Written out so the key is greppable.
  *   srsKey             'gram:' + id. Denormalised for tests and dashboards.
- *   mistakeCategory    default MISTAKE_CATEGORIES entry for wrong answers here.
- *                      Per-feedback `logAs` overrides it (FR-SRS-3).
+ *   mistakeCategory    default js/core/mistakes.js category id for wrong answers
+ *                      here. Per-feedback `logAs` overrides it (FR-SRS-3).
  *   prerequisites      ids of points a learner really needs first. Advisory:
  *                      the app may order by this, but must not hard-gate —
  *                      nothing in the methodology gates grammar.
@@ -113,10 +118,15 @@
  *                                    here. Articles are mostly this, and saying
  *                                    so is the difference between teaching and
  *                                    scolding.
- *                        logAs     — MISTAKE_CATEGORIES entry to log, when it
+ *                        logAs     — the mistake-log category to log, when it
  *                                    differs from the lesson default. These are
  *                                    js/core/mistakes.js ids; that file owns the
- *                                    taxonomy.
+ *                                    taxonomy. Not every entry in an articles
+ *                                    item is an article error: where the learner
+ *                                    has treated an uncountable noun as countable
+ *                                    ("a work", "an meat") this points at
+ *                                    `gram.uncountable-plural`, because that is
+ *                                    where the drill that fixes it lives.
  *                        errorKind — finer grain than the learner-facing
  *                                    category, for authoring and analysis only.
  *                                    Never displayed: the mistake log shows one
@@ -229,39 +239,83 @@ const ZERO_ARTICLE_LABEL = "— (no article)";
 const GRAMMAR_SCHEMA_VERSION = 1;
 
 /**
- * Mistake-log categories used by grammar content.
+ * The mistake-log ids this content DECLARES — collected from the content, not
+ * hand-copied beside it (US-160).
  *
  * `js/core/mistakes.js` owns the taxonomy (its `BUILT_IN_CATEGORIES`), so content
- * references its ids directly rather than inventing a parallel vocabulary. This
- * array is the grammar subset, held here so a typo in a `logAs` fails a test
- * instead of silently landing everything in 'general.uncategorised'.
+ * references its ids directly rather than inventing a parallel vocabulary. A
+ * literal `MISTAKE_CATEGORIES` array used to sit here, described as "the grammar
+ * subset, held here so a typo in a `logAs` fails a test instead of silently
+ * landing everything in 'general.uncategorised'". It has been deleted, for two
+ * reasons:
  *
- * Note that the live taxonomy deliberately merges article omission ("I went to
- * shop") and wrong article choice ("He is the engineer") into one learner-facing
- * category, because "article omission, 4.7 times" is not a sentence anyone should
- * be handed. Content keeps the finer distinction in `errorKind` on each feedback
- * entry, so per-sub-rule analysis is still possible without splitting the
- * category the learner sees.
+ *  1. It was a second copy of data that something else owns, and it had already
+ *     rotted — it omitted `gram.register-indian`, so the guard built to catch an
+ *     invalid id would have rejected a valid one. A stale allow-list is worse
+ *     than no allow-list, because it fails in the direction that looks correct.
+ *  2. It pointed the check the wrong way. It let a test ask "is this id in my
+ *     local list?", when the only question worth asking is "is this id
+ *     registered in the module that owns the taxonomy and that `record()` will
+ *     accept?". Two APIs were added there last wave to answer exactly that:
  *
- * Pronunciation mistakes use the `prn.*` ids; phoneme detail rides along in the
- * `phon:<pair-id>` SRS key, not in a category name.
+ *         Mistakes.categoryIds({ strand: 'grammar' })   // the live grammar ids
+ *         Mistakes.unknownCategories(ids)               // [] = they all resolve
+ *
+ * Ask at the moment of the check, not at load time. A `const` initialised from
+ * `categoryIds()` here would only be a fresher snapshot, and it would be empty in
+ * any context where mistakes.js has not loaded yet — a guard that silently passes
+ * everything is the same defect in a new place.
+ *
+ * What this file keeps instead is the other half of the pair: the ids the content
+ * really uses. Feeding these to `unknownCategories()` catches a typo a hand-copied
+ * list never could, because it reads the actual `logAs` strings rather than a
+ * transcription of them.
+ *
+ * @param {Object} [lessons] a tier map; defaults to `grammarLessons`. Pass it
+ *        explicitly to cover points that self-register after this file loads
+ *        (point 4 in data/grammar/countability.js pushes itself in).
+ * @returns {string[]} deduplicated ids, in first-seen order.
  */
-const MISTAKE_CATEGORIES = [
-    "gram.articles",
-    "gram.copula",
-    "gram.stative-progressive",
-    "gram.uncountable-plural",
-    "gram.tag-question",
-    "gram.present-perfect",
-    "gram.preposition-transfer",
-    "gram.embedded-question-order",
-    "gram.tense-agreement",
-    "gram.subject-verb-agreement",
-    "gram.verb-form",
-    "gram.word-order"
-];
+function grammarMistakeCategoryIds(lessons) {
+    const source = lessons || grammarLessons;
+    const out = [];
+    const seen = Object.create(null);
+
+    function add(id) {
+        if (typeof id !== "string" || !id || seen[id]) return;
+        seen[id] = true;
+        out.push(id);
+    }
+
+    Object.keys(source || {}).forEach(function (tier) {
+        const points = source[tier];
+        if (!Array.isArray(points)) return;
+        points.forEach(function (point) {
+            if (!point) return;
+            add(point.mistakeCategory);
+            const practice = Array.isArray(point.practice) ? point.practice : [];
+            practice.forEach(function (item) {
+                if (!item || !Array.isArray(item.feedback)) return;
+                item.feedback.forEach(function (entry) {
+                    if (entry) add(entry.logAs);
+                });
+            });
+        });
+    });
+
+    return out;
+}
 
 /**
+ * Two facts about the ids above, kept here because they are the ones an author
+ * gets wrong. The live taxonomy deliberately MERGES article omission ("I went to
+ * shop") and wrong article choice ("He is the engineer") into one learner-facing
+ * category, because "article omission, 4.7 times" is not a sentence anyone should
+ * be handed; the finer distinction lives in `errorKind` on each feedback entry, so
+ * per-sub-rule analysis survives without splitting the category the learner sees.
+ * And pronunciation mistakes use the `prn.*` ids — phoneme detail rides along in
+ * the `phon:<pair-id>` SRS key, never in a category name.
+ *
  * The category names sketched in IMPLEMENTATION_PLAN.md Phase 9, mapped to the
  * ids that actually shipped in js/core/mistakes.js. Kept so the plan stays
  * readable against the code, and so any content authored against the old names
@@ -613,6 +667,18 @@ const grammarLessons = {
                             logAs: "gram.articles",
                             errorKind: "wrong-choice"
                         },
+                        // US-165. These two answers are an ARTICLE choice in an
+                        // articles lesson, and they are still not an article
+                        // error: the learner has treated an uncountable noun as
+                        // countable, and the fix is the countability drill, not
+                        // this one. So they route to `gram.uncountable-plural`
+                        // — the same id data/grammar/countability.js uses for
+                        // "an advice" — while every other feedback entry in this
+                        // point stays `gram.articles`. Before this converged, a
+                        // learner who met the habit here and in point 4 was
+                        // handed two findings, two half-counts and two drill
+                        // targets for one habit. `errorKind` keeps the finer
+                        // grain for analysis; it is never displayed.
                         {
                             forAnswer: "a",
                             reason: "**A** counts things one at a time, and *meat* is uncountable — you cannot have one meat and two meats. If you want to count it, you count the container or the piece.",
@@ -622,7 +688,7 @@ const grammarLessons = {
                             ],
                             retryCue: "Can I put a number in front of this word? If not, **a** cannot go there.",
                             grammaticalButDifferent: false,
-                            logAs: "gram.articles",
+                            logAs: "gram.uncountable-plural",
                             errorKind: "uncountable-treated-as-countable"
                         },
                         {
@@ -634,7 +700,7 @@ const grammarLessons = {
                             ],
                             retryCue: "Can I count it? Then: what sound comes next?",
                             grammaticalButDifferent: false,
-                            logAs: "gram.articles",
+                            logAs: "gram.uncountable-plural",
                             errorKind: "uncountable-treated-as-countable"
                         }
                     ],
@@ -731,6 +797,11 @@ const grammarLessons = {
                             logAs: "gram.articles",
                             errorKind: "wrong-choice"
                         },
+                        // US-165, as in articles-p4: "a work" / "an work" is the
+                        // uncountable-treated-as-countable habit surfacing in an
+                        // articles item, so it logs as `gram.uncountable-plural`
+                        // and lands the learner in the countability drill. The
+                        // "the" entry above is a genuine article error and stays.
                         {
                             forAnswer: "a",
                             reason: "English does not use **a work** for a job — *work* in this sense is uncountable. If you want to count it, the countable word is *job*: *I have a job in Hyderabad*.",
@@ -740,7 +811,7 @@ const grammarLessons = {
                             ],
                             retryCue: "Would *job* fit better than *work* in what I am trying to say? If yes, use *job* and keep the **a**.",
                             grammaticalButDifferent: false,
-                            logAs: "gram.articles",
+                            logAs: "gram.uncountable-plural",
                             errorKind: "uncountable-treated-as-countable"
                         },
                         {
@@ -752,7 +823,7 @@ const grammarLessons = {
                             ],
                             retryCue: "Countable or not? And what sound comes next?",
                             grammaticalButDifferent: false,
-                            logAs: "gram.articles",
+                            logAs: "gram.uncountable-plural",
                             errorKind: "uncountable-treated-as-countable"
                         }
                     ],
@@ -813,12 +884,44 @@ const grammarLessons = {
     fluent: []
 };
 
+// US-160. The typo guard, run for real rather than only in a test.
+//
+// The deleted `MISTAKE_CATEGORIES` array never checked anything by itself — it
+// was a list that a test could have compared against. This does the check, at
+// load, against the module that owns the taxonomy and that `record()` will
+// consult, so an unregistered `logAs` is named on the console instead of losing
+// the mistake silently at practice time (FR-CNT-1: fail loudly at author time).
+//
+// Deliberately non-fatal and deliberately cheap: it walks one lesson's feedback
+// entries, reports through AppErrorHandler when that module is present, and does
+// nothing at all when mistakes.js has not loaded — a content file must never be
+// the reason a page fails to start. It sees only what is registered and loaded at
+// this moment, so point 4 (data/grammar/countability.js, which self-registers
+// after this file) is not covered here; the test covers both by passing the
+// assembled `grammarLessons` to `grammarMistakeCategoryIds()` explicitly.
+if (typeof Mistakes !== "undefined" && Mistakes &&
+    typeof Mistakes.unknownCategories === "function") {
+    const unknownGrammarCategories = Mistakes.unknownCategories(grammarMistakeCategoryIds());
+    if (unknownGrammarCategories.length > 0) {
+        const message = "data/grammar.js declares " + unknownGrammarCategories.length +
+            " mistake category id(s) that js/core/mistakes.js does not register, so " +
+            "record() would refuse them and the mistakes would go unlogged: " +
+            unknownGrammarCategories.join(", ");
+        if (typeof AppErrorHandler !== "undefined" && AppErrorHandler &&
+            typeof AppErrorHandler.logError === "function") {
+            AppErrorHandler.logError(new Error(message), "grammar content");
+        } else if (typeof console !== "undefined" && console.error) {
+            console.error(message);
+        }
+    }
+}
+
 // Match the js/core/* pattern: lexical globals for the browser, CommonJS for the
 // Jest suite. `module` is undefined in a classic script, so this is inert there.
 if (typeof module !== "undefined" && module.exports) {
     module.exports = {
         grammarLessons: grammarLessons,
-        MISTAKE_CATEGORIES: MISTAKE_CATEGORIES,
+        grammarMistakeCategoryIds: grammarMistakeCategoryIds,
         MISTAKE_CATEGORY_ALIASES: MISTAKE_CATEGORY_ALIASES,
         ZERO_ARTICLE: ZERO_ARTICLE,
         ZERO_ARTICLE_LABEL: ZERO_ARTICLE_LABEL,

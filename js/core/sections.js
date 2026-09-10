@@ -36,7 +36,8 @@
  * stopped being true the moment `grammarLessons` shipped with content for one
  * tier and empty arrays for three: a tier can be "available" per vocabulary and
  * empty for grammar, which is why the grammar loader had to grow its own local
- * resolveGrammarLevel(). Each row now NAMES its own content map in
+ * resolveGrammarLevel() (since removed — see the note in its place in app.js).
+ * Each row now NAMES its own content map in
  * `contentGlobal`, and app.js registers one probe per section via
  * registerContent() so that "does this tier have content" is answered against
  * the section actually being asked about.
@@ -53,10 +54,35 @@
  *   2. add the markup to index.html (see the contract note under CONTRACT)
  *   3. add its loader to the registerRuntime() block in app.js
  *   4. add its content probe to the registerContent() block in app.js
- * Nothing else in app.js needs touching — including the dashboard, which builds
- * its stat cards and all three stat blocks from these rows (US-154).
+ * Four edits, and the loader body itself. Nothing else in app.js needs touching.
  * __tests__/unit/sections.test.js checks step 2 against step 1 so a mis-wired
  * section fails a test, not a learner.
+ *
+ * WHAT THE DASHBOARD READS, AND WHEN THAT BECAME TRUE (US-163)
+ * This header used to claim, under US-154, that the dashboard already built
+ * itself from these rows. It did not. US-154 moved the *counters* — the
+ * updateStatistics `switch`, the averages loop, the goal divisor — and stopped
+ * there, leaving updateDashboard() and updateStatisticsDisplay() written out
+ * section by section: Grammar and Pronunciation each had to be hand-added in
+ * three places (a stat-card line, a "Today's Progress" row, a "Daily Averages"
+ * row) plus a term in the Total Exercises sum. So the exact silent failure this
+ * file exists to prevent — a section that counts correctly and reads as zero to
+ * the learner — survived in the two functions that display everything, which is
+ * the worst place for it to survive: the numbers were right and invisible.
+ *
+ * US-163 made the claim true. Both functions now iterate exercises(), and these
+ * are the fields they read, so a row is the whole of a section's dashboard:
+ *   totalCardId + totalStatKey   the big #dashboard .stat-number card
+ *   statLabel + dailyStatKey     the "Today's Progress" row, with its badge
+ *                                against averageDaily[avgKey]
+ *   statLabel + avgKey           the "Daily Averages" row
+ *   countsInTotalExercises       whether totalStatKey feeds the "Total
+ *                                Exercises" sum or gets its own "Total X" row
+ *   goalKey                      the #goal{Key} checkbox and the progress bar,
+ *                                numerator and denominator both
+ * The three non-per-section rows (Total Days, Current Streak, Best Streak) stay
+ * hand-written in app.js, deliberately: they are not facts about a section and
+ * inventing a registry field to hold them would be the tail wagging the dog.
  *
  * CONTRACT (enforced by __tests__/unit/sections.test.js)
  *   - `#{id}` exists and is a `.section`
@@ -207,8 +233,11 @@
             // Deliberately null, and deliberately NOT quietly fixed here: the
             // dashboard has never had a Listening card, and inventing one would
             // change what every existing learner sees on the very commit that
-            // was supposed to change nothing. It appears in all three stat
-            // blocks, so the number is not hidden. See US-154.
+            // was supposed to change nothing. The number is not hidden — it has
+            // its own "Today's Progress" and "Daily Averages" rows and it is
+            // inside the "Total Exercises" sum. Adding a .stat-card to
+            // index.html and an id here is now the WHOLE fix; updateDashboard()
+            // iterates these rows, so no app.js line names the card. US-163.
             totalCardId: null,
             countsInTotalExercises: true,
             contentGlobal: 'listeningExercises',

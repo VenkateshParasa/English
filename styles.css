@@ -150,6 +150,41 @@
     --border-color: var(--gray-200);
     --border-color-hover: var(--primary-300);
     --border-color-focus: var(--primary-500);
+
+    /* ---------------------------------------------------------------------
+     * SECTION PANEL TINTS (US-169) — theme-aware, unlike the --*-50 ramp
+     * ---------------------------------------------------------------------
+     * The --*-50 scale is a fixed LIGHT tint. A section panel that sets
+     * `background: var(--info-50)` therefore keeps a near-white background in
+     * dark mode, while the text inside it still inherits --text-primary
+     * (--gray-100 in dark) — 1.01:1, i.e. invisible. Two sections had already
+     * hit this; .pron-* worked round it by pinning --gray-900 on each panel,
+     * which fixes the panel and leaves every unpinned sibling broken.
+     *
+     * These five tokens are the fix. They carry the SAME light values as the
+     * --*-50 tints they replace, so light mode is byte-identical, and they flip
+     * to hue-matched dark surfaces under a dark theme. A panel that tints from
+     * one of them needs NO `color` of its own: --text-primary /
+     * --text-secondary land on it legibly in both themes.
+     *
+     * Contrast, computed (WCAG 2.1 relative-luminance formula), worst case of
+     * the five, body text: light --text-primary 16.22:1, --text-secondary
+     * 6.91:1; dark --text-primary 10.45:1, --text-secondary 7.81:1. All ≥ 4.5,
+     * so NFR-11 AA holds for both themes. See docs/REQUIREMENTS.md NFR-11.
+     *
+     * A NEW SECTION MUST USE THESE, not --*-50, for any panel background.
+     */
+    --panel-info: var(--info-50);
+    --panel-success: var(--success-50);
+    --panel-warning: var(--warning-50);
+    --panel-error: var(--error-50);
+    --panel-neutral: var(--gray-50);
+
+    /* Accent text (panel headings, <summary>, speaker labels). --primary-600 was
+     * used for this directly and is 4.42:1 on --info-50 (fails AA body text) and
+     * 3.05:1 on the dark card (fails outright). This token is theme-aware:
+     * worst case 5.93:1 light, 5.95:1 dark. */
+    --text-accent: var(--primary-700);
 }
 
 /* Dark Theme Variables */
@@ -166,6 +201,19 @@
         --border-color: var(--gray-700);
         --border-color-hover: var(--primary-400);
         --border-color-focus: var(--primary-400);
+
+        /* Hue-matched dark panel surfaces. Literals rather than steps off the
+         * --*-900 ramp because the ramp has no tinted dark entries; each was
+         * chosen to sit ~1.15–1.28:1 lighter than --background-card so the
+         * panel still reads as a panel, while keeping --text-secondary above
+         * 7.7:1 on every one of them. */
+        --panel-info: #2a3a52;
+        --panel-success: #23372a;
+        --panel-warning: #3d3418;
+        --panel-error: #4d2c33;
+        --panel-neutral: #2b3340;
+
+        --text-accent: var(--primary-300);
     }
 }
 
@@ -182,6 +230,17 @@
     --border-color: var(--gray-700);
     --border-color-hover: var(--primary-400);
     --border-color-focus: var(--primary-400);
+
+    /* Kept in step with the @media block above — js/theme-toggle.js always
+     * writes data-theme on <html>, so this is the branch that actually runs;
+     * the media query only covers the frame before that script executes. */
+    --panel-info: #2a3a52;
+    --panel-success: #23372a;
+    --panel-warning: #3d3418;
+    --panel-error: #4d2c33;
+    --panel-neutral: #2b3340;
+
+    --text-accent: var(--primary-300);
 }
 
 /* Light theme class override */
@@ -197,6 +256,17 @@
     --border-color: var(--gray-200);
     --border-color-hover: var(--primary-300);
     --border-color-focus: var(--primary-500);
+
+    /* Must restore the light tints explicitly: on a device whose OS is dark,
+     * the @media block above has already re-declared them on :root, and
+     * [data-theme="light"] is the only thing that outranks it. */
+    --panel-info: var(--info-50);
+    --panel-success: var(--success-50);
+    --panel-warning: var(--warning-50);
+    --panel-error: var(--error-50);
+    --panel-neutral: var(--gray-50);
+
+    --text-accent: var(--primary-700);
 }
 
 * {
@@ -853,6 +923,50 @@ header h1 {
 .exercise-card h3 {
     color: #667eea;
     margin-bottom: 15px;
+}
+
+/* ---------------------------------------------------------------------------
+ * US-169: the card itself has to follow the theme, or a theme-aware panel is
+ * pointless.
+ * ---------------------------------------------------------------------------
+ * `.exercise-card` above is a hard-coded #f9f9f9. In dark mode that is a
+ * near-white card carrying --text-primary (--gray-100) text at 1.05:1 — so the
+ * panels were never the only problem, and pinning --gray-900 on each panel (the
+ * old .pron-* workaround) could not have fixed the unpinned text beside them.
+ *
+ * This is scoped to the two section roots whose whole subtree is already built
+ * out of theme tokens rather than widened to every `.exercise-card`, because
+ * the legacy blocks below (.word-bank, .reading-passage, .passage-text,
+ * .instruction, .question-item …) still hard-code `background: white` and
+ * `color: #333` / `#555` / `#999`. Flipping the card under those would trade a
+ * light-on-light failure for a dark-on-dark one, and those sections are not
+ * US-169's to restyle.
+ *
+ * ADDING A SECTION: add its container to this selector list — one line, in one
+ * place — and then tint every panel from --panel-*. Do not re-pin `color` on
+ * the panels; that is the bug this replaced.
+ */
+.grammar-container .exercise-card,
+.pron-container .exercise-card {
+    background: var(--background-card);
+    color: var(--text-primary);
+    border-color: var(--primary-500);
+}
+
+/* Two globals that live inside those cards and are hard-coded light-mode only:
+ * `.exercise-card h3` is #667eea (3.05:1 on the dark card as body text) and
+ * `.instruction` is #555 (1.90:1 — unreadable). Re-pointed at theme tokens for
+ * these two sections only, for the same reason as the card above: the legacy
+ * sections still have a light card, and --text-accent resolves to a LIGHT
+ * primary in dark mode, which would be unreadable on #f9f9f9. */
+.grammar-container .exercise-card h3,
+.pron-container .exercise-card h3 {
+    color: var(--text-accent);
+}
+
+.grammar-container .instruction,
+.pron-container .instruction {
+    color: var(--text-secondary);
 }
 
 .instruction {
@@ -2072,7 +2186,7 @@ header h1 {
 .grammar-level-note {
     padding: var(--space-3, 0.75rem);
     margin-bottom: var(--space-4, 1rem);
-    background: var(--warning-50, #fffbeb);
+    background: var(--panel-warning);
     border-left: 4px solid var(--warning-500, #f59e0b);
     border-radius: var(--radius-md, 0.5rem);
 }
@@ -2083,7 +2197,7 @@ header h1 {
     font-size: 1.15rem;
     line-height: 1.6;
     padding: var(--space-4, 1rem);
-    background: var(--info-50, #eff6ff);
+    background: var(--panel-info);
     border-left: 4px solid var(--info-500, #3b82f6);
     border-radius: var(--radius-md, 0.5rem);
     margin-bottom: var(--space-5, 1.25rem);
@@ -2092,7 +2206,7 @@ header h1 {
 .grammar-lesson h4,
 .grammar-produce h4 {
     margin: var(--space-5, 1.25rem) 0 var(--space-2, 0.5rem);
-    color: var(--primary-600, #5a67d8);
+    color: var(--text-accent);
 }
 
 .grammar-decide,
@@ -2110,7 +2224,7 @@ header h1 {
     padding: var(--space-4, 1rem);
     background: var(--background-card, #fff);
     border-radius: var(--radius-md, 0.5rem);
-    border: 1px solid var(--gray-200, #e5e7eb);
+    border: 1px solid var(--border-color);
 }
 
 .grammar-notice p {
@@ -2119,7 +2233,7 @@ header h1 {
 
 .grammar-speaker {
     font-weight: 700;
-    color: var(--primary-600, #5a67d8);
+    color: var(--text-accent);
 }
 
 .grammar-contrast {
@@ -2127,7 +2241,7 @@ header h1 {
     margin-bottom: var(--space-3, 0.75rem);
     background: var(--background-card, #fff);
     border-radius: var(--radius-md, 0.5rem);
-    border: 1px solid var(--gray-200, #e5e7eb);
+    border: 1px solid var(--border-color);
 }
 
 .grammar-contrast-line {
@@ -2137,7 +2251,7 @@ header h1 {
 
 .grammar-takeaway {
     padding-top: var(--space-2, 0.5rem);
-    border-top: 1px dashed var(--gray-300, #d1d5db);
+    border-top: 1px dashed var(--border-color);
     color: var(--text-secondary, #555);
 }
 
@@ -2145,15 +2259,15 @@ header h1 {
 .grammar-more {
     margin: var(--space-3, 0.75rem) 0;
     padding: var(--space-3, 0.75rem);
-    background: var(--gray-50, #f9fafb);
+    background: var(--panel-neutral);
     border-radius: var(--radius-md, 0.5rem);
-    border: 1px solid var(--gray-200, #e5e7eb);
+    border: 1px solid var(--border-color);
 }
 
 .grammar-more > summary {
     cursor: pointer;
     font-weight: 600;
-    color: var(--primary-600, #5a67d8);
+    color: var(--text-accent);
 }
 
 .grammar-more > summary:focus-visible {
@@ -2182,7 +2296,7 @@ header h1 {
     margin-bottom: var(--space-5, 1.25rem);
     background: var(--background-card, #fff);
     border-radius: var(--radius-md, 0.5rem);
-    border: 1px solid var(--gray-200, #e5e7eb);
+    border: 1px solid var(--border-color);
 }
 
 .grammar-prompt {
@@ -2193,7 +2307,7 @@ header h1 {
 
 .grammar-item-number {
     font-weight: 700;
-    color: var(--gray-500, #6b7280);
+    color: var(--text-tertiary);
 }
 
 .grammar-options {
@@ -2209,14 +2323,19 @@ header h1 {
     padding: var(--space-2, 0.5rem) var(--space-4, 1rem);
     font-size: 1.05rem;
     font-family: inherit;
-    background: var(--gray-50, #f9fafb);
+    /* `color` is explicit and not inherited: a <button> takes its text colour
+       from the UA (`ButtonText`), which does NOT follow --text-primary, so a
+       theme-aware background without this line gives dark-on-dark in dark mode.
+       Same reason on .pron-option. */
+    color: var(--text-primary);
+    background: var(--panel-neutral);
     border: 2px solid var(--gray-300, #d1d5db);
     border-radius: var(--radius-md, 0.5rem);
     cursor: pointer;
 }
 
 .grammar-option:hover:not(:disabled) {
-    border-color: var(--primary-600, #5a67d8);
+    border-color: var(--text-accent);
 }
 
 .grammar-option:focus-visible {
@@ -2226,12 +2345,12 @@ header h1 {
 
 .grammar-option.correct {
     border-color: var(--success-500, #22c55e);
-    background: var(--success-50, #f0fdf4);
+    background: var(--panel-success);
 }
 
 .grammar-option.incorrect {
     border-color: var(--error-500, #ef4444);
-    background: var(--error-50, #fef2f2);
+    background: var(--panel-error);
 }
 
 .grammar-option:disabled {
@@ -2252,12 +2371,12 @@ header h1 {
 }
 
 .grammar-feedback.is-correct {
-    background: var(--success-50, #f0fdf4);
+    background: var(--panel-success);
     border: 1px solid var(--success-500, #22c55e);
 }
 
 .grammar-feedback.is-wrong {
-    background: var(--error-50, #fef2f2);
+    background: var(--panel-error);
     border: 1px solid var(--error-500, #ef4444);
 }
 
@@ -2370,37 +2489,25 @@ header h1 {
     font-size: 1.15rem;
     line-height: 1.6;
     padding: var(--space-4, 1rem);
-    background: var(--info-50, #eff6ff);
+    background: var(--panel-info);
     border-left: 4px solid var(--info-500, #3b82f6);
     border-radius: var(--radius-md, 0.5rem);
     margin-bottom: var(--space-5, 1.25rem);
 }
 
-/* Every panel in this section whose BACKGROUND is a fixed light tint (--*-50 or
-   --gray-50) pins its text colour as well, including the secondary text nested
-   inside it. Without this, dark mode leaves light-grey text on a near-white
-   panel: the surrounding .exercise-card is fine because it tints from
-   --background-card, which is a theme variable, and these tints are not.
-   Panels that DO use --background-card are deliberately absent from this list so
-   they keep following the theme. (The .grammar-* block above has the same
-   construction and the same latent problem; left alone rather than restyled from
-   a section that has no business touching it.) */
-.pron-label,
-.pron-cue,
-.pron-audio-notice,
-.pron-feedback.is-correct,
-.pron-feedback.is-wrong,
-.pron-locked {
-    color: var(--gray-900, #111827);
-}
+/* US-169 removed the block that used to sit here: every panel below whose
+   background was a fixed --*-50 tint also pinned `color: var(--gray-900)` on
+   itself, plus a second rule pinning --gray-600 on the secondary text nested
+   inside it. That is no longer needed — and was never sufficient. The panels now
+   tint from --panel-* (theme-aware, declared in :root), the section card tints
+   from --background-card, so --text-primary / --text-secondary land legibly in
+   both themes and every panel below carries NO `color` of its own. The identical
+   construction in the .grammar-* block above is fixed the same way rather than
+   left latent.
 
-.pron-cue .pron-mirror,
-.pron-audio-notice .pron-note,
-.pron-feedback .pron-note,
-.pron-feedback .pron-replay,
-.pron-locked p {
-    color: var(--gray-600, #4b5563);
-}
+   If you add a panel here: `background: var(--panel-info | --panel-success |
+   --panel-warning | --panel-error | --panel-neutral)`. Do not add a `color`, and
+   do not reach for --*-50. */
 
 /* IPA. Slightly larger than body text, not smaller — a symbol the learner has to
    read character by character is the last thing to shrink. */
@@ -2421,7 +2528,7 @@ header h1 {
     font-size: 1.2rem;
     font-weight: 700;
     margin-top: var(--space-4, 1rem);
-    color: var(--primary-600, #5a67d8);
+    color: var(--text-accent);
 }
 
 .pron-keyword {
@@ -2434,7 +2541,7 @@ header h1 {
     margin: var(--space-2, 0.5rem) 0 0;
     padding: var(--space-3, 0.75rem);
     background: var(--background-card, #fff);
-    border: 1px solid var(--gray-200, #e5e7eb);
+    border: 1px solid var(--border-color);
     border-radius: var(--radius-md, 0.5rem);
     line-height: 1.7;
 }
@@ -2455,7 +2562,7 @@ header h1 {
 .pron-cue {
     padding: var(--space-4, 1rem);
     margin-bottom: var(--space-4, 1rem);
-    background: var(--success-50, #f0fdf4);
+    background: var(--panel-success);
     border-left: 4px solid var(--success-500, #22c55e);
     border-radius: var(--radius-md, 0.5rem);
     line-height: 1.7;
@@ -2463,7 +2570,7 @@ header h1 {
 
 .pron-cue h4 {
     margin: 0 0 var(--space-2, 0.5rem);
-    color: var(--primary-600, #5a67d8);
+    color: var(--text-accent);
 }
 
 .pron-cue-inline {
@@ -2476,7 +2583,7 @@ header h1 {
 .pron-accuracy {
     margin-top: var(--space-4, 1rem);
     padding-top: var(--space-3, 0.75rem);
-    border-top: 1px dashed var(--gray-300, #d1d5db);
+    border-top: 1px dashed var(--border-color);
 }
 
 .pron-accuracy-own {
@@ -2500,13 +2607,13 @@ header h1 {
 }
 
 .pron-audio-tts {
-    background: var(--gray-50, #f9fafb);
+    background: var(--panel-neutral);
     border-left: 4px solid var(--gray-400, #9ca3af);
 }
 
 .pron-audio-untrusted,
 .pron-audio-unavailable {
-    background: var(--warning-50, #fffbeb);
+    background: var(--panel-warning);
     border-left: 4px solid var(--warning-500, #f59e0b);
 }
 
@@ -2531,14 +2638,16 @@ header h1 {
     padding: var(--space-2, 0.5rem) var(--space-4, 1rem);
     font-size: 1.15rem;
     font-family: inherit;
-    background: var(--gray-50, #f9fafb);
+    /* See the note on .grammar-option: a <button> does not inherit `color`. */
+    color: var(--text-primary);
+    background: var(--panel-neutral);
     border: 2px solid var(--gray-300, #d1d5db);
     border-radius: var(--radius-md, 0.5rem);
     cursor: pointer;
 }
 
 .pron-option:hover:not(:disabled) {
-    border-color: var(--primary-600, #5a67d8);
+    border-color: var(--text-accent);
 }
 
 .pron-option:focus-visible,
@@ -2549,12 +2658,12 @@ header h1 {
 
 .pron-option.correct {
     border-color: var(--success-500, #22c55e);
-    background: var(--success-50, #f0fdf4);
+    background: var(--panel-success);
 }
 
 .pron-option.incorrect {
     border-color: var(--error-500, #ef4444);
-    background: var(--error-50, #fef2f2);
+    background: var(--panel-error);
 }
 
 .pron-feedback {
@@ -2570,12 +2679,12 @@ header h1 {
 }
 
 .pron-feedback.is-correct {
-    background: var(--success-50, #f0fdf4);
+    background: var(--panel-success);
     border: 1px solid var(--success-500, #22c55e);
 }
 
 .pron-feedback.is-wrong {
-    background: var(--error-50, #fef2f2);
+    background: var(--panel-error);
     border: 1px solid var(--error-500, #ef4444);
 }
 
@@ -2620,7 +2729,7 @@ header h1 {
    the learner's own numbers, and why — never "locked 🔒" with no reason. */
 .pron-locked {
     padding: var(--space-4, 1rem);
-    background: var(--gray-50, #f9fafb);
+    background: var(--panel-neutral);
     border: 1px dashed var(--gray-400, #9ca3af);
     border-radius: var(--radius-md, 0.5rem);
     line-height: 1.7;
@@ -2646,7 +2755,7 @@ header h1 {
 
 .pron-produce h4 {
     margin: var(--space-5, 1.25rem) 0 var(--space-2, 0.5rem);
-    color: var(--primary-600, #5a67d8);
+    color: var(--text-accent);
 }
 
 @media (max-width: 600px) {

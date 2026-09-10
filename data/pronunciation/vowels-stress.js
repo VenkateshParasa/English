@@ -53,6 +53,45 @@
  * asserts a clip exists.
  *
  * -----------------------------------------------------------------------------
+ * TTS SAFETY IS PER-ROW — `minimalPairs[].ttsUse` (US-168)
+ * -----------------------------------------------------------------------------
+ * `audio.ttsHint` says things like *"Never use seat/sit or cheap/chip as a TTS
+ * item"*. That is unactionable: honouring it would mean parsing English prose at
+ * runtime. So every claim `ttsHint` makes about a specific pair is ALSO carried
+ * on that pair's own row, as:
+ *
+ *   ttsUse   optional. Absent = no claim; fall back to the set-level
+ *            `audio.ttsRisk`. Present = one of four values, in ascending
+ *            severity:
+ *
+ *              'prefer'      first choice for a TTS-rendered item in this set.
+ *              'verify'      usable on TTS only after THIS row has been checked
+ *                            on the device voice. Defer it until then.
+ *              'clip-first'  play a bundled clip if one exists; TTS is a last
+ *                            resort and the learner should be warned.
+ *              'clip-only'   never render this row on TTS. Skip it unless a
+ *                            bundled clip exists.
+ *
+ *   ttsWhy   optional, and only meaningful next to `ttsUse`: one sentence saying
+ *            which prose claim this flag encodes, so the two cannot drift
+ *            silently. Never shown to a learner.
+ *
+ * The drill contract is therefore: skip a 'clip-only' row with no clip, defer a
+ * 'verify' row that has not been checked and a 'clip-first' row with no clip,
+ * and rank 'prefer' rows first. `audio.ttsHint` STAYS — it explains *why* to a
+ * human, and it carries the set-level instructions that are not about any one
+ * row (turn the volume up, use headphones, show the American transcriptions).
+ *
+ * ⚠️ WHY THIS IS ON THE ROW AND NOT ON THE PAIR SET
+ * A new field at the *pair-set* level must be added to `PROJECTORS.phon` (or to
+ * `DELIBERATE_OMISSIONS.phon`) in js/core/srs.js, or `_project()` drops it from
+ * every stored review record and `auditProjection()` reports it as `dropped`. A
+ * field inside a `minimalPairs` row is part of the `minimalPairs` value, which
+ * `PROJECTORS.phon` already lists, so it travels onto the record for free and
+ * needs no change to srs.js. Row level is also the truthful level: TTS safety is
+ * a property of the two words, not of the contrast.
+ *
+ * -----------------------------------------------------------------------------
  * ARTICULATORY, NOT AUDITORY — PROGRESS.md §6.aa rule 2
  * -----------------------------------------------------------------------------
  * Every cue and every self-check in this file asks about something the learner
@@ -93,12 +132,15 @@
  *   mirrorCheck       what to look for in a mirror. Visual, not auditory.
  *   feelChecks        FR-PRN-4 self-comparison questions. Feelable only.
  *   lengthNote        honest note on how far length can be trusted as a cue.
- *   minimalPairs      [{ a, b, aIpa, bIpa, differsIn, note? }]
+ *   minimalPairs      [{ a, b, aIpa, bIpa, differsIn, note?, ttsUse?, ttsWhy? }]
  *                     `a` is the `pair[0]` member, `b` the `pair[1]` member.
  *                     `differsIn` names the single segment that differs — the
  *                     invariant is that a and b differ in **exactly one
  *                     phoneme**, checked by the adversarial pass in
  *                     __tests__ (see `differsIn` on every row).
+ *
+ *                     `ttsUse` / `ttsWhy` are the US-168 machine-readable form of
+ *                     `audio.ttsHint`. See "TTS SAFETY IS PER-ROW" below.
  *   examples          flat word list. Exists because `PROJECTORS.phon` declares
  *                     `examples` — see the projection note below.
  *   sentences         [{ text, note }] contexts where the contrast carries
@@ -288,13 +330,23 @@ const PRONUNCIATION_VOWELS_STRESS = {
 
             minimalPairs: [
                 { a: 'sheep',  b: 'ship',  aIpa: '/ʃiːp/',  bIpa: '/ʃɪp/',  differsIn: 'iː/ɪ' },
-                { a: 'feel',   b: 'fill',  aIpa: '/fiːl/',  bIpa: '/fɪl/',  differsIn: 'iː/ɪ' },
-                { a: 'seat',   b: 'sit',   aIpa: '/siːt/',  bIpa: '/sɪt/',  differsIn: 'iː/ɪ' },
+                { a: 'feel',   b: 'fill',  aIpa: '/fiːl/',  bIpa: '/fɪl/',  differsIn: 'iː/ɪ',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'Voiced final consonant, so English keeps the length difference largest here.' },
+                { a: 'seat',   b: 'sit',   aIpa: '/siːt/',  bIpa: '/sɪt/',  differsIn: 'iː/ɪ',
+                  ttsUse: 'clip-only',
+                  ttsWhy: 'Named in audio.ttsHint as never to be used as a TTS item: pre-fortis clipping before /t/ already shortens the /iː/, so a synthesised *seat* can land closer to *sit*.' },
                 { a: 'heat',   b: 'hit',   aIpa: '/hiːt/',  bIpa: '/hɪt/',  differsIn: 'iː/ɪ' },
                 { a: 'leave',  b: 'live',  aIpa: '/liːv/',  bIpa: '/lɪv/',  differsIn: 'iː/ɪ',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'Voiced final consonant, so English keeps the length difference largest here.',
                   note: '"Live" here is the verb, /lɪv/ ("I live in Hyderabad"). The adjective *live* — a live match — is /laɪv/ and is a different word; keep it out of the drill.' },
-                { a: 'green',  b: 'grin',  aIpa: '/ɡriːn/', bIpa: '/ɡrɪn/', differsIn: 'iː/ɪ' },
-                { a: 'cheap',  b: 'chip',  aIpa: '/tʃiːp/', bIpa: '/tʃɪp/', differsIn: 'iː/ɪ' },
+                { a: 'green',  b: 'grin',  aIpa: '/ɡriːn/', bIpa: '/ɡrɪn/', differsIn: 'iː/ɪ',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'Voiced final consonant, so English keeps the length difference largest here.' },
+                { a: 'cheap',  b: 'chip',  aIpa: '/tʃiːp/', bIpa: '/tʃɪp/', differsIn: 'iː/ɪ',
+                  ttsUse: 'clip-only',
+                  ttsWhy: 'Named in audio.ttsHint as never to be used as a TTS item: pre-fortis clipping before /p/ already shortens the /iː/.' },
                 { a: 'reach',  b: 'rich',  aIpa: '/riːtʃ/', bIpa: '/rɪtʃ/', differsIn: 'iː/ɪ' },
                 { a: 'seek',   b: 'sick',  aIpa: '/siːk/',  bIpa: '/sɪk/',  differsIn: 'iː/ɪ' }
             ],
@@ -409,18 +461,36 @@ const PRONUNCIATION_VOWELS_STRESS = {
             lengthNote: 'These two are close to the same length, so length tells you nothing. That is good news: jaw drop is the only thing to think about, and jaw drop is the one thing you can feel directly.',
 
             minimalPairs: [
-                { a: 'bad',  b: 'bed',   aIpa: '/bæd/',  bIpa: '/bed/',  differsIn: 'æ/e' },
+                { a: 'bad',  b: 'bed',   aIpa: '/bæd/',  bIpa: '/bed/',  differsIn: 'æ/e',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'No nasal after the vowel, which is where audio.ttsHint says TTS voices are reliable on this contrast.' },
                 { a: 'man',  b: 'men',   aIpa: '/mæn/',  bIpa: '/men/',  differsIn: 'æ/e',
+                  ttsUse: 'verify',
+                  ttsWhy: 'Nasal after the vowel. audio.ttsRiskWhy names this pair specifically: test it on the device voice and drop it if /æ/ raising has pulled *man* towards *men*.',
                   note: 'Singular versus plural — the vowel is the only thing carrying it, which is why this one costs real comprehension.' },
-                { a: 'sat',  b: 'set',   aIpa: '/sæt/',  bIpa: '/set/',  differsIn: 'æ/e' },
-                { a: 'pan',  b: 'pen',   aIpa: '/pæn/',  bIpa: '/pen/',  differsIn: 'æ/e' },
-                { a: 'bat',  b: 'bet',   aIpa: '/bæt/',  bIpa: '/bet/',  differsIn: 'æ/e' },
+                { a: 'sat',  b: 'set',   aIpa: '/sæt/',  bIpa: '/set/',  differsIn: 'æ/e',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'No nasal after the vowel.' },
+                { a: 'pan',  b: 'pen',   aIpa: '/pæn/',  bIpa: '/pen/',  differsIn: 'æ/e',
+                  ttsUse: 'verify',
+                  ttsWhy: 'Nasal after the vowel — the same /æ/-raising risk audio.ttsHint excludes from its preferred list.' },
+                { a: 'bat',  b: 'bet',   aIpa: '/bæt/',  bIpa: '/bet/',  differsIn: 'æ/e',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'No nasal after the vowel.' },
                 { a: 'sad',  b: 'said',  aIpa: '/sæd/',  bIpa: '/sed/',  differsIn: 'æ/e',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'No nasal after the vowel.',
                   note: 'Spelling looks unrelated but *said* is /sed/, so this is a true minimal pair. Useful precisely because the spelling gives no help.' },
-                { a: 'land', b: 'lend',  aIpa: '/lænd/', bIpa: '/lend/', differsIn: 'æ/e' },
+                { a: 'land', b: 'lend',  aIpa: '/lænd/', bIpa: '/lend/', differsIn: 'æ/e',
+                  ttsUse: 'verify',
+                  ttsWhy: 'Nasal after the vowel — the same /æ/-raising risk audio.ttsHint excludes from its preferred list.' },
                 { a: 'gas',  b: 'guess', aIpa: '/ɡæs/',  bIpa: '/ɡes/',  differsIn: 'æ/e',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'No nasal after the vowel.',
                   note: 'The "u" in *guess* is silent — it is there to keep the g hard.' },
                 { a: 'had',  b: 'head',  aIpa: '/hæd/',  bIpa: '/hed/',  differsIn: 'æ/e',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'No nasal after the vowel.',
                   note: 'Use the strong form of *had*. In fast speech it weakens to /həd/ or /əd/, which is a different exercise (see the T-P1 noticing items).' }
             ],
 
@@ -533,16 +603,29 @@ const PRONUNCIATION_VOWELS_STRESS = {
             ],
             lengthNote: '/əʊ/ is longer than /ɒ/, but only because a glide takes time to travel. Teach the movement and the length comes free; teach the length alone and the learner produces a long /ɒː/, which sounds like neither word.',
 
+            /* audio.ttsHint says "Safe on TTS" for this whole set, so every row
+             * carries ttsUse: 'prefer' rather than the flag being implied by the
+             * set-level ttsRisk. A drill choosing items across pair sets can then
+             * rank rows without also having to read the parent object. */
             minimalPairs: [
-                { a: 'cot',   b: 'coat',  aIpa: '/kɒt/',   bIpa: '/kəʊt/',  differsIn: 'ɒ/əʊ' },
-                { a: 'not',   b: 'note',  aIpa: '/nɒt/',   bIpa: '/nəʊt/',  differsIn: 'ɒ/əʊ' },
-                { a: 'got',   b: 'goat',  aIpa: '/ɡɒt/',   bIpa: '/ɡəʊt/',  differsIn: 'ɒ/əʊ' },
-                { a: 'cost',  b: 'coast', aIpa: '/kɒst/',  bIpa: '/kəʊst/', differsIn: 'ɒ/əʊ' },
-                { a: 'sock',  b: 'soak',  aIpa: '/sɒk/',   bIpa: '/səʊk/',  differsIn: 'ɒ/əʊ' },
-                { a: 'clock', b: 'cloak', aIpa: '/klɒk/',  bIpa: '/kləʊk/', differsIn: 'ɒ/əʊ' },
-                { a: 'rob',   b: 'robe',  aIpa: '/rɒb/',   bIpa: '/rəʊb/',  differsIn: 'ɒ/əʊ' },
-                { a: 'hop',   b: 'hope',  aIpa: '/hɒp/',   bIpa: '/həʊp/',  differsIn: 'ɒ/əʊ' },
-                { a: 'cop',   b: 'cope',  aIpa: '/kɒp/',   bIpa: '/kəʊp/',  differsIn: 'ɒ/əʊ' }
+                { a: 'cot',   b: 'coat',  aIpa: '/kɒt/',   bIpa: '/kəʊt/',  differsIn: 'ɒ/əʊ',
+                  ttsUse: 'prefer', ttsWhy: 'audio.ttsHint: safe on TTS — the cue is lip movement over time, which survives a bad duration model.' },
+                { a: 'not',   b: 'note',  aIpa: '/nɒt/',   bIpa: '/nəʊt/',  differsIn: 'ɒ/əʊ',
+                  ttsUse: 'prefer', ttsWhy: 'audio.ttsHint: safe on TTS.' },
+                { a: 'got',   b: 'goat',  aIpa: '/ɡɒt/',   bIpa: '/ɡəʊt/',  differsIn: 'ɒ/əʊ',
+                  ttsUse: 'prefer', ttsWhy: 'audio.ttsHint: safe on TTS.' },
+                { a: 'cost',  b: 'coast', aIpa: '/kɒst/',  bIpa: '/kəʊst/', differsIn: 'ɒ/əʊ',
+                  ttsUse: 'prefer', ttsWhy: 'audio.ttsHint: safe on TTS.' },
+                { a: 'sock',  b: 'soak',  aIpa: '/sɒk/',   bIpa: '/səʊk/',  differsIn: 'ɒ/əʊ',
+                  ttsUse: 'prefer', ttsWhy: 'audio.ttsHint: safe on TTS.' },
+                { a: 'clock', b: 'cloak', aIpa: '/klɒk/',  bIpa: '/kləʊk/', differsIn: 'ɒ/əʊ',
+                  ttsUse: 'prefer', ttsWhy: 'audio.ttsHint: safe on TTS.' },
+                { a: 'rob',   b: 'robe',  aIpa: '/rɒb/',   bIpa: '/rəʊb/',  differsIn: 'ɒ/əʊ',
+                  ttsUse: 'prefer', ttsWhy: 'audio.ttsHint: safe on TTS.' },
+                { a: 'hop',   b: 'hope',  aIpa: '/hɒp/',   bIpa: '/həʊp/',  differsIn: 'ɒ/əʊ',
+                  ttsUse: 'prefer', ttsWhy: 'audio.ttsHint: safe on TTS.' },
+                { a: 'cop',   b: 'cope',  aIpa: '/kɒp/',   bIpa: '/kəʊp/',  differsIn: 'ɒ/əʊ',
+                  ttsUse: 'prefer', ttsWhy: 'audio.ttsHint: safe on TTS.' }
             ],
 
             examples: ['cot', 'coat', 'not', 'note', 'got', 'goat', 'cost', 'coast', 'sock',

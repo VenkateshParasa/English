@@ -105,6 +105,28 @@ describe('registry shape', () => {
         });
     });
 
+    it('gives every counter-bearing section a statLabel', () => {
+        // US-163. updateStatisticsDisplay() now builds three rows per section
+        // from statLabel, so a row with a null one renders "null:" on the
+        // dashboard — the counters would be right and the label nonsense, which
+        // is the display-side twin of the bug above.
+        Sections.exercises().forEach(s => {
+            expect(typeof s.statLabel).toBe('string');
+            expect(s.statLabel.length).toBeGreaterThan(0);
+        });
+    });
+
+    it('states countsInTotalExercises explicitly on every row', () => {
+        // US-163. This flag now decides whether a section's lifetime total goes
+        // into the "Total Exercises" sum or gets a "Total X" row of its own.
+        // `undefined` would silently mean "not counted" — a section missing from
+        // the dashboard's headline number while looking perfectly wired.
+        rows.forEach(s => expect(typeof s.countsInTotalExercises).toBe('boolean'));
+        // At least one section must be outside the sum, or the "Total Words" row
+        // the dashboard has always shown disappears.
+        expect(Sections.exercises().some(s => !s.countsInTotalExercises)).toBe(true);
+    });
+
     it('uses unique ids and unique keys throughout', () => {
         const unique = list => expect(list).toHaveLength(new Set(list).size);
         unique(ids);
@@ -114,6 +136,9 @@ describe('registry shape', () => {
         unique(Sections.exercises().map(s => s.totalStatKey));
         unique(Sections.exercises().map(s => s.avgKey));
         unique(rows.filter(s => s.statusId).map(s => s.statusId));
+        // US-163: updateDashboard() writes each card by id, so two rows sharing
+        // one totalCardId would have the second silently overwrite the first.
+        unique(rows.filter(s => s.totalCardId).map(s => s.totalCardId));
     });
 
     it('returns null for an unknown id rather than throwing', () => {
@@ -228,6 +253,22 @@ describe('index.html markup matches the registry', () => {
             const el = doc.getElementById(cardId);
             expect(el).not.toBeNull();
             expect(el.classList.contains('stat-number')).toBe(true);
+            // US-163: updateDashboard() looks these up by id from the row, so a
+            // card that exists outside #dashboard would be written and never seen.
+            expect(el.closest('#dashboard')).not.toBeNull();
+        }
+    );
+
+    it.each(['todayStats', 'overallStats', 'averageStats'])(
+        'the dashboard has a .stat-box #%s for updateStatisticsDisplay to fill',
+        id => {
+            // US-163. These three are the only hosts that function writes to, and
+            // it no-ops silently on a missing one — which on a stale cached
+            // index.html would mean a dashboard with no statistics at all.
+            const el = doc.getElementById(id);
+            expect(el).not.toBeNull();
+            expect(el.classList.contains('stat-box')).toBe(true);
+            expect(el.closest('#dashboard')).not.toBeNull();
         }
     );
 

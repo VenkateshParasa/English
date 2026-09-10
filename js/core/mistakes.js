@@ -34,7 +34,7 @@
  *   Mistakes.unknownCategories(ids)      -> the ids in `ids` that are not registered
  *   Mistakes.registerCategories(rows)    -> { added, replaced, rejected } (FR-CNT-3)
  *   Mistakes.resetCategories()           -> back to the built-ins
- *   Mistakes.drillTarget(id)             -> { strand, target, srsKey, label } | null
+ *   Mistakes.drillTarget(id)             -> { strand, target, srsKey, targets, srsKeys, label } | null
  *   -- recording --
  *   Mistakes.record(categoryId, opts)    -> the stored entry, or null
  *   Mistakes.recordMany(ids, opts)       -> [entry, ...] (the ones that stored)
@@ -168,7 +168,10 @@
     //   example     wrong -> right, so the list teaches instead of only judging
     //   drill       { strand, target } for "practise this" — target is a
     //               CURRICULUM.md §3 grammar point slug or a phoneme pair id.
-    //               null means there is nothing honest to drill.
+    //               null means there is nothing honest to drill. A row that is
+    //               drilled by more than one item adds `alsoTargets: [...]`
+    //               beside `target` (or writes `targets: [...]` instead); see
+    //               `prn.th`, which covers both halves of T-P6.
     //   reportable  false = recorded but never ranked or shown as a diagnosis
     //
     // The rows below are the Telugu profile plus the generic types. Nothing in
@@ -418,15 +421,52 @@
             drill: { strand: 'pronunciation', target: 'v-w' }
         },
         {
+            // US-164. ONE category, TWO drill targets.
+            //
+            // REQUIREMENTS.md §3.1 row T-P6 is one error type — Telugu has
+            // neither /θ/ nor /ð/, so the nearest dental stop steps in for both —
+            // and data/pronunciation/consonants.js authors it as two pair sets,
+            // `θ-t` and `ð-d`, both carrying `mistakeCategory: 'prn.th'`. Only
+            // `θ-t` was a drill target here, so `phon:ð-d` scheduled fine but a
+            // learner whose /ð/ misses piled up was offered the /θ/ drill.
+            //
+            // That file's author argued against closing the gap by merging the
+            // two pair sets, and the argument is ACCEPTED, not overruled: /θ/ is
+            // voiceless and the quietest consonant in English, /ð/ is voiced and
+            // the sound native speakers reduce most, so the two need different
+            // word lists, different audio risk handling and different feel
+            // checks. Nothing here merges them — both remain separate drills.
+            //
+            // A second CATEGORY was considered and rejected. Three reasons:
+            //  1. It would have no producer. Both pair sets in consonants.js
+            //     declare `mistakeCategory: 'prn.th'`, so a new id would sit
+            //     unused while /ð/ misses still arrived here — and narrowing this
+            //     row's label to the /t/ story to make room for it would then
+            //     describe those arriving entries falsely.
+            //  2. `prn.th` is in learner storage. Its id cannot be renamed
+            //     (record() writes it; an unregistered id is kept but unranked,
+            //     so history would stop being described), and splitting it would
+            //     hand a learner two half-counts of one habit — the exact defect
+            //     US-159 removed from `gram.uncountable-plural`.
+            //  3. §3.1 T-P6 is one row, and the learner-facing label below is
+            //     already true of both sounds.
+            //
+            // So the count stays one and the destinations become two. `θ-t`
+            // remains the primary because that is what consonants.js's own header
+            // and schema note document as the existing target; that file's
+            // caveats argue /ð/ is worth more effort than /θ/ on frequency
+            // grounds (*the, this, that, they, there* are all /ð/), so a UI that
+            // can present the halves in an order should read `srsKeys` and lead
+            // with `phon:ð-d`.
             id: 'prn.th',
             code: 'T-P6',
             strand: 'pronunciation',
             l1: 'telugu',
             priority: 'M',
             label: '"th" said as "t" or "d"',
-            explanation: 'Telugu has no /θ/ or /ð/, so the nearest dental stop steps in. The tongue tip goes between the teeth, and you can hold the sound.',
+            explanation: 'Telugu has no /θ/ or /ð/, so the nearest dental stop steps in. For both, the tongue tip comes forward to the teeth and the air keeps flowing, which is why you can hold them: the "th" in "thin" is breath only, and the one in "this" is the same position with your voice switched on.',
             example: '"tin" → "thin"; "den" → "then"',
-            drill: { strand: 'pronunciation', target: 'θ-t' }
+            drill: { strand: 'pronunciation', target: 'θ-t', alsoTargets: ['ð-d'] }
         },
         {
             id: 'prn.i-length',
@@ -654,6 +694,49 @@
         return Math.floor(ms / DAY_MS);
     }
 
+    /**
+     * Normalize a row's `drill`.
+     *
+     * One row may legitimately point at MORE THAN ONE addressable drill item.
+     * `prn.th` is the case that forced this: REQUIREMENTS.md §3.1 row T-P6 is a
+     * single error type ("th" replaced by the nearest dental stop) but
+     * data/pronunciation/consonants.js authors it as two pair sets, `θ-t` and
+     * `ð-d`, because the voiced and voiceless halves need different word lists
+     * and different checks. One category, two destinations.
+     *
+     * `target` therefore stays exactly what it was — the primary, the one an
+     * existing single-button caller reads — and `targets` is the full ordered
+     * list with the primary first. Nothing that read `drill.target` before this
+     * change reads anything different after it.
+     *
+     * Accepts either `alsoTargets: [...]` beside a `target`, or a bare
+     * `targets: [...]` (whose first entry becomes the primary). Duplicates and
+     * blanks are dropped, so `targets` is safe to map straight to SRS keys.
+     */
+    function _normalizeDrill(drill) {
+        if (!drill || typeof drill !== 'object') return null;
+
+        const targets = [];
+        function push(value) {
+            const t = _norm(value);
+            if (t && targets.indexOf(t) < 0) targets.push(t);
+        }
+
+        push(drill.target);
+        const extra = Array.isArray(drill.alsoTargets)
+            ? drill.alsoTargets
+            : (Array.isArray(drill.targets) ? drill.targets : []);
+        for (let i = 0; i < extra.length; i++) push(extra[i]);
+
+        return {
+            strand: _norm(drill.strand) || null,
+            // null still means "a whole strand, not one addressable item", and
+            // still makes drillTarget() return a null srsKey.
+            target: targets.length ? targets[0] : null,
+            targets: targets
+        };
+    }
+
     /** Normalize a taxonomy row, filling defaults. Returns null if unusable. */
     function _normalizeCategory(row) {
         if (!row || typeof row !== 'object') return null;
@@ -672,9 +755,7 @@
             label: label,
             explanation: row.explanation == null ? '' : String(row.explanation),
             example: row.example == null ? null : String(row.example),
-            drill: (row.drill && typeof row.drill === 'object')
-                ? { strand: _norm(row.drill.strand) || null, target: row.drill.target == null ? null : _norm(row.drill.target) }
-                : null,
+            drill: _normalizeDrill(row.drill),
             // Default true: a row an author bothered to write is a row they
             // want the learner to see. Opting out is the exceptional case.
             reportable: row.reportable !== false
@@ -686,7 +767,9 @@
         for (const k in cat) {
             if (Object.prototype.hasOwnProperty.call(cat, k)) out[k] = cat[k];
         }
-        out.drill = cat.drill ? { strand: cat.drill.strand, target: cat.drill.target } : null;
+        out.drill = cat.drill
+            ? { strand: cat.drill.strand, target: cat.drill.target, targets: (cat.drill.targets || []).slice() }
+            : null;
         return out;
     }
 
@@ -881,11 +964,20 @@
          * What "practise this one" should open, for the FR-SRS-3 drill button.
          * Returns null when there is nothing honest to drill, which the UI must
          * read as "do not offer a button", not as an error.
+         *
+         * `target` / `srsKey` are the primary destination and are unchanged.
+         * `targets` / `srsKeys` are every destination this category can route
+         * to, primary first — normally a one-item list, and longer only where one
+         * error type is drilled by more than one item (US-164: `prn.th` covers
+         * both halves of T-P6, so a /ð/ miss has somewhere to go). A UI that
+         * offers one button uses `srsKey`; one that offers a choice, or that has
+         * to route a specific phoneme, reads `srsKeys`.
          */
         drillTarget(id) {
             const cat = this.categoryIndex[_norm(id)];
             if (!cat || !cat.drill || !cat.drill.strand) return null;
             const ns = SRS_NAMESPACE[cat.drill.strand];
+            const targets = (cat.drill.targets || []).slice();
             return {
                 categoryId: cat.id,
                 label: cat.label,
@@ -894,7 +986,11 @@
                 // FR-SRS-1 namespaced key, so a caller can reset or query the
                 // scheduler for exactly this item. null when the drill is a
                 // whole strand rather than one addressable item.
-                srsKey: (ns && cat.drill.target) ? (ns + ':' + cat.drill.target) : null
+                srsKey: (ns && cat.drill.target) ? (ns + ':' + cat.drill.target) : null,
+                targets: targets,
+                // Empty when the strand has no SRS namespace or the drill names
+                // no addressable item — never a key built from a null target.
+                srsKeys: ns ? targets.map(t => ns + ':' + t) : []
             };
         },
 

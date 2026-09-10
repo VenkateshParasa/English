@@ -506,7 +506,11 @@
     <script src="js/core/sections.js"></script>
     <script src="js/core/migrations.js"></script>
     <script src="js/core/srs.js"></script>
-    <script src="js/core/mistakes.js"></script><!-- US-305 mistake log by error type (FR-SRS-3). No dependencies; own localStorage key `mistakeLog`. -->
+    <script src="js/core/mistakes.js"></script>
+    <!-- Session sequencer (US-801/FR-SES-1). Planning logic only, no DOM: it
+         reads Sections, SRS and Mistakes, so it must load after all three.
+         Nothing calls it yet — the "Start today's session" UI is the next story. -->
+    <script src="js/core/session.js"></script><!-- US-305 mistake log by error type (FR-SRS-3). No dependencies; own localStorage key `mistakeLog`. -->
     <!-- Depends on migrations.js (schemaVersion, backupOnce) and srs.js (reset). -->
     <script src="js/core/portability.js"></script>
     <!-- No dependencies: IndexedDB blob store for recordings (FR-DATA-6). -->

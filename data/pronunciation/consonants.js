@@ -72,6 +72,42 @@
  * `audio.clipIds` are *proposed* filenames. Nothing here asserts a clip exists.
  *
  * -----------------------------------------------------------------------------
+ * TTS SAFETY IS PER-ROW — `minimalPairs[].ttsUse` (US-168)
+ * -----------------------------------------------------------------------------
+ * Same field, same four values, same reasoning as the sibling file — see the
+ * block of that name in data/pronunciation/vowels-stress.js for the full
+ * rationale. In short: `audio.ttsHint` is prose ("Never use *three/tree* … as a
+ * TTS item"), so every claim it makes about a specific pair is also carried on
+ * that pair's own row:
+ *
+ *   ttsUse   'prefer' | 'verify' | 'clip-first' | 'clip-only', ascending
+ *            severity. Absent = no claim; fall back to `audio.ttsRisk`.
+ *   ttsWhy   one sentence naming the prose claim the flag encodes, so the two
+ *            cannot drift. Never shown to a learner.
+ *
+ * Plus one row-specific flag this file needs and the sibling does not:
+ *
+ *   requiresCarrierSentence
+ *            true on `close/close` in the /z/~/s/ set. The two words are
+ *            homographs, so a bare-word TTS call or a bare-word recording picks
+ *            a reading at random; the clip must be cut from a sentence. It is a
+ *            clip-*authoring* requirement, which is why it is separate from
+ *            `ttsUse` rather than folded into it.
+ *
+ * Row level, not pair-set level, because a pair-set field would have to be added
+ * to `PROJECTORS.phon` in js/core/srs.js — a file this content cannot edit — or
+ * `_project()` drops it from every review record. A field inside a
+ * `minimalPairs` row rides along inside the already-projected `minimalPairs`
+ * value. It is also the truthful level: TTS safety is a property of the two
+ * words, not of the contrast.
+ *
+ * SCOPE: flags encode claims made in the `audio` object (`ttsHint`, and
+ * `ttsRiskWhy` where it names a specific pair). Voice-dependent claims that live
+ * in `caveats` — the `en-US` /d/-flap warning on *other/udder*, for one — are
+ * left as prose on purpose, and the row says so, so the gap is visible rather
+ * than looking like an oversight.
+ *
+ * -----------------------------------------------------------------------------
  * ARTICULATORY, NOT AUDITORY — PROGRESS.md §6.aa rule 2
  * -----------------------------------------------------------------------------
  * This is the load-bearing design decision of the file, and consonants are where
@@ -113,8 +149,10 @@
  *   feelChecks        FR-PRN-4 self-comparison questions. Feelable only, ≥3.
  *   lengthNote        for consonants this is the *continuant* note: whether the
  *                     sound can be held, which is itself a feelable test.
- *   minimalPairs      [{ a, b, aIpa, bIpa, differsIn, note? }] — a and b differ
- *                     in **exactly one phoneme**.
+ *   minimalPairs      [{ a, b, aIpa, bIpa, differsIn, note?, ttsUse?, ttsWhy?,
+ *                       requiresCarrierSentence? }] — a and b differ in
+ *                     **exactly one phoneme**. See "TTS SAFETY IS PER-ROW"
+ *                     above for the last three.
  *   examples          flat word list (PROJECTORS.phon declares `examples`).
  *   sentences         [{ text, note }] contexts where the contrast carries
  *                     meaning.
@@ -227,12 +265,20 @@ const PRONUNCIATION_CONSONANTS = {
 
             minimalPairs: [
                 { a: 'vine',   b: 'wine',   aIpa: '/vaɪn/',    bIpa: '/waɪn/',    differsIn: 'v/w',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: one syllable, contrast word-initial and stressed.',
                   note: 'The pair REQUIREMENTS.md §3.1 names for this row, and the one PROGRESS.md §6.aa uses to describe the perception blind spot.' },
-                { a: 'vest',   b: 'west',   aIpa: '/vest/',    bIpa: '/west/',    differsIn: 'v/w' },
+                { a: 'vest',   b: 'west',   aIpa: '/vest/',    bIpa: '/west/',    differsIn: 'v/w',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: one syllable, contrast word-initial and stressed.' },
                 { a: 'veil',   b: 'wail',   aIpa: '/veɪl/',    bIpa: '/weɪl/',    differsIn: 'v/w',
                   note: '*Veil* is the cloth; *wail* is a long cry. Spelling shares nothing, which is useful — the learner cannot read their way to the answer.' },
-                { a: 'vet',    b: 'wet',    aIpa: '/vet/',     bIpa: '/wet/',     differsIn: 'v/w' },
+                { a: 'vet',    b: 'wet',    aIpa: '/vet/',     bIpa: '/wet/',     differsIn: 'v/w',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: one syllable, contrast word-initial and stressed.' },
                 { a: 'vent',   b: 'went',   aIpa: '/vent/',    bIpa: '/went/',    differsIn: 'v/w',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: one syllable, contrast word-initial and stressed.',
                   note: 'Both very frequent, and *went* is one of the commonest verbs in English — a good sentence-level item.' },
                 { a: 'verse',  b: 'worse',  aIpa: '/vɜːs/',    bIpa: '/wɜːs/',    differsIn: 'v/w' },
                 { a: 'viper',  b: 'wiper',  aIpa: '/ˈvaɪpə/',  bIpa: '/ˈwaɪpə/',  differsIn: 'v/w',
@@ -240,6 +286,8 @@ const PRONUNCIATION_CONSONANTS = {
                 { a: 'vary',   b: 'wary',   aIpa: '/ˈveəri/',  bIpa: '/ˈweəri/',  differsIn: 'v/w',
                   note: 'AmE /ˈveri/ and /ˈweri/ — still a true pair, still differing only in the first consonant.' },
                 { a: 'veal',   b: 'wheel',  aIpa: '/viːl/',    bIpa: '/wiːl/',    differsIn: 'v/w',
+                  ttsUse: 'verify',
+                  ttsWhy: 'audio.ttsHint: check on the device voice once before using it. This is a *minimality* risk, not a fidelity one — a /hw/ voice says /hwiːl/, which adds a second difference and stops the pair being minimal at all. Not a defect in the row; a dependency on the voice.',
                   note: '⚠️ Depends on the accent of the *voice*, not the learner. Most British and American speakers say *wheel* as /wiːl/, which makes this minimal. A minority (parts of Scotland, Ireland, the American South) say /hwiːl/, which adds a second difference. Drop this item if the device voice is one of those.' }
             ],
 
@@ -372,13 +420,23 @@ const PRONUNCIATION_CONSONANTS = {
 
             minimalPairs: [
                 { a: 'thin',    b: 'tin',    aIpa: '/θɪn/',   bIpa: '/tɪn/',   differsIn: 'θ/t',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: word-initial before a vowel, where the friction has the most room.',
                   note: 'The pair REQUIREMENTS.md §3.1 names for this row.' },
-                { a: 'thick',   b: 'tick',   aIpa: '/θɪk/',   bIpa: '/tɪk/',   differsIn: 'θ/t' },
+                { a: 'thick',   b: 'tick',   aIpa: '/θɪk/',   bIpa: '/tɪk/',   differsIn: 'θ/t',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: word-initial before a vowel.' },
                 { a: 'thought', b: 'taught', aIpa: '/θɔːt/',  bIpa: '/tɔːt/',  differsIn: 'θ/t',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: word-initial before a vowel.',
                   note: 'Spelling gives no help at all here, which is why it is a good item. Both are very frequent words.' },
                 { a: 'three',   b: 'tree',   aIpa: '/θriː/',  bIpa: '/triː/',  differsIn: 'θ/t',
+                  ttsUse: 'clip-only',
+                  ttsWhy: 'audio.ttsHint names this pair as never to be used as a TTS item: the following /r/ is where synthesised /θ/ collapses.',
                   note: 'Hardest item in the set: the following /r/ pulls the tongue back and makes the tip harder to keep forward. Keep it, because *three* is a word the learner says constantly, but expect it to be the last one to come right.' },
-                { a: 'theme',   b: 'team',   aIpa: '/θiːm/',  bIpa: '/tiːm/',  differsIn: 'θ/t' },
+                { a: 'theme',   b: 'team',   aIpa: '/θiːm/',  bIpa: '/tiːm/',  differsIn: 'θ/t',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: word-initial before a vowel.' },
                 { a: 'both',    b: 'boat',   aIpa: '/bəʊθ/',  bIpa: '/bəʊt/',  differsIn: 'θ/t',
                   note: 'Word-final, which is the harder position — the tongue has to come forward at the *end* of the word instead of the start.' },
                 { a: 'faith',   b: 'fate',   aIpa: '/feɪθ/',  bIpa: '/feɪt/',  differsIn: 'θ/t' },
@@ -386,8 +444,12 @@ const PRONUNCIATION_CONSONANTS = {
                   note: 'The "b" in *debt* is silent, so /det/ really is the whole word. Written forms look unrelated; spoken forms differ in one sound.' },
                 { a: 'tenth',   b: 'tent',   aIpa: '/tenθ/',  bIpa: '/tent/',  differsIn: 'θ/t',
                   note: 'Both a /t/ and a /θ/ inside *tenth*, so the learner has to switch positions inside one syllable. Good self-check item: same word, both tongue positions.' },
-                { a: 'thread',  b: 'tread',  aIpa: '/θred/',  bIpa: '/tred/',  differsIn: 'θ/t' },
+                { a: 'thread',  b: 'tread',  aIpa: '/θred/',  bIpa: '/tred/',  differsIn: 'θ/t',
+                  ttsUse: 'verify',
+                  ttsWhy: 'audio.ttsHint names only *three/tree* and *through/true* as forbidden, but the reason it gives — "the following /r/ is where synthesised /θ/ collapses" — applies to this row too. Flagged as verify rather than clip-only because the hint does not forbid it: check it on the device voice, and if it fails, raise it to clip-only and add it to the hint.' },
                 { a: 'through', b: 'true',   aIpa: '/θruː/',  bIpa: '/truː/',  differsIn: 'θ/t',
+                  ttsUse: 'clip-only',
+                  ttsWhy: 'audio.ttsHint names this pair as never to be used as a TTS item: the following /r/ is where synthesised /θ/ collapses.',
                   note: 'Two extremely common words, and the same following-/r/ difficulty as *three/tree*.' }
             ],
 
@@ -523,21 +585,35 @@ const PRONUNCIATION_CONSONANTS = {
 
             minimalPairs: [
                 { a: 'then',    b: 'den',   aIpa: '/ðen/',    bIpa: '/den/',    differsIn: 'ð/d',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: stressed word-initial.',
                   note: 'The pair REQUIREMENTS.md §3.1 names for the voiced half of this row.' },
                 { a: 'they',    b: 'day',   aIpa: '/ðeɪ/',    bIpa: '/deɪ/',    differsIn: 'ð/d',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: stressed word-initial.',
                   note: 'Two of the most frequent words in English. If these two collapse, ordinary sentences get genuinely ambiguous, which is the strongest argument for spending time on /ð/.' },
-                { a: 'those',   b: 'doze',  aIpa: '/ðəʊz/',   bIpa: '/dəʊz/',   differsIn: 'ð/d' },
+                { a: 'those',   b: 'doze',  aIpa: '/ðəʊz/',   bIpa: '/dəʊz/',   differsIn: 'ð/d',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: stressed word-initial.' },
                 { a: 'there',   b: 'dare',  aIpa: '/ðeə/',    bIpa: '/deə/',    differsIn: 'ð/d',
                   note: '*There* and *their* are homophones, so either spelling works for the /ð/ member. AmE /ðer/ and /der/ — still minimal.' },
                 { a: 'though',  b: 'dough', aIpa: '/ðəʊ/',    bIpa: '/dəʊ/',    differsIn: 'ð/d',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: stressed word-initial.',
                   note: '*Dough* is the bread mixture. Neither spelling tells you anything about the pronunciation, which makes the pair a fair test of the ear rather than of reading.' },
                 { a: 'breathe', b: 'breed', aIpa: '/briːð/',  bIpa: '/briːd/',  differsIn: 'ð/d',
+                  ttsUse: 'clip-only',
+                  ttsWhy: 'audio.ttsHint: "Treat breathe/breed and loathe/load as bundled-clip-only." Final /ð/ is where voices are least consistent.',
                   note: 'Word-final, the harder position. Note *breathe* /briːð/ the verb, not *breath* /breθ/ the noun — the verb has both a different vowel and a voiced ending.' },
-                { a: 'loathe',  b: 'load',  aIpa: '/ləʊð/',   bIpa: '/ləʊd/',   differsIn: 'ð/d' },
+                { a: 'loathe',  b: 'load',  aIpa: '/ləʊð/',   bIpa: '/ləʊd/',   differsIn: 'ð/d',
+                  ttsUse: 'clip-only',
+                  ttsWhy: 'audio.ttsHint: "Treat breathe/breed and loathe/load as bundled-clip-only." Final /ð/ is where voices are least consistent.' },
                 { a: 'worthy',  b: 'wordy', aIpa: '/ˈwɜːði/', bIpa: '/ˈwɜːdi/', differsIn: 'ð/d',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: the intervocalic pair, where /ð/ is longest and clearest.',
                   note: 'Mid-word between two vowels, which is where /ð/ is commonest in real speech (*other*, *mother*, *either*, *rather*). AmE /ˈwɜːrði/ and /ˈwɜːrdi/ — the /r/ is in both, so it stays minimal.' },
                 { a: 'other',   b: 'udder', aIpa: '/ˈʌðə/',   bIpa: '/ˈʌdə/',   differsIn: 'ð/d',
-                  note: 'An *udder* is the part of a cow that milk comes from. A real word but a rare one, so use this item for the mirror check rather than for vocabulary.' }
+                  note: 'An *udder* is the part of a cow that milk comes from. A real word but a rare one, so use this item for the mirror check rather than for vocabulary. ⚠️ `caveats` also warns that an `en-US` intervocalic /d/ flap can sound close to /ð/ here; that is a voice-dependent claim rather than an audio.ttsHint one, so it is deliberately NOT flagged with ttsUse — see the note on scope in the file header.' }
             ],
 
             examples: ['then', 'den', 'they', 'day', 'those', 'doze', 'there', 'dare', 'though',
@@ -672,23 +748,40 @@ const PRONUNCIATION_CONSONANTS = {
 
             minimalPairs: [
                 { a: 'zoo',    b: 'Sue',    aIpa: '/zuː/',      bIpa: '/suː/',      differsIn: 'z/s',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: word-initial. But audio.ttsRiskWhy warns the voice may read *Sue* as a name with different prosody — use the verb reading in the prompt text.',
                   note: 'REQUIREMENTS.md §3.1 names *zoo* for this row. *Sue* is both a common name and the verb "to sue" — use the verb sense if a proper noun is unwanted.' },
-                { a: 'zip',    b: 'sip',    aIpa: '/zɪp/',      bIpa: '/sɪp/',      differsIn: 'z/s' },
+                { a: 'zip',    b: 'sip',    aIpa: '/zɪp/',      bIpa: '/sɪp/',      differsIn: 'z/s',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: word-initial.' },
                 { a: 'zeal',   b: 'seal',   aIpa: '/ziːl/',     bIpa: '/siːl/',     differsIn: 'z/s',
                   note: '*Zeal* means great enthusiasm. Less common than the rest, kept because word-initial /z/ items are scarce in English.' },
                 { a: 'zinc',   b: 'sink',   aIpa: '/zɪŋk/',     bIpa: '/sɪŋk/',     differsIn: 'z/s',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: word-initial.',
                   note: 'The "c" of *zinc* and the "k" of *sink* both spell /k/, so the two words really do differ only at the front.' },
                 { a: 'buzz',   b: 'bus',    aIpa: '/bʌz/',      bIpa: '/bʌs/',      differsIn: 'z/s',
+                  ttsUse: 'verify',
+                  ttsWhy: 'audio.ttsHint: "Treat buzz/bus with care — final /z/ devoicing can make a synthesised buzz land close to bus." Check it on the device voice before grading a miss on it.',
                   note: 'Word-final, and *bus* is the exact word REQUIREMENTS.md §3.1 uses for T-P2 final-vowel epenthesis — so this item catches two Telugu-L1 patterns at once. Neither word may end in a vowel.' },
                 { a: 'eyes',   b: 'ice',    aIpa: '/aɪz/',      bIpa: '/aɪs/',      differsIn: 'z/s',
                   note: 'Very frequent, and the plural "-s" ending being /z/ rather than /s/ is a rule worth teaching alongside it.' },
-                { a: 'rise',   b: 'rice',   aIpa: '/raɪz/',     bIpa: '/raɪs/',     differsIn: 'z/s' },
-                { a: 'prize',  b: 'price',  aIpa: '/praɪz/',    bIpa: '/praɪs/',    differsIn: 'z/s' },
+                { a: 'rise',   b: 'rice',   aIpa: '/raɪz/',     bIpa: '/raɪs/',     differsIn: 'z/s',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: the vowel-length cue before the final consonant is largest here, and TTS reproduces it fairly reliably.' },
+                { a: 'prize',  b: 'price',  aIpa: '/praɪz/',    bIpa: '/praɪs/',    differsIn: 'z/s',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: large vowel-length cue before the final consonant.' },
                 { a: 'lose',   b: 'loose',  aIpa: '/luːz/',     bIpa: '/luːs/',     differsIn: 'z/s',
                   note: 'Confused in *writing* by native speakers constantly, and the spoken difference is only the final consonant.' },
                 { a: 'advise', b: 'advice', aIpa: '/ədˈvaɪz/',  bIpa: '/ədˈvaɪs/',  differsIn: 'z/s',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: large vowel-length cue before the final consonant.',
                   note: 'The most useful pair in the set: verb versus noun, and in English the *only* thing separating them in speech is the voicing of the last consonant. "Can you advise me" against "can you give me advice".' },
                 { a: 'close',  b: 'close',  aIpa: '/kləʊz/',    bIpa: '/kləʊs/',    differsIn: 'z/s',
+                  ttsUse: 'clip-only',
+                  requiresCarrierSentence: true,
+                  ttsWhy: 'audio.ttsHint: "The two `close` clips must be generated from a carrier sentence, not from the bare word, or the voice will pick one reading at random." A bare-word TTS call cannot satisfy that, so this row is never TTS-renderable; `requiresCarrierSentence` is the flag for whoever generates the clips.',
                   note: 'Same nine letters, two different words: /kləʊz/ is the verb (shut the door) and /kləʊs/ is the adjective (near). Nothing in the spelling tells you which, so this is the item that proves the contrast carries real meaning. Show it late in the set, after the learner can feel the buzz.' }
             ],
 
@@ -823,22 +916,38 @@ const PRONUNCIATION_CONSONANTS = {
 
             minimalPairs: [
                 { a: 'fan',    b: 'pan',    aIpa: '/fæn/',     bIpa: '/pæn/',     differsIn: 'f/p',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: stressed word-initial before a vowel.',
                   note: 'The pair REQUIREMENTS.md §3.1 names for this row.' },
                 { a: 'coffee', b: 'copy',   aIpa: '/ˈkɒfi/',   bIpa: '/ˈkɒpi/',   differsIn: 'f/p',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: mid-word, the safest position in this set — the surrounding vowels give the ear a frame.',
                   note: 'Mid-word, two syllables, and both words are said daily at work. The most useful item in the set.' },
-                { a: 'fine',   b: 'pine',   aIpa: '/faɪn/',    bIpa: '/paɪn/',    differsIn: 'f/p' },
+                { a: 'fine',   b: 'pine',   aIpa: '/faɪn/',    bIpa: '/paɪn/',    differsIn: 'f/p',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: stressed word-initial before a vowel.' },
                 { a: 'full',   b: 'pull',   aIpa: '/fʊl/',     bIpa: '/pʊl/',     differsIn: 'f/p' },
                 { a: 'fool',   b: 'pool',   aIpa: '/fuːl/',    bIpa: '/puːl/',    differsIn: 'f/p',
                   note: 'Worth keeping next to *full/pull* — the two pairs have different vowels, so a learner who mixes all four up has a T-P7-adjacent vowel problem as well as this one.' },
-                { a: 'face',   b: 'pace',   aIpa: '/feɪs/',    bIpa: '/peɪs/',    differsIn: 'f/p' },
+                { a: 'face',   b: 'pace',   aIpa: '/feɪs/',    bIpa: '/peɪs/',    differsIn: 'f/p',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: stressed word-initial before a vowel.' },
                 { a: 'four',   b: 'pour',   aIpa: '/fɔː/',     bIpa: '/pɔː/',     differsIn: 'f/p',
                   note: 'Non-rhotic British transcription. In American English /fɔːr/ and /pɔːr/ — the /r/ is in both, so it stays a true minimal pair either way.' },
                 { a: 'leaf',   b: 'leap',   aIpa: '/liːf/',    bIpa: '/liːp/',    differsIn: 'f/p',
+                  ttsUse: 'clip-first',
+                  ttsWhy: 'audio.ttsHint: "Treat the word-final items as bundled-clip-first, because final /f/ is the quietest thing in the set." Clip-first, not clip-only: the hint permits TTS as a fallback if the learner is warned to raise the volume.',
                   note: 'Word-final. Also a T-P2 item: neither word may pick up a vowel at the end.' },
-                { a: 'cuff',   b: 'cup',    aIpa: '/kʌf/',     bIpa: '/kʌp/',     differsIn: 'f/p' },
+                { a: 'cuff',   b: 'cup',    aIpa: '/kʌf/',     bIpa: '/kʌp/',     differsIn: 'f/p',
+                  ttsUse: 'clip-first',
+                  ttsWhy: 'audio.ttsHint: word-final /f/ is the quietest thing in the set — bundled clip first, TTS only as a warned fallback.' },
                 { a: 'wife',   b: 'wipe',   aIpa: '/waɪf/',    bIpa: '/waɪp/',    differsIn: 'f/p',
+                  ttsUse: 'clip-first',
+                  ttsWhy: 'audio.ttsHint: word-final /f/ is the quietest thing in the set — bundled clip first, TTS only as a warned fallback.',
                   note: 'Starts with a /w/, so it doubles as a T-P5 check: lips rounded and no contact at the start, teeth on lip at the end.' },
                 { a: 'suffer', b: 'supper', aIpa: '/ˈsʌfə/',   bIpa: '/ˈsʌpə/',   differsIn: 'f/p',
+                  ttsUse: 'prefer',
+                  ttsWhy: 'audio.ttsHint: mid-word, the safest position in this set.',
                   note: 'Mid-word between vowels, like *coffee/copy*. The doubled letters in the spelling are irrelevant to the sound.' }
             ],
 
