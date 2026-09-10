@@ -16,7 +16,7 @@
  *
  * WHY IT PLANS AGAINST SURFACES AND NOT AGAINST THE CURRICULUM
  * §4's shape names five activities. Three of them have nothing that can draw
- * them: there is no listening comprehension question (FR-LST-1), no shadowing
+ * them: there is no listening comprehension question (FR-LSN-1), no shadowing
  * mode (FR-SPK-8) and no free-production prompt surface (FR-SPK-3). A sequencer
  * that plans "4 min: listen → comprehension → shadow" against that build sends
  * the learner to a screen that cannot honour the instruction, which is worse
@@ -223,7 +223,7 @@
         'listen.model': { available: true, note: 'Listening plays a TTS model sentence.' },
         'listen.comprehend': {
             available: false,
-            requirement: 'FR-LST-1',
+            requirement: 'FR-LSN-1',
             note: 'No listening comprehension question exists anywhere in the app (CURRICULUM.md §3 Strand D).'
         },
         'speak.shadow': {

@@ -8,10 +8,19 @@
  * documented those defects have been flipped and are marked "was KNOWN DEFECT"
  * so the change reads as intentional.
  *
- * Still pinned as a KNOWN DIVERGENCE: the interval ladder (1, 3, 8, 22 rather
- * than the documented 1, 3, 7, 16, 35). That is a forward-only behaviour change
- * with no data rewrite behind it, so it is deliberately NOT part of the
- * migration wave.
+ * The last KNOWN DIVERGENCE is gone too. The interval ladder was pinned here at
+ * 1, 3, 8, 22 against the 1, 3, 7, 16, 35 that FR-SRS-2 and
+ * TEACHING_METHODOLOGY.md §3 specify; `OQ-10` decided in favour of the specified
+ * ladder and `_applyGraded()` now walks it, holding at 35 rather than
+ * multiplying past the end. Those assertions are flipped below and marked
+ * "was KNOWN DIVERGENCE". The change is forward-only — no stored record is
+ * recomputed — and the tests that pin what happens to a record already sitting
+ * on `interval: 62` are in "the interval ladder" block.
+ *
+ * ⚠️ jest is NOT installed in this repo (`node_modules` has no jest binary), so
+ * NOTHING in this file has been run. It was written against the real content
+ * files and verified by a plain-node harness instead; treat every assertion here
+ * as unverified until someone installs jest and runs it.
  */
 
 const SRS = require('../../js/core/srs.js');
@@ -55,7 +64,7 @@ describe('_key', () => {
     });
 });
 
-describe('schedule — the success ladder', () => {
+describe('schedule — the success ladder (FR-SRS-2 / OQ-10)', () => {
     it('first correct answer is due tomorrow', () => {
         const rec = SRS.schedule(word(), true);
         expect(rec.reps).toBe(1);
@@ -70,16 +79,44 @@ describe('schedule — the success ladder', () => {
         expect(rec.interval).toBe(3);
     });
 
-    it('subsequent answers multiply by ease', () => {
-        SRS.schedule(word(), true);
-        SRS.schedule(word(), true);
-        const rec = SRS.schedule(word(), true);
-        expect(rec.reps).toBe(3);
-        // KNOWN DIVERGENCE from docs/TEACHING_METHODOLOGY.md §3, which
-        // specifies the ladder 1 -> 3 -> 7 -> 16 -> 35. The current code
-        // yields round(3 * 2.7) = 8. Phase 4 replaces this with an explicit
-        // INTERVAL_STEPS ladder; this expectation is meant to change then.
-        expect(rec.interval).toBe(8);
+    it('walks the ladder FR-SRS-2 specifies: 1, 3, 7, 16, 35', () => {
+        // was KNOWN DIVERGENCE. `_applyGraded()` used to compute
+        // round(interval * ease) from the third success on, which yields
+        // 1, 3, 8, 22, 62 — the sequence this test pinned while naming
+        // TEACHING_METHODOLOGY.md §3 as the thing it disagreed with. OQ-10
+        // resolved the disagreement in favour of the documented ladder.
+        const seen = [];
+        for (let i = 0; i < 5; i++) seen.push(SRS.schedule(word(), true).interval);
+        expect(seen).toEqual([1, 3, 7, 16, 35]);
+        expect(seen).toEqual(SRS.INTERVAL_STEPS);
+    });
+
+    it('HOLDS at the last rung instead of running away', () => {
+        // The reason the fixed ladder won. `ease` caps at 2.8 but the product
+        // `interval * ease` capped at nothing, so the old ladder continued
+        // 62 -> 174 -> 487 -> 1,364 days: seven right answers put an item 16
+        // months out and eight put it nearly four years out, reachable by luck on
+        // a four-option quiz. Holding makes MAX_INTERVAL_DAYS a fact.
+        let rec;
+        for (let i = 0; i < 12; i++) rec = SRS.schedule(word(), true);
+        expect(rec.reps).toBe(12);
+        expect(rec.interval).toBe(35);
+        expect(rec.interval).toBe(SRS.MAX_INTERVAL_DAYS);
+        expect(rec.due).toBe(NOW + 35 * DAY_MS);
+    });
+
+    it('derives the rung from reps alone, so nothing compounds', () => {
+        // The old rule multiplied the PREVIOUS interval, so one implausible value
+        // poisoned every value after it and the record could never recover.
+        expect(SRS.intervalForReps(1)).toBe(1);
+        expect(SRS.intervalForReps(3)).toBe(7);
+        expect(SRS.intervalForReps(5)).toBe(35);
+        expect(SRS.intervalForReps(99)).toBe(35);
+        // Nonsense reps read as the first rung: sooner, never later.
+        expect(SRS.intervalForReps(0)).toBe(1);
+        expect(SRS.intervalForReps(-4)).toBe(1);
+        expect(SRS.intervalForReps(undefined)).toBe(1);
+        expect(SRS.intervalForReps(NaN)).toBe(1);
     });
 
     it('raises ease on success, capped at the maximum', () => {
@@ -87,6 +124,85 @@ describe('schedule — the success ladder', () => {
         for (let i = 0; i < 10; i++) rec = SRS.schedule(word(), true);
         expect(rec.ease).toBeLessThanOrEqual(2.8);
         expect(rec.ease).toBeCloseTo(2.8, 5);
+    });
+
+    it('keeps ease as a queue-ORDER tie-break, not an interval input', () => {
+        // OQ-10: "keep `ease` for ordering only". Two items equally overdue with
+        // equal lapses: the harder one (lower ease) goes first.
+        SRS.records = {
+            'vocab:easy': { key: 'vocab:easy', type: 'vocab', ref: 'easy', word: 'easy',
+                due: NOW - 1000, lapses: 0, ease: 2.8, data: { word: 'easy', quiz: {} } },
+            'vocab:hard': { key: 'vocab:hard', type: 'vocab', ref: 'hard', word: 'hard',
+                due: NOW - 1000, lapses: 0, ease: 1.4, data: { word: 'hard', quiz: {} } }
+        };
+        expect(SRS.getDueWords().map(r => r.word)).toEqual(['hard', 'easy']);
+    });
+
+    it('publishes the ladder as policy rather than as a magic sequence', () => {
+        expect(SRS.INTERVAL_STEPS).toEqual([1, 3, 7, 16, 35]);
+        expect(SRS.MAX_INTERVAL_DAYS).toBe(35);
+        // A copy, so a caller cannot rewrite the policy by editing the array.
+        SRS.INTERVAL_STEPS.push(99);
+        expect(SRS.intervalForReps(6)).toBe(35);
+        SRS.INTERVAL_STEPS.pop();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// FR-SRS-2 / OQ-10 — what happens to records written by the OLD rule.
+// Forward-only: nothing recomputes history (REQUIREMENTS.md §6.7).
+// ---------------------------------------------------------------------------
+describe('the interval ladder — records already on a large interval', () => {
+    const legacy = (over = {}) => {
+        SRS.records = {
+            'vocab:legacy': Object.assign({
+                key: 'vocab:legacy', type: 'vocab', ref: 'legacy', word: 'legacy',
+                reps: 5, interval: 62, ease: 2.8, lapses: 0,
+                due: NOW + 62 * DAY_MS, lastReviewed: NOW, createdAt: NOW - 90 * DAY_MS,
+                data: { word: 'legacy', quiz: { question: 'q', options: ['a'], correct: 0 } }
+            }, over)
+        };
+        return SRS.records['vocab:legacy'];
+    };
+
+    it('leaves the stored interval and due date exactly where they were', () => {
+        legacy();
+        const before = JSON.stringify(SRS.records);
+        SRS.getDue(null); SRS.getDueWords(); SRS.dueCount(); SRS.stats();
+        expect(JSON.stringify(SRS.records)).toBe(before);
+    });
+
+    it('drops 62 to 35 on the next graded success — the cap arriving', () => {
+        // 1, 3, 8, 22, 62 are reps 1..5, so the next success is rep 6 and reads
+        // rung min(6, 5) = 5. The interval SHORTENS, which is the point.
+        legacy();
+        const rec = SRS.schedule(word({ word: 'legacy' }), true);
+        expect(rec.reps).toBe(6);
+        expect(rec.interval).toBe(35);
+        expect(rec.due).toBe(NOW + 35 * DAY_MS);
+    });
+
+    it('still resets to 1 day on a lapse, unchanged', () => {
+        legacy();
+        const rec = SRS.schedule(word({ word: 'legacy' }), false);
+        expect(rec.reps).toBe(0);
+        expect(rec.interval).toBe(0);
+        expect(rec.due).toBe(NOW);
+        expect(SRS.schedule(word({ word: 'legacy' }), true).interval).toBe(1);
+    });
+
+    it('reads a stored 62 as days, never as nonsense', () => {
+        legacy();
+        const rec = SRS.selfReport(word({ word: 'legacy' }), false);
+        expect(rec.interval).toBe(1);
+        expect(rec.due).toBe(NOW + DAY_MS);
+    });
+
+    it('resolves a huge interval with no reps to the FIRST rung, not the last', () => {
+        // A hand-edited, imported or corrupt record. Under-claiming how well an
+        // item is known is the safe direction (methodology principle 3).
+        legacy({ reps: 0, interval: 487, due: NOW - 1 });
+        expect(SRS.schedule(word({ word: 'legacy' }), true).interval).toBe(1);
     });
 });
 
@@ -275,9 +391,14 @@ describe('getDueWords', () => {
     it('still returns a non-vocab item that has no quiz, via getDue', () => {
         // was KNOWN CONSEQUENCE (srs.js:139): a grammar point could be scheduled
         // but never surfaced and was never counted, because the filter demanded a
-        // quiz. RENDERABLE.gram only asks for a payload.
+        // quiz. RENDERABLE.gram asks for what a grammar review card needs instead
+        // — the one-sentence rule plus a resolvable review prompt (FR-GRM-3).
         // `explain`, not `explanation` — see the note in the typed-items block.
-        SRS.scheduleItem('gram', 'articles', { id: 'articles', explain: 'a/an/the' }, false);
+        SRS.scheduleItem('gram', 'articles', {
+            id: 'articles', explain: 'a/an/the', rule: 'Use `the` when we both know which one.',
+            review: { rulePrompt: 'One line first.', itemIds: ['articles-p1'] },
+            practice: [{ id: 'articles-p1' }]
+        }, false);
         expect(SRS.getDue('gram')).toHaveLength(1);
         expect(SRS.getDue('gram')[0].data.explain).toBe('a/an/the');
         expect(SRS.countDue('gram')).toBe(1);
@@ -391,7 +512,8 @@ describe('getDueWords — the daily cap (US-304 / FR-SRS-4)', () => {
 });
 
 describe('schedule — self-reported outcomes (US-306 / FR-SRS-5)', () => {
-    // Three graded successes: reps 3, interval 8, due 8 days out, "learned".
+    // Three graded successes: reps 3, interval 7, due 7 days out, "learned".
+    // (was 8 — see the ladder block: FR-SRS-2's third rung is 7, not round(3*2.7).)
     const learnedItem = () => {
         SRS.schedule(word(), true);
         SRS.schedule(word(), true);
@@ -410,7 +532,7 @@ describe('schedule — self-reported outcomes (US-306 / FR-SRS-5)', () => {
         // schedule() mutates and returns the live record, so the numbers to
         // compare against have to be copied out before the self-report.
         const dueBefore = learnedItem().due;
-        expect(dueBefore).toBe(NOW + 8 * DAY_MS);
+        expect(dueBefore).toBe(NOW + 7 * DAY_MS);
 
         const rec = SRS.selfReport(word(), false);
         expect(rec.due).toBe(NOW + DAY_MS);   // at most one day out
@@ -436,7 +558,7 @@ describe('schedule — self-reported outcomes (US-306 / FR-SRS-5)', () => {
         const easeBefore = before.ease;
         const rec = SRS.selfReport(word(), true);
         expect(rec.due).toBe(dueBefore);      // not one millisecond further out
-        expect(rec.interval).toBe(8);
+        expect(rec.interval).toBe(7);
         expect(rec.reps).toBe(3);
         expect(rec.ease).toBe(easeBefore);
     });
@@ -549,17 +671,34 @@ describe('dueCount vs stats().due', () => {
 });
 
 describe('getDue — interleaving across types (US-303)', () => {
+    // Payloads have to be RENDERABLE for their type or they never reach the
+    // queue, which is the whole point of RENDERABLE. `{ id }` used to be enough
+    // for a gram or phon record; it is not, and must not be — see the
+    // "RENDERABLE" block below for why. These are the minimum shapes.
+    const payload = (type, ref) => {
+        if (type === 'vocab') return { word: ref, quiz: { question: 'q', options: ['a'], correct: 0 } };
+        if (type === 'gram') return {
+            id: ref, rule: 'One sentence.',
+            review: { rulePrompt: 'One line first.', itemIds: [ref + '-p1'] },
+            practice: [{ id: ref + '-p1' }]
+        };
+        if (type === 'phon') return {
+            id: ref, pair: ['sheep', 'ship'],
+            minimalPairs: [{ a: 'sheep', b: 'ship' }]
+        };
+        return { id: ref, chunk: ref, meaning: 'a meaning' };
+    };
+
     const seed = (type, n, base) => {
         for (let i = 0; i < n; i++) {
-            const key = type + ':' + type[0] + i;
+            const ref = type[0] + i;
+            const key = type + ':' + ref;
             SRS.records[key] = {
-                key: key, type: type, ref: type[0] + i,
+                key: key, type: type, ref: ref,
                 reps: 1, interval: 1, ease: 2.5, lapses: 0,
                 due: NOW - base + i,
                 lastReviewed: NOW - DAY_MS, createdAt: NOW - DAY_MS,
-                data: type === 'vocab'
-                    ? { word: type[0] + i, quiz: { question: 'q', options: ['a'], correct: 0 } }
-                    : { id: type[0] + i }
+                data: payload(type, ref)
             };
         }
     };
@@ -614,6 +753,51 @@ describe('getDue — interleaving across types (US-303)', () => {
         expect(SRS.countDue()).toBe(0);
         expect(SRS.stats().due).toBe(1);          // still counted honestly
         expect(SRS.stats().actionable).toBe(0);
+    });
+
+    it('carries everything a caller needs to CHOOSE and DRAW a card (US-171)', () => {
+        // The gap US-171 is really about: a queue entry that says only
+        // "{ type, ref, key, data }" is not enough to render a typed review,
+        // because `phon` is three different screens and `data` alone does not say
+        // which. `shape` is the card selector; the schedule fields let a card say
+        // "you have missed this 3 times" without reaching into records.
+        SRS.records = {};
+        seed('gram', 1, 1000);
+        SRS.records['gram:g0'].lapses = 3;
+        SRS.records['gram:g0'].selfReported = true;
+        const item = SRS.getDue('gram')[0];
+        expect(Object.keys(item).sort()).toEqual([
+            'data', 'due', 'interval', 'key', 'lapses', 'ref', 'reps', 'selfReported', 'shape', 'type'
+        ]);
+        expect(item.type).toBe('gram');
+        expect(item.shape).toBe('gram');
+        expect(item.ref).toBe('g0');
+        expect(item.key).toBe('gram:g0');
+        expect(item.lapses).toBe(3);
+        expect(item.reps).toBe(1);
+        expect(item.interval).toBe(1);
+        expect(item.due).toBe(SRS.records['gram:g0'].due);
+        expect(item.selfReported).toBe(true);
+    });
+
+    it('never hands out a shape it cannot name', () => {
+        // `shape` null would mean "renderable but undrawable", which is the
+        // contradiction this whole change exists to remove.
+        SRS.records = {};
+        seed('vocab', 3, 1000); seed('gram', 3, 1000); seed('phon', 3, 1000); seed('coll', 3, 1000);
+        const items = SRS.getDue(null);
+        expect(items).toHaveLength(12);
+        items.forEach(i => {
+            expect(typeof i.shape).toBe('string');
+            expect(SRS.SHAPES[i.type]).toContain(i.shape);
+        });
+    });
+
+    it('hands out payload copies, so a card cannot corrupt the store', () => {
+        SRS.records = {};
+        seed('gram', 1, 1000);
+        SRS.getDue('gram')[0].data.rule = 'MUTATED';
+        expect(SRS.records['gram:g0'].data.rule).toBe('One sentence.');
     });
 });
 
@@ -842,10 +1026,19 @@ describe('PROJECTORS.gram — against the authored schema, not a guess (US-148)'
         // `spokenNote` / `commonErrors` / `prerequisites` stay in content; the
         // rest is authoring metadata. Everything here is still readable from
         // data/grammar.js by id — it is absent from the RECORD, not from the app.
-        expect(SRS.auditProjection('gram', lesson).dropped.sort()).toEqual([
+        //
+        // These are `omitted`, not `dropped`: DELIBERATE_OMISSIONS.gram is what
+        // stops the audit warning about all eight on the very first grammar item
+        // scheduled. This assertion read `.dropped` and could never have passed —
+        // it was written before DELIBERATE_OMISSIONS existed and was never run,
+        // because jest is not installed. `dropped` must be EMPTY: it is the
+        // silent-data-loss channel and anything in it is a bug.
+        const audit = SRS.auditProjection('gram', lesson);
+        expect(audit.omitted.sort()).toEqual([
             'commonErrors', 'decide', 'notice', 'prerequisites', 'spokenNote',
             'syllabusNumber', 'tags', 'whyItMatters'
         ]);
+        expect(audit.dropped).toEqual([]);
     });
 
     it('does not treat the item\'s own srs identity fields as lost content', () => {
@@ -872,13 +1065,16 @@ describe('PROJECTORS.gram — against the authored schema, not a guess (US-148)'
         const pair = content.PRONUNCIATION_VOWELS_STRESS.pairs[0];
 
         const audit = SRS.auditProjection('phon', pair);
+        expect(audit.shape).toBe('pair');
         expect(audit.dropped).toEqual([]);
         expect(audit.phantom).toEqual([]);
 
         // The four the Pronunciation section (US-401) cannot render a review card
         // without, called out by name so a future trim of the list is loud.
+        // PROJECTORS.phon is a VARIANT list now (US-167), so the fields live on
+        // the matching variant, which is what projectorFields() resolves.
         ['articulatoryCue', 'contrastFeature', 'phonemes', 'productionGate']
-            .forEach(f => expect(SRS.PROJECTORS.phon).toContain(f));
+            .forEach(f => expect(SRS.projectorFields('phon', pair)).toContain(f));
     });
 
     it('stores a phon record under the key the content declares', () => {
@@ -899,6 +1095,331 @@ describe('PROJECTORS.gram — against the authored schema, not a guess (US-148)'
 });
 
 // ---------------------------------------------------------------------------
+// US-167 / US-171 — `phon` is THREE content shapes, not one
+// ---------------------------------------------------------------------------
+describe('PROJECTORS.phon shapes — against the real pronunciation content (US-167)', () => {
+    const path = require('path');
+    const fs = require('fs');
+    const VS = require(path.join(__dirname, '../../data/pronunciation/vowels-stress.js'))
+        .PRONUNCIATION_VOWELS_STRESS;
+    // data/pronunciation/consonants.js declares a lexical global and has NO
+    // module.exports (that file is not this change's to edit), so it is evaluated
+    // as the classic script it is rather than required. Its `pairs[]` is authored
+    // to the same key set and key order as the vowel pairs, which is exactly the
+    // claim being checked here.
+    const CONS = new Function(
+        fs.readFileSync(path.join(__dirname, '../../data/pronunciation/consonants.js'), 'utf8') +
+        '\n;return PRONUNCIATION_CONSONANTS;')();
+
+    beforeEach(() => {
+        SRS.records = {};
+        SRS._resetProjectionWarnings();
+    });
+
+    it('has real content of all three shapes to check against', () => {
+        expect(VS.pairs.length).toBe(3);
+        expect(CONS.pairs.length).toBe(5);
+        expect(VS.stress.length).toBe(21);
+        expect(VS.noticing.length).toBe(15);
+    });
+
+    it('declares the three shapes a review surface must be able to draw', () => {
+        expect(SRS.SHAPES.phon).toEqual(['pair', 'stress', 'noticing']);
+        expect(SRS.SHAPES.vocab).toEqual(['vocab']);
+        expect(SRS.SHAPES.gram).toEqual(['gram']);
+        expect(SRS.SHAPES.coll).toEqual(['coll']);
+    });
+
+    it('routes every authored item to the right shape', () => {
+        VS.pairs.concat(CONS.pairs).forEach(p => expect(SRS.shapeOf('phon', p)).toBe('pair'));
+        VS.stress.forEach(s => expect(SRS.shapeOf('phon', s)).toBe('stress'));
+        VS.noticing.forEach(n => expect(SRS.shapeOf('phon', n)).toBe('noticing'));
+    });
+
+    it('drops nothing an author wrote, on any of the 44 real phon items', () => {
+        // The defect US-167 reported: `phon:rhythm`, `phon:final-vowel` and
+        // `phon:cluster` had no projector, so a noticing item was projected
+        // through the vowel-pair field list. The three key sets overlap on
+        // exactly { id, code, mistakeCategory }, so the record stored three
+        // fields, the card had no prompt and no answer, and RENDERABLE said yes.
+        const dropped = [];
+        const audit = (kind, items) => items.forEach(it => {
+            const a = SRS.auditProjection('phon', it);
+            if (a.dropped.length) dropped.push([kind, it.id, a.dropped]);
+        });
+        audit('pair', VS.pairs.concat(CONS.pairs));
+        audit('stress', VS.stress);
+        audit('noticing', VS.noticing);
+        expect(dropped).toEqual([]);
+    });
+
+    it('projects a word-stress item with the drill that IS its card (FR-PRN-3)', () => {
+        const item = VS.stress[0];
+        expect(item.srsKey).toBe('phon:word-stress');
+        const rec = SRS.scheduleItem('phon', item.srsRef, item, false);
+        expect(rec.key).toBe(item.srsKey);
+        const stored = JSON.parse(localStorage.getItem('srsData'))['phon:word-stress'];
+        // The drill, and the three fields a renderer needs to mark the syllables
+        // WITHOUT parsing the display string.
+        expect(stored.data.drill).toEqual(item.drill);
+        expect(stored.data.word).toBe(item.word);
+        expect(stored.data.syllables).toEqual(item.syllables);
+        expect(stored.data.stressNumbers).toEqual(item.stressNumbers);
+        expect(stored.data.stressIndex).toBe(item.stressIndex);
+        expect(stored.data.ipa).toBe(item.ipa);
+        // Before US-167 this was the ENTIRE stored payload.
+        expect(Object.keys(stored.data).length).toBeGreaterThan(3);
+    });
+
+    it('projects a noticing item with its prompt, grading and FR-PRN-8 policy', () => {
+        VS.noticing.forEach(item => {
+            SRS.records = {};
+            const ref = item.srsKey.split(':')[1];
+            const rec = SRS.scheduleItem('phon', ref, item, false);
+            expect(rec.key).toBe(item.srsKey);
+            expect(rec.data.prompt).toBe(item.prompt);
+            expect(rec.data.mode).toBe(item.mode);
+            expect(rec.data.teach).toBe(item.teach);
+            expect(rec.data.answer).toBe(item.answer);
+            expect(rec.data.why).toBe(item.why);
+            expect(rec.data.feelCheck).toBe(item.feelCheck);
+            // FR-PRN-8 is POLICY on the card, not metadata: a review that ignores
+            // this and asks the learner to imitate a TTS model breaks the
+            // requirement and AS-3 at once.
+            expect(rec.data.requiresImitation).toBe(false);
+            expect(rec.data.answerableFrom).toBe(item.answerableFrom);
+        });
+    });
+
+    it('keys the prosody records exactly as the content declares', () => {
+        // Three keys across 15 items, and one key across 21 stress items. The
+        // surface has to know that: per-word accuracy is NOT an SRS fact.
+        const keys = new Set();
+        VS.noticing.forEach(n => {
+            keys.add(SRS.scheduleItem('phon', n.srsKey.split(':')[1], n, false).key);
+        });
+        expect([...keys].sort()).toEqual(['phon:cluster', 'phon:final-vowel', 'phon:rhythm']);
+
+        SRS.records = {};
+        VS.stress.forEach(s => SRS.scheduleItem('phon', s.srsRef, s, false));
+        expect(Object.keys(SRS.records)).toEqual(['phon:word-stress']);
+    });
+
+    it('answers shapeOf() the same way for authored content and stored payload', () => {
+        // The invariant that lets RENDERABLE and getDue() agree: a variant's
+        // `when` may only test fields the variant itself projects. Break it and a
+        // record becomes un-routable the moment it is saved.
+        const all = [].concat(VS.pairs, CONS.pairs, VS.stress, VS.noticing);
+        all.forEach(item => {
+            SRS.records = {};
+            const ref = item.srsRef || (item.srsKey || '').split(':')[1] || item.id;
+            const rec = SRS.scheduleItem('phon', ref, item, false);
+            expect(SRS.shapeOf('phon', rec.data)).toBe(SRS.shapeOf('phon', item));
+        });
+    });
+
+    it('makes all 44 real phon items reach a review queue', () => {
+        // The end-to-end claim of US-171's scheduler half: schedule real content,
+        // and it comes back out of getDue() as something drawable.
+        const all = [].concat(VS.pairs, CONS.pairs, VS.stress, VS.noticing);
+        const shapes = {};
+        all.forEach(item => {
+            SRS.records = {};
+            const ref = item.srsRef || (item.srsKey || '').split(':')[1] || item.id;
+            SRS.scheduleItem('phon', ref, item, false);       // a lapse: due now
+            const q = SRS.getDue('phon');
+            expect(q).toHaveLength(1);
+            expect(q[0].type).toBe('phon');
+            expect(typeof q[0].shape).toBe('string');
+            shapes[q[0].shape] = (shapes[q[0].shape] || 0) + 1;
+        });
+        expect(shapes).toEqual({ pair: 8, stress: 21, noticing: 15 });
+    });
+
+    it('warns by name when an item matches no shape at all', () => {
+        // A fourth phon shape landing must not fail the way the third one did.
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            SRS.scheduleItem('phon', 'intonation', { id: 'fall-rise', somethingNew: 1 }, false);
+            expect(warn).toHaveBeenCalled();
+            const msg = warn.mock.calls[0][0];
+            expect(msg).toContain('No PROJECTORS.phon shape matches');
+            expect(msg).toContain('fall-rise');
+            expect(msg).toContain('js/core/srs.js');
+            // Scheduling still WORKS — the lapse is recorded, FR-PRN-2 is not lost.
+            expect(SRS.records['phon:intonation'].lapses).toBe(1);
+            // It is simply not offered as a card.
+            expect(SRS.getDue('phon')).toHaveLength(0);
+            expect(SRS.stats('phon').due).toBe(1);
+            expect(SRS.stats('phon').actionable).toBe(0);
+        } finally {
+            warn.mockRestore();
+        }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// RENDERABLE — "can this be drawn", per type and per shape
+// ---------------------------------------------------------------------------
+describe('RENDERABLE — a queue entry is a promise the card can be drawn', () => {
+    const path = require('path');
+    const VS = require(path.join(__dirname, '../../data/pronunciation/vowels-stress.js'))
+        .PRONUNCIATION_VOWELS_STRESS;
+    const { grammarLessons } = require('../../data/grammar.js');
+
+    beforeEach(() => { SRS.records = {}; });
+
+    it('says yes to every real authored item', () => {
+        grammarLessons.foundation.forEach(p => {
+            expect(SRS.RENDERABLE.gram(SRS._project('gram', p))).toBe(true);
+        });
+        [].concat(VS.pairs, VS.stress, VS.noticing).forEach(p => {
+            expect(SRS.RENDERABLE.phon(SRS._project('phon', p))).toBe(true);
+        });
+    });
+
+    it('vocab is still EXACTLY the old data.quiz test', () => {
+        // The vocabulary review flow must not move a byte.
+        expect(SRS.RENDERABLE.vocab({ quiz: {} })).toBe(true);
+        expect(SRS.RENDERABLE.vocab({ word: 'x' })).toBe(false);
+        expect(SRS.RENDERABLE.vocab({})).toBe(false);
+        expect(SRS.RENDERABLE.vocab(null)).toBe(false);
+    });
+
+    it('gram needs the rule and a review prompt that resolves (FR-GRM-3)', () => {
+        const full = {
+            id: 'articles', rule: 'One sentence.',
+            review: { rulePrompt: 'One line first.', itemIds: ['articles-p1'] },
+            practice: [{ id: 'articles-p1' }]
+        };
+        expect(SRS.RENDERABLE.gram(full)).toBe(true);
+        // methodology §2: a wrong answer must state the rule. No rule, no card.
+        expect(SRS.RENDERABLE.gram(Object.assign({}, full, { rule: undefined }))).toBe(false);
+        expect(SRS.RENDERABLE.gram(Object.assign({}, full, { rule: '   ' }))).toBe(false);
+        // FR-GRM-3: reviewable "without re-teaching the whole lesson".
+        expect(SRS.RENDERABLE.gram(Object.assign({}, full, { review: undefined }))).toBe(false);
+        expect(SRS.RENDERABLE.gram(Object.assign({}, full, { review: { itemIds: ['articles-p1'] } }))).toBe(false);
+        // Dangling ids: the exact way projecting `review` without `practice`
+        // (or the other way round) failed before.
+        expect(SRS.RENDERABLE.gram(Object.assign({}, full, { practice: [] }))).toBe(false);
+        expect(SRS.RENDERABLE.gram(Object.assign({}, full, { practice: [{ id: 'other-p9' }] }))).toBe(false);
+        expect(SRS.RENDERABLE.gram(Object.assign({}, full, { review: { rulePrompt: 'p', itemIds: [] } }))).toBe(false);
+        // was KNOWN LOOSENESS: `d => !!d` said yes to this.
+        expect(SRS.RENDERABLE.gram({ id: 'articles' })).toBe(false);
+    });
+
+    it('phon is judged per shape, not per type', () => {
+        // pair: gradable discrimination, or the no-audio text fallback (AS-3).
+        expect(SRS.RENDERABLE.phon({ pair: ['sheep', 'ship'], minimalPairs: [{ a: 1 }] })).toBe(true);
+        expect(SRS.RENDERABLE.phon({ pair: ['sheep', 'ship'], textOnlyFallback: { items: [] } })).toBe(true);
+        expect(SRS.RENDERABLE.phon({ pair: ['sheep', 'ship'], minimalPairs: [] })).toBe(false);
+        // stress: the drill is the card.
+        const stress = { syllables: ['a', 'b'], drill: { options: ['a', 'b'], correctIndex: 0 } };
+        expect(SRS.RENDERABLE.phon(stress)).toBe(true);
+        expect(SRS.RENDERABLE.phon({ syllables: ['a'], drill: { options: ['a'] } })).toBe(false);
+        expect(SRS.RENDERABLE.phon({ syllables: ['a'] })).toBe(false);
+        // noticing: a prompt plus any one of the three grading shapes.
+        expect(SRS.RENDERABLE.phon({ target: 'rhythm', mode: 'count-beats', prompt: 'p', options: ['a'], correctIndex: 0 })).toBe(true);
+        expect(SRS.RENDERABLE.phon({ target: 'rhythm', mode: 'pick-beat-words', prompt: 'p', tokens: ['a'], correct: [0] })).toBe(true);
+        expect(SRS.RENDERABLE.phon({ target: 'cluster', mode: 'count-syllables', prompt: 'p', items: [{ answer: 1 }] })).toBe(true);
+        expect(SRS.RENDERABLE.phon({ target: 'rhythm', mode: 'count-beats', prompt: 'p' })).toBe(false);
+        expect(SRS.RENDERABLE.phon({ target: 'rhythm', mode: 'count-beats', options: ['a'], correctIndex: 0 })).toBe(false);
+        // was KNOWN LOOSENESS, and the actual US-167 bug: the three keys the
+        // shapes share, stored by the shape-blind projector, called renderable.
+        expect(SRS.RENDERABLE.phon({ id: 'stress-photograph', code: 'T-P4', mistakeCategory: 'prn.word-stress' })).toBe(false);
+        expect(SRS.RENDERABLE.phon({})).toBe(false);
+        expect(SRS.RENDERABLE.phon(null)).toBe(false);
+    });
+
+    it('coll needs a chunk and a meaning or example', () => {
+        expect(SRS.RENDERABLE.coll({ chunk: 'make a decision', meaning: 'to decide' })).toBe(true);
+        expect(SRS.RENDERABLE.coll({ chunk: 'make a decision', example: 'She made one.' })).toBe(true);
+        expect(SRS.RENDERABLE.coll({ chunk: 'make a decision' })).toBe(false);
+        expect(SRS.RENDERABLE.coll({ id: 'x' })).toBe(false);
+    });
+
+    it('reports a record it cannot draw rather than hiding or deleting it', () => {
+        // What happens to a record stored before a projector was corrected. It
+        // stops being OFFERED and starts being REPORTED — the gap between
+        // stats().due and stats().actionable, which js/core/session.js surfaces as
+        // `heldBack`. Nothing is deleted and no due date moves.
+        SRS.records = {
+            'phon:word-stress': {
+                key: 'phon:word-stress', type: 'phon', ref: 'word-stress',
+                reps: 0, interval: 0, ease: 2.3, lapses: 2, due: NOW - 5000,
+                data: { id: 'stress-photograph', code: 'T-P4', mistakeCategory: 'prn.word-stress' }
+            }
+        };
+        const before = JSON.stringify(SRS.records);
+        expect(SRS.getDue('phon')).toHaveLength(0);
+        expect(SRS.countDue('phon')).toBe(0);
+        expect(SRS.stats('phon').due).toBe(1);
+        expect(SRS.stats('phon').actionable).toBe(0);
+        expect(JSON.stringify(SRS.records)).toBe(before);
+    });
+
+    it('heals such a record on the next real schedule() call, history intact', () => {
+        SRS.records = {
+            'phon:word-stress': {
+                key: 'phon:word-stress', type: 'phon', ref: 'word-stress',
+                reps: 0, interval: 0, ease: 2.3, lapses: 2, due: NOW - 5000,
+                createdAt: NOW - 3 * DAY_MS,
+                data: { id: 'stress-photograph', code: 'T-P4', mistakeCategory: 'prn.word-stress' }
+            }
+        };
+        const item = VS.stress[0];
+        const rec = SRS.scheduleItem('phon', item.srsRef, item, false);
+        expect(SRS.shapeOf('phon', rec.data)).toBe('stress');
+        expect(rec.data.drill).toEqual(item.drill);
+        expect(SRS.getDue('phon')).toHaveLength(1);
+        expect(rec.lapses).toBe(3);                       // the old history kept
+        expect(rec.createdAt).toBe(NOW - 3 * DAY_MS);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// The badge. Deliberately still vocabulary-only — see SRS.dueCount().
+// ---------------------------------------------------------------------------
+describe('dueCount — the badge does not promise a session app.js cannot open', () => {
+    beforeEach(() => { SRS.records = {}; });
+
+    const gram = ref => ({
+        id: ref, rule: 'One sentence.',
+        review: { rulePrompt: 'One line first.', itemIds: [ref + '-p1'] },
+        practice: [{ id: ref + '-p1' }]
+    });
+
+    it('still defaults to vocab, even though getDue() can now serve typed items', () => {
+        // The scheduler half of US-171 landed; the app.js half (startReview
+        // walking getDue) has not. Counting grammar in the badge before the
+        // button can show it is the same trust bug as a false "Perfect!".
+        SRS.schedule(word(), false);
+        SRS.scheduleItem('gram', 'g1', gram('g1'), false);
+        SRS.scheduleItem('gram', 'g2', gram('g2'), false);
+        expect(SRS.dueCount()).toBe(1);
+        expect(SRS.dueCount()).toBe(SRS.getDueWords().length);
+        // The typed work is not hidden, it is reported.
+        expect(SRS.dueCount(null)).toBe(3);
+        expect(SRS.totalDueCount('gram')).toBe(2);
+        expect(SRS.countDue(null)).toBe(3);
+    });
+
+    it('an explicit type is answered honestly, so a caller can opt in today', () => {
+        SRS.scheduleItem('gram', 'g1', gram('g1'), false);
+        expect(SRS.dueCount('gram')).toBe(1);
+        expect(SRS.dueCount('vocab')).toBe(0);
+        expect(SRS.dueCount(null)).toBe(1);
+    });
+
+    it('dueCount(null) equals getDue(null).length, whatever the mix', () => {
+        for (let i = 0; i < 25; i++) SRS.schedule(word({ word: 'w' + i }), false);
+        for (let i = 0; i < 25; i++) SRS.scheduleItem('gram', 'g' + i, gram('g' + i), false);
+        expect(SRS.dueCount(null)).toBe(SRS.getDue(null).length);
+        expect(SRS.dueCount(null)).toBe(SRS.DAILY_REVIEW_CAP);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // US-148 — preventing the class of bug, not the two instances of it
 // ---------------------------------------------------------------------------
 describe('the projection audit (US-148)', () => {
@@ -915,12 +1436,27 @@ describe('the projection audit (US-148)', () => {
     });
 
     it('warns when an author writes a field the projector drops', () => {
-        SRS.scheduleItem('gram', 'articles', { id: 'articles', rule: 'r', spokenNote: 'x' }, false);
+        // `mystery`, not `spokenNote`: this assertion used `spokenNote` and could
+        // never have passed, because `spokenNote` is in DELIBERATE_OMISSIONS.gram
+        // and being deliberately omitted is precisely what does NOT warn. Never
+        // run, because jest is not installed.
+        SRS.scheduleItem('gram', 'articles', { id: 'articles', rule: 'r', mystery: 'x' }, false);
         expect(warn).toHaveBeenCalledTimes(1);
         const msg = warn.mock.calls[0][0];
         expect(msg).toContain('PROJECTORS.gram');
-        expect(msg).toContain('`spokenNote`');
+        expect(msg).toContain('`mystery`');
         expect(msg).toContain('js/core/srs.js');
+    });
+
+    it('stays silent about a field DELIBERATE_OMISSIONS declares', () => {
+        // The other half: a warning that fires on the documented, correct call is
+        // noise, and noise is how the real signal gets ignored.
+        SRS.scheduleItem('gram', 'articles', {
+            id: 'articles', rule: 'r', spokenNote: 'x', notice: {}, decide: [],
+            whyItMatters: 'w', commonErrors: [], prerequisites: [],
+            syllabusNumber: 3, tags: ['x']
+        }, false);
+        expect(warn).not.toHaveBeenCalled();
     });
 
     it('warns once per type and field, so the console stays readable', () => {
@@ -934,9 +1470,32 @@ describe('the projection audit (US-148)', () => {
 
     it('warns separately for the same field name under a different type', () => {
         SRS.scheduleItem('gram', 'g', { id: 'g', mystery: 1 }, false);
+        // `{ id, mystery }` matches no `phon` shape, so this is the "no shape"
+        // warning rather than the per-field one — a bigger statement, and it still
+        // names the registry the author has to edit.
         SRS.scheduleItem('phon', 'iː-ɪ', { id: 'iː-ɪ', mystery: 1 }, false);
         expect(warn).toHaveBeenCalledTimes(2);
+        expect(warn.mock.calls[0][0]).toContain('PROJECTORS.gram');
         expect(warn.mock.calls[1][0]).toContain('PROJECTORS.phon');
+    });
+
+    it('names the SHAPE, not just the type, when a type has several', () => {
+        // "PROJECTORS.phon does not list `foo`" would send an author to a
+        // three-variant list with no clue which one to edit.
+        SRS.scheduleItem('phon', 'iː-ɪ', {
+            id: 'iː-ɪ', pair: ['sheep', 'ship'], minimalPairs: [{ a: 1 }], mystery: 1
+        }, false);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0][0]).toContain('PROJECTORS.phon[pair]');
+        expect(warn.mock.calls[0][0]).toContain('`mystery`');
+    });
+
+    it('warns once per type+shape+field, so one shape does not silence another', () => {
+        SRS.scheduleItem('phon', 'iː-ɪ', { pair: ['a', 'b'], mystery: 1 }, false);
+        SRS.scheduleItem('phon', 'word-stress', { syllables: ['a'], mystery: 1 }, false);
+        expect(warn).toHaveBeenCalledTimes(2);
+        expect(warn.mock.calls[0][0]).toContain('[pair]');
+        expect(warn.mock.calls[1][0]).toContain('[stress]');
     });
 
     it('is silent about identity fields', () => {

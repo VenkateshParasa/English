@@ -293,4 +293,103 @@ describe('index.html markup matches the registry', () => {
                 expect(srcs.indexOf(src)).toBeLessThan(appAt);
             });
     });
+
+    it('gives Listening a lifetime-total card like every other section (US-175)', () => {
+        // Named explicitly rather than left to the it.each() above, because the
+        // interesting fact is the ABSENCE of an exception: for one release
+        // Listening was the only exercise-tracking section whose number was
+        // counted, summed and never shown. If this row goes back to
+        // `totalCardId: null` the it.each() above simply stops running for it —
+        // silently — which is precisely the failure mode this file exists for.
+        expect(Sections.get('listening').totalCardId).toBe('listeningCompleted');
+        Sections.exercises().forEach(s => expect(typeof s.totalCardId).toBe('string'));
+        const card = doc.getElementById('listeningCompleted');
+        expect(card).not.toBeNull();
+        expect(card.classList.contains('stat-number')).toBe(true);
+        expect(card.closest('#dashboard')).not.toBeNull();
+    });
 });
+
+/**
+ * The "Start today's session" chrome (US-170 / FR-SES-1).
+ *
+ * Structural only, in the same spirit as the section contract above: app.js's
+ * SessionUI looks every one of these hosts up by id and no-ops on a miss, so a
+ * renamed or moved element is a session that silently stops reporting.
+ */
+describe('today\'s session markup (US-170)', () => {
+    it('keeps #sessionBar outside every .section', () => {
+        // switchSection() toggles `.active` on `.section` elements and a step
+        // routes the learner INTO a section, so chrome inside one would vanish
+        // exactly when it is needed.
+        const bar = doc.getElementById('sessionBar');
+        expect(bar).not.toBeNull();
+        expect(bar.closest('.section')).toBeNull();
+        expect(bar.classList.contains('section')).toBe(false);
+    });
+
+    it('starts #sessionBar hidden and focusable', () => {
+        const bar = doc.getElementById('sessionBar');
+        // No JS has run yet, so the markup itself must not show an empty bar.
+        expect(bar.hasAttribute('hidden')).toBe(true);
+        // SessionUI.enter() moves focus here on every step; -1 keeps it out of
+        // the tab order while still being focusable (FR-A11Y-1).
+        expect(bar.getAttribute('tabindex')).toBe('-1');
+    });
+
+    it.each(['sessionStep', 'sessionInstruction', 'sessionStepNote', 'sessionControls'])(
+        '#%s lives inside the session bar',
+        id => {
+            const el = doc.getElementById(id);
+            expect(el).not.toBeNull();
+            expect(el.closest('.session-bar')).not.toBeNull();
+        }
+    );
+
+    it.each([
+        'sessionPanel', 'sessionResume', 'sessionSilent', 'startSession',
+        'restartSession', 'sessionPlan', 'sessionShortfall', 'sessionOmitted',
+        'sessionWrapUp'
+    ])('#%s lives on the dashboard', id => {
+        const el = doc.getElementById(id);
+        expect(el).not.toBeNull();
+        expect(el.closest('#dashboard')).not.toBeNull();
+    });
+
+    it('puts the session panel before the stats grid', () => {
+        // BR-1: a learner completes a session without choosing what to practise.
+        // The Start button has to be the first thing on the Dashboard, or the
+        // eight-button nav is still the first offer the app makes.
+        const dashboard = doc.getElementById('dashboard');
+        const order = Array.from(dashboard.children);
+        const panel = order.findIndex(c => c.classList.contains('session-panel'));
+        const grid = order.findIndex(c => c.classList.contains('stats-grid'));
+        expect(panel).toBeGreaterThan(-1);
+        expect(grid).toBeGreaterThan(-1);
+        expect(panel).toBeLessThan(grid);
+    });
+
+    it('uses real buttons for every session control in the markup', () => {
+        // FR-A11Y-1: Tab reaches them and Enter/Space activate them with no key
+        // handling of our own. The per-step controls are built in app.js as
+        // <button type="button"> for the same reason.
+        ['startSession', 'restartSession'].forEach(id => {
+            expect(doc.getElementById(id).tagName).toBe('BUTTON');
+        });
+    });
+
+    it('loads session.js after its dependencies and before app.js', () => {
+        const srcs = Array.from(doc.querySelectorAll('script[src]'))
+            .map(s => s.getAttribute('src'));
+        const at = name => srcs.indexOf(name);
+        expect(at('js/core/session.js')).toBeGreaterThan(-1);
+        // It reads Sections, SRS and Mistakes at build time.
+        ['js/core/sections.js', 'js/core/srs.js', 'js/core/mistakes.js'].forEach(dep => {
+            expect(at(dep)).toBeGreaterThan(-1);
+            expect(at(dep)).toBeLessThan(at('js/core/session.js'));
+        });
+        // app.js calls Session.registerSurfaces() at parse time.
+        expect(at('js/core/session.js')).toBeLessThan(at('app.js'));
+    });
+});
+

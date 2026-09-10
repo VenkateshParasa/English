@@ -2,7 +2,14 @@
 // Provides offline functionality and caching
 
 const CACHE_NAME = 'english-portal-v1.0.2';
-const STATIC_CACHE = 'english-portal-static-v12';
+// v12 -> v13 (US-170 / US-175). No file was ADDED, so STATIC_ASSETS below is
+// unchanged — but index.html, app.js and styles.css all changed, and .js/.css go
+// through cacheFirstStrategy(STATIC_CACHE) while index.html goes network-first.
+// Without a new cache name a returning learner would be served the NEW markup
+// (#sessionBar, #listeningCompleted) against the OLD app.js, which is a worse
+// failure than a stale page: the session controls would exist and do nothing.
+// Renaming the cache is what makes the activate handler below delete v12.
+const STATIC_CACHE = 'english-portal-static-v14';
 const DYNAMIC_CACHE = 'english-portal-dynamic-v3';
 const API_CACHE = 'english-portal-api-v3';
 
@@ -42,6 +49,7 @@ const STATIC_ASSETS = [
     '/data.js',
     // Strand B grammar content, loaded by index.html before app.js.
     '/data/grammar.js',
+    '/data/grammar/be.js',
     '/data/grammar/countability.js',
     '/data/pronunciation/vowels-stress.js',
     '/data/pronunciation/consonants.js',

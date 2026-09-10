@@ -2004,10 +2004,10 @@ function statBox(id, heading, rows) {
 }
 
 function updateDashboard() {
-    // Lifetime-total stat cards, one per row that has one. `totalCardId: null`
-    // (listening) is a section with no card, which is a gap in index.html rather
-    // than a section to skip in code — see the note on that field in
-    // js/core/sections.js.
+    // Lifetime-total stat cards, one per row that has one. Every
+    // exercise-tracking section has a card since US-175 gave Listening the one it
+    // had always been missing; the guard stays because `totalCardId: null` is
+    // still representable (and is what `dashboard` itself carries).
     Sections.exercises().forEach(section => {
         if (!section.totalCardId) return;
         const card = document.getElementById(section.totalCardId);
@@ -2246,6 +2246,14 @@ async function loadVocabularyWord() {
             wordData = currentWord;
         }
         
+        // Review mode may have STARTED while that await was in flight, and the
+        // session's review step does exactly that: switchSection('vocabulary')
+        // runs this loader, then startReview() paints the review card. Writing
+        // here would replace the card the learner is answering with an unrelated
+        // word a second later. loadReviewWord() owns the card while review mode
+        // is on, so bail — `finally` below still hides the indicator.
+        if (state.reviewMode) return;
+
         document.getElementById('currentWord').textContent = wordData.word;
         setPronunciationDisplay(wordData.pronunciation);
         document.getElementById('definition').textContent = wordData.definition;
@@ -6152,6 +6160,926 @@ function contentCountAt(map, level) {
 }
 
 // ============================================
+// TODAY'S SESSION  (US-170 / FR-SES-1, FR-SES-5, BR-1)
+// ============================================
+//
+// js/core/session.js plans; everything below renders. That split is the whole
+// design: the planner has no DOM and this block has no policy, so "what should
+// the learner do next" is answered in one place and "what does that look like"
+// in another.
+//
+// WHAT IT RENDERS
+//   #sessionPanel  the Dashboard card — Start, the plan, plan.shortfall,
+//                  plan.omitted, and the FR-SES-5 wrap-up
+//   #sessionBar    the chrome that follows the learner into every section —
+//                  step N of M, the strand, advisory minutes, per-step controls
+//
+// WHAT IT DELIBERATELY DOES NOT BUILD
+// No new exercise surface, not one. Every step routes into a section that
+// already exists, through switchSection() and that section's registered loader,
+// and the step's `count` / `items` / `target` are applied to that section's own
+// state. A step whose surface does not exist is never planned — which is why
+// registerSurfaces() below has to be truthful, and why plan.omitted is printed
+// on the Dashboard instead of swallowed. An honest empty space is a bug report;
+// a hidden one is a lie.
+//
+// NO TIMER, ANYWHERE. The plan is count-boxed (session.js decision 3): steps end
+// when the work ends, never when a clock says so. Minutes are labelled "about",
+// and the only number that moves is the step counter.
+
+// --------------------------------------------------------------------------
+// What this build can actually render  (session.js SURFACES)
+// --------------------------------------------------------------------------
+//
+// Same loudness and the same once-only call discipline as the two
+// Sections.register*() blocks above, and the same reason for living here rather
+// than in the module: these answers are facts about app.js's functions and about
+// content this file can dereference.
+//
+// The rule is that a value here must be checkable by reading the named function.
+// Declaring a surface that does not render makes the planner promise a step that
+// draws nothing, which is a worse failure than a short session: the learner is
+// sent to a screen that cannot honour the instruction it just gave them (BR-3).
+// Three surfaces are therefore declared FALSE from the render side, confirming
+// from here what the module already assumed.
+if (typeof Session !== 'undefined' && Session && typeof Session.registerSurfaces === 'function') {
+    Session.registerSurfaces({
+        // startReview() -> SRS.getDueWords() -> the vocabulary word card. Vocab
+        // ONLY, and that restriction is the point of the `types` field: due
+        // `gram:` and `phon:` records exist and are correctly scheduled, and no
+        // screen in this build draws them, so the review step must not count
+        // them. Session.countsHeldBack() reports the gap and the step carries it
+        // on `step.heldBack`.
+        'srs.review': {
+            available: true,
+            types: ['vocab'],
+            note: 'Review mode (app.js startReview) walks SRS.getDueWords(), which is vocabulary only, and renders it in the vocabulary word card.'
+        },
+
+        // renderGrammarTeaching(): the rule, the "how to decide" steps and the
+        // notice dialogue. Unconditional — every authored point has a `rule`.
+        'grammar.teach': {
+            available: true,
+            note: 'renderGrammarTeaching() draws the rule, the decide steps and the notice dialogue for one point.'
+        },
+
+        // Contrast pairs are drawn by the same function, from `lesson.contrast`.
+        // A predicate rather than `true`, because an authored point with no
+        // contrast block would render the heading and nothing under it. Today
+        // both foundation points carry three pairs each, so this resolves true —
+        // it is here so that it stops resolving true if that changes.
+        'grammar.contrast': function (ctx) {
+            const lessons = grammarLessonsFor(resolveDifficulty(ctx && ctx.level, 'grammar'));
+            const withContrast = lessons.filter(l => l && Array.isArray(l.contrast) && l.contrast.length);
+            return withContrast.length
+                ? { available: true, note: 'renderGrammarTeaching() draws lesson.contrast as "Same sentence, different meaning".' }
+                : { available: false, note: 'No grammar point at this tier has contrast pairs authored, so the contrast block would render an empty heading.' };
+        },
+
+        // renderGrammarProduce(): a say-it-aloud task with a self-check list.
+        // "I said it" and "Skip for now" both complete it and neither needs a
+        // microphone (FR-SPK-9 / FR-A11Y-4). This is the only unconditional
+        // spoken-production surface in the build, which is why the speak step
+        // resolves to it — but only for a tier that has a point with a `produce`
+        // block, because the function itself says "No speaking task is written
+        // for this point yet" when there is none.
+        'grammar.produce': function (ctx) {
+            const lessons = grammarLessonsFor(resolveDifficulty(ctx && ctx.level, 'grammar'));
+            const withProduce = lessons.filter(l => l && l.produce);
+            return withProduce.length
+                ? {
+                    available: true,
+                    note: 'renderGrammarProduce() draws a "say it aloud" task with a self-check; both buttons complete it and neither needs a microphone (FR-SPK-9 / FR-A11Y-4).'
+                }
+                : {
+                    available: false,
+                    note: 'No grammar point at this tier has a speaking task authored, so renderGrammarProduce() would only say so.'
+                };
+        },
+
+        // renderPronunciationDrill(). Not gated on speech synthesis: a device
+        // that cannot speak starts in the written exercise instead (AS-3), which
+        // is gradable and honest about what it does not measure — so the surface
+        // exists either way.
+        'pron.discriminate': {
+            available: true,
+            note: 'renderPronunciationDrill() draws the minimal-pair drill, falling back to the written exercise on a device with no speech synthesis (AS-3).'
+        },
+
+        // FR-PRN-6, and the predicate the module asked app.js for: production is
+        // gated PER PAIR at the accuracy the content declares, and pronGate() is
+        // the only thing that can evaluate it because it reads per-pair attempt
+        // history. Available when at least one pair is open, because one open
+        // pair is one renderable step; the route below then picks that pair.
+        // A learner who has never done the drill has no pair open, so this is
+        // false for a first session and the speak step falls back to
+        // grammar.produce — which is the honest ordering, not a degradation.
+        'pron.produce': function () {
+            const open = pronunciationPairs().filter(pair => pronGate(pair).open);
+            if (open.length) {
+                return {
+                    available: true,
+                    requirement: 'FR-PRN-6',
+                    note: open.length + ' sound pair(s) have passed the FR-PRN-6 discrimination gate, so renderPronunciationProduce() draws the self-comparison task rather than the locked card.'
+                };
+            }
+            return {
+                available: false,
+                requirement: 'FR-PRN-6',
+                note: 'No sound pair has passed its FR-PRN-6 discrimination gate yet, so renderPronunciationProduce() would draw the locked card. Hearing the contrast comes first.'
+            };
+        },
+
+        // loadListeningExercise() puts the sentence on screen and hands it to
+        // #playListening, which speaks it through speechAPI. A predicate on
+        // feature detection, not `true`: this section has no written fallback, so
+        // on a device with no speech synthesis the step would be "listen to the
+        // model" with nothing to listen to.
+        'listen.model': function () {
+            return pronAudioUsable()
+                ? { available: true, note: 'loadListeningExercise() shows the sentence and #playListening speaks it through the Web Speech API.' }
+                : { available: false, note: 'This device has no speech synthesis, so there is no model sentence to hear and the listening section has no written fallback.' };
+        },
+
+        // The three the module named as unbuilt, confirmed from the render side.
+        // Declared rather than left to the defaults so that this map is the
+        // complete answer to "what can app.js draw", and so a future commit that
+        // builds one of them has an obvious line to change.
+        'listen.comprehend': {
+            available: false,
+            requirement: 'FR-LSN-1',
+            note: 'No function in app.js renders a listening comprehension question; the listening section is listen-and-repeat plus read-aloud only.'
+        },
+        'speak.shadow': {
+            available: false,
+            requirement: 'FR-SPK-8',
+            note: 'No function in app.js renders a shadowing mode.'
+        },
+        'speak.free': {
+            available: false,
+            requirement: 'FR-SPK-3',
+            note: 'No function in app.js renders a free-production prompt with a timer, a recording and a rubric.'
+        },
+
+        // updateDashboard() / updateStatisticsDisplay() already draw the streak
+        // and the lifetime totals, and the wrap-up card below reads them. The
+        // fluency trend (FR-SPK-5) does not exist, which wrapUp().needsFromApp
+        // names and the card reports rather than fakes.
+        'session.summary': {
+            available: true,
+            note: 'The dashboard has the streak and the lifetime totals; the wrap-up card reads them. The fluency trend (FR-SPK-5) does not exist and is reported as missing rather than invented.'
+        }
+    });
+}
+
+/** Session storage keys are normalised the same way srs.js normalises them. */
+function sessionRef(value) {
+    if (typeof Migrations !== 'undefined' && Migrations && typeof Migrations.srsRef === 'function') {
+        return Migrations.srsRef(value);
+    }
+    return String(value == null ? '' : value).trim().toLowerCase().replace(/\s+/g, '-');
+}
+
+/** A `<p>`/`<li>`-style element with plain text. Local, so nothing here depends
+ *  on the grammar section's markup helpers. */
+function sessionEl(tag, text, className) {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text !== undefined && text !== null) el.textContent = String(text);
+    return el;
+}
+
+/** Lowercase a leading capital so a reason can be spliced after "because".
+ *  Left alone when the first word is an identifier or a requirement code —
+ *  "FR-PRN-6" and "app.js" must not be mangled to make a sentence read nicely. */
+function sessionBecause(reason) {
+    const text = String(reason == null ? '' : reason).trim();
+    if (!/^[A-Z][a-z]/.test(text)) return text;
+    return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
+/**
+ * Move focus, without assuming a DOM that implements focus().
+ *
+ * Focus and scrolling are separated deliberately. The session bar is sticky, so
+ * it is already on screen and focusing it must NOT scroll — otherwise every step
+ * entry would yank the page back to the top and undo sessionReveal() below, which
+ * is the call that actually puts the task in front of the learner.
+ */
+function sessionFocus(el) {
+    if (el && typeof el.focus === 'function') el.focus();
+}
+
+/** Bring a section's own content into view. Not focus: these are plain
+ *  containers, and a real browser ignores focus() on a non-focusable element. */
+function sessionReveal(el) {
+    if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'start' });
+}
+
+/**
+ * Sections whose authored items the learner has already finished today, at the
+ * tier the plan is built for.
+ *
+ * Session.build() uses this to LABEL a step as a second pass, never to drop it —
+ * so an over-count here costs a wrong note and never a missing step. Exercise
+ * ids are `type_level_index` (getExerciseId), so counting the ones for this tier
+ * against the section's own content probe is the same arithmetic the completion
+ * indicator does.
+ */
+function sessionExhaustedSections(level) {
+    return Sections.exercises().filter(section => {
+        if (!Sections.knowsContent(section.id)) return false;
+        const total = Sections.contentCount(section.id, exerciseLevel(section.id, level));
+        if (total <= 0) return false;
+        const done = state.completedExercises[section.id];
+        if (!done || typeof done.forEach !== 'function') return false;
+        const prefix = section.id + '_' + exerciseLevel(section.id, level) + '_';
+        let n = 0;
+        done.forEach(id => { if (String(id).indexOf(prefix) === 0) n++; });
+        return n >= total;
+    }).map(section => section.id);
+}
+
+/**
+ * The review queue for the review step: the plan's own items, in the plan's
+ * order, capped by the plan's count.
+ *
+ * Reading step.items rather than just trimming is what makes a RESUMED session
+ * show the same cards it showed before the phone rang. Items that are no longer
+ * in the live queue (already reviewed) simply drop out; if none survive, the
+ * live queue is used, because the honest fallback is "here is what is due now",
+ * not an empty screen.
+ */
+function sessionReviewQueue(step, queue) {
+    const cap = (typeof step.count === 'number' && step.count > 0) ? step.count : queue.length;
+    const items = Array.isArray(step.items) ? step.items : [];
+    if (!items.length) return queue.slice(0, cap);
+
+    // Object.create(null): the keys here are normalised WORDS, and a learner
+    // reviewing "constructor" or "toString" must not match an inherited property.
+    const byRef = Object.create(null);
+    queue.forEach(word => { byRef[sessionRef(word && word.word)] = word; });
+    const ordered = [];
+    items.forEach(item => {
+        const word = byRef[sessionRef(item && item.ref)];
+        if (word && ordered.indexOf(word) === -1) ordered.push(word);
+    });
+    return (ordered.length ? ordered : queue).slice(0, cap);
+}
+
+/**
+ * Open the grammar section on the point this step is about.
+ *
+ * `which` is 'produce' for the speaking step, which needs a point that HAS a
+ * speaking task — otherwise the step would land on renderGrammarProduce()'s "no
+ * speaking task is written for this point yet", i.e. a production step with
+ * nothing to produce. Without a target and outside the speaking step the
+ * learner's own position is left alone: moving it would silently lose their place.
+ */
+function sessionOpenGrammar(step, which) {
+    const level = resolveDifficulty(state.currentDifficulty, 'grammar');
+    const lessons = grammarLessonsFor(level);
+    if (!lessons.length) return 'The grammar content is not loaded on this device.';
+
+    let index = -1;
+    // step.target.ref is the mistake log's drill target, which is a data/grammar.js
+    // lesson id ('articles', 'countable-uncountable'). A target that names a point
+    // this tier does not have is ignored rather than forced.
+    const ref = step.target && step.target.ref;
+    if (ref) {
+        lessons.forEach((lesson, i) => { if (index === -1 && lesson && lesson.id === ref) index = i; });
+    }
+    if (which === 'produce' && (index === -1 || !lessons[index] || !lessons[index].produce)) {
+        index = -1;
+        lessons.forEach((lesson, i) => { if (index === -1 && lesson && lesson.produce) index = i; });
+    }
+    if (index !== -1) state.currentGrammarIndex = index;
+
+    switchSection('grammar');
+    const shown = lessons[Math.min(Math.max(0, state.currentGrammarIndex || 0), lessons.length - 1)];
+    if (which === 'produce') {
+        sessionReveal(document.getElementById('grammarProduce'));
+        return shown ? 'The speaking task on "' + shown.title + '".' : null;
+    }
+    return shown ? 'The point on screen is "' + shown.title + '".' : null;
+}
+
+/**
+ * Open the pronunciation section on the pair this step is about, and honour the
+ * count box by shortening the round rather than by asking the learner to stop
+ * early.
+ */
+function sessionOpenPronunciation(step, which) {
+    const pairs = pronunciationPairs();
+    if (!pairs.length) return 'The pronunciation content is not loaded on this device.';
+
+    let index = -1;
+    const ref = step.target && step.target.ref;
+    if (ref) {
+        pairs.forEach((pair, i) => {
+            if (index === -1 && pair && (pair.id === ref || pair.code === ref)) index = i;
+        });
+    }
+    if (which === 'produce') {
+        // The gate is per pair, so the step has to land on a pair that is open —
+        // any other choice would show the locked card on a step the planner
+        // promised as production.
+        let open = -1;
+        pairs.forEach((pair, i) => { if (open === -1 && pronGate(pair).open) open = i; });
+        if (open !== -1) index = open;
+    }
+    if (index !== -1) state.currentPronunciationIndex = index;
+
+    switchSection('pronunciation');
+    const pair = pairs[Math.min(Math.max(0, state.currentPronunciationIndex || 0), pairs.length - 1)];
+
+    if (which === 'produce') {
+        sessionReveal(document.getElementById('pronunciationProduce'));
+        return pair ? 'The speaking task on ' + (pair.label || pair.id) + '.' : null;
+    }
+
+    // Count box: the drill walks pronunciationSession.items one screen at a time
+    // and ends on "Finish this pair", so trimming the list is exactly a shorter
+    // round. Re-rendered because the loader has already drawn the full one.
+    if (pronunciationSession && typeof step.count === 'number' && step.count > 0 &&
+        pronunciationSession.items.length > step.count) {
+        pronunciationSession.items = pronunciationSession.items.slice(0, step.count);
+        renderPronunciationDrill(pair);
+    }
+    return pair ? 'The pair on screen is ' + (pair.label || pair.id) + '.' : null;
+}
+
+/**
+ * surface -> how to open it. Keyed by SURFACE and not by step id, deliberately:
+ * the speak step resolves to whichever production surface was available at build
+ * time, so the router has to follow the plan's answer rather than restate it.
+ *
+ * Each handler returns a short line about what it put on screen, or null.
+ */
+const SESSION_ROUTES = {
+    'srs.review': function (step) {
+        switchSection('vocabulary');
+        startReview();
+        if (!state.reviewMode) {
+            // Between building the plan and opening the step the queue emptied
+            // (another tab, a review done first). Say so; the step still completes.
+            return 'Nothing is due any more, so there is nothing to review. Press Done and carry on.';
+        }
+        state.reviewQueue = sessionReviewQueue(step, state.reviewQueue);
+        loadReviewWord();
+        return state.reviewQueue.length + ' card(s) from your review queue, oldest first.';
+    },
+    'grammar.teach': function (step) { return sessionOpenGrammar(step, 'teach'); },
+    'grammar.contrast': function (step) { return sessionOpenGrammar(step, 'teach'); },
+    'grammar.produce': function (step) { return sessionOpenGrammar(step, 'produce'); },
+    'pron.discriminate': function (step) { return sessionOpenPronunciation(step, 'discriminate'); },
+    'pron.produce': function (step) { return sessionOpenPronunciation(step, 'produce'); },
+    'listen.model': function (step) {
+        switchSection('listening');
+        // No count is applied to the section here, and that is a limit rather
+        // than an omission: the listening section is walked one sentence at a
+        // time with Previous/Next and has no multi-item runner to shorten. The
+        // count is therefore reported as the advisory size it is, which is what
+        // a count box means in session.js anyway.
+        return (typeof step.count === 'number' && step.count > 0)
+            ? 'About ' + step.count + ' sentence(s): play each one, then say it back. Use Next → to move through them.'
+            : 'Play the sentence, then say it back.';
+    },
+    'session.summary': function () {
+        switchSection('dashboard');
+        SessionUI.renderWrapUp();
+        return 'Your session summary is on the Dashboard below.';
+    }
+};
+
+/**
+ * The session UI.
+ *
+ * Holds no plan state of its own — every render reads Session.plan() /
+ * Session.progress() — so a reload, a resumed session and a fresh build all go
+ * through exactly the same code, and there is no second copy of "where am I" to
+ * disagree with the module's.
+ */
+const SessionUI = {
+    /** Wire the Dashboard controls and paint whatever state we are already in. */
+    init() {
+        if (typeof Session === 'undefined' || !Session) return;
+
+        const start = document.getElementById('startSession');
+        if (start) start.addEventListener('click', () => SessionUI.start(false));
+        const restart = document.getElementById('restartSession');
+        if (restart) restart.addEventListener('click', () => SessionUI.start(true));
+
+        // An unfinished plan from earlier today. Rendered WITHOUT calling build():
+        // BR-1 buys its predictability from the learner pressing one button, and
+        // building a plan nobody asked for would also move the review queue.
+        const plan = Session.plan();
+        if (plan) {
+            const progress = Session.progress();
+            SessionUI.renderPlan(plan, progress);
+            SessionUI.renderShortfall(plan);
+            SessionUI.renderOmitted(plan);
+            if (progress && progress.complete) {
+                SessionUI.renderWrapUp();
+                if (start) start.textContent = '▶️ Today\'s session is finished';
+                if (start) start.disabled = true;
+                if (restart) restart.hidden = false;
+            } else if (progress) {
+                SessionUI.renderResume(plan, progress);
+                if (start) {
+                    start.textContent = '▶️ Continue today\'s session (step ' +
+                        (progress.index + 1) + ' of ' + progress.total + ')';
+                }
+                if (restart) restart.hidden = false;
+            }
+        }
+    },
+
+    /**
+     * Build (or resume) today's plan and walk into the current step.
+     *
+     * The learner chooses nothing here except "start" and, for P2, "I cannot
+     * speak aloud right now" — which changes the speaking step's default route
+     * and its wording, and never removes it (session.js decision 2).
+     */
+    start(fresh) {
+        if (typeof Session === 'undefined' || !Session) return;
+
+        const silentEl = document.getElementById('sessionSilent');
+        const level = resolveDifficulty(state.currentDifficulty);
+        const plan = Session.build({
+            level: level,
+            silent: !!(silentEl && silentEl.checked),
+            exhausted: sessionExhaustedSections(level),
+            fresh: !!fresh
+        });
+        if (!plan) return;
+
+        const progress = Session.progress();
+        SessionUI.renderPlan(plan, progress);
+        SessionUI.renderShortfall(plan);
+        SessionUI.renderOmitted(plan);
+        // Requirement 6: the banner is driven by build()'s own answer, not by a
+        // guess from the index.
+        if (plan.resumed) SessionUI.renderResume(plan, progress);
+        else SessionUI.clear('sessionResume');
+
+        const restart = document.getElementById('restartSession');
+        if (restart) restart.hidden = false;
+        const wrapUp = document.getElementById('sessionWrapUp');
+        if (wrapUp && !(progress && progress.complete)) wrapUp.textContent = '';
+
+        if (plan.empty) {
+            // Nothing could be planned at all. plan.shortfall says why, and it is
+            // already on screen; do not open a session with no steps in it.
+            Toast.info('There is no session to run today — the card on the Dashboard says why.');
+            return;
+        }
+        SessionUI.enter(Session.current());
+    },
+
+    /** Open one step: chrome, then route into the section that renders it. */
+    enter(step) {
+        if (!step) { SessionUI.finish(); return; }
+
+        // Review mode is a mode on the vocabulary section, not a step, so it has
+        // to be left behind when the session moves on — otherwise the learner
+        // arrives back at Vocabulary later with the nav buttons hidden.
+        if (state.reviewMode && step.id !== 'review') exitReview();
+
+        const bar = document.getElementById('sessionBar');
+        if (bar) bar.hidden = false;
+
+        const progress = Session.progress();
+        const strands = (step.strands || []).map(Session.strandLabel).join(' + ');
+
+        const meta = document.getElementById('sessionStep');
+        if (meta) {
+            meta.textContent = [
+                'Step ' + (progress.index + 1) + ' of ' + progress.total,
+                strands || null,
+                // Advisory, and said so. Nothing counts down and nothing expires.
+                'about ' + progress.remainingMinutes + ' min of work left'
+            ].filter(Boolean).join(' · ');
+        }
+
+        const instruction = document.getElementById('sessionInstruction');
+        if (instruction) {
+            instruction.textContent = step.title +
+                (typeof step.count === 'number' && step.count > 0 ? ' — ' + step.count + ' item(s)' : '');
+        }
+
+        // Route by surface. The first part with a handler wins: the grammar step's
+        // teach and contrast parts are two halves of one screen, so opening it
+        // once is opening both.
+        let routed = null;
+        (step.parts || []).forEach(part => {
+            if (routed !== null) return;
+            const route = SESSION_ROUTES[part.surface];
+            if (route) routed = route(step) || '';
+        });
+
+        SessionUI.renderStepNote(step, routed, progress);
+        SessionUI.renderControls(step);
+        // Focus the bar rather than its first button: a learner tabbing from here
+        // reaches the controls, and Enter cannot complete a step they have not
+        // started yet. Focus only — the bar is sticky, and scrolling to it would
+        // undo the sessionReveal() the route above just did.
+        sessionFocus(bar);
+    },
+
+    /** Everything true about this step that is not the instruction itself. */
+    renderStepNote(step, routed, progress) {
+        const host = document.getElementById('sessionStepNote');
+        if (!host) return;
+        host.textContent = '';
+
+        if (routed) host.appendChild(sessionEl('p', routed, 'session-routed'));
+
+        // Why this step is here at all. §4's reasoning, in the module's words.
+        if (step.rationale) host.appendChild(sessionEl('p', step.rationale, 'session-rationale'));
+
+        if (step.target) {
+            host.appendChild(sessionEl('p',
+                'Aimed at your most frequent recent error: ' + step.target.label + '.',
+                'session-target'));
+        }
+
+        // Parts of THIS step that dropped out, and the second-pass label. Both
+        // come from the planner as prose; printing them is the point.
+        (step.reduced || []).forEach(reason => {
+            host.appendChild(sessionEl('p', 'Not included in this step: ' + reason, 'session-reduced'));
+        });
+
+        // Due items the review screen cannot draw. Named here because "nothing to
+        // review" would otherwise be false for a learner with due grammar points.
+        (step.heldBack || []).forEach(held => {
+            host.appendChild(sessionEl('p', held.reason, 'session-heldback'));
+        });
+
+        if (step.speaking) {
+            host.appendChild(sessionEl('p',
+                'Nothing is recorded and no microphone is used. Saying it silently counts — composing the sentence is the part that transfers.',
+                'session-speaking-note'));
+        }
+
+        if (progress && progress.total && !step.isTask) {
+            host.appendChild(sessionEl('p',
+                'This last step is the app reporting back, not another task.',
+                'session-rationale'));
+        }
+    },
+
+    /**
+     * The per-step controls.
+     *
+     * Two shapes only. A speaking step offers the three-way choice — "I said it"
+     * / "I did it silently" / "Skip" — and all three complete the step, because
+     * FR-A11Y-4's floor is that a learner gets from start to finish without
+     * speaking or granting mic access, and BR-2 is about production rather than
+     * about audibility. Neither speaking route is styled as the lesser one.
+     * Everything else is Done / Skip.
+     */
+    renderControls(step) {
+        const host = document.getElementById('sessionControls');
+        if (!host) return;
+        host.textContent = '';
+
+        const button = (label, className, onClick, ariaLabel) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = className;
+            btn.textContent = label;
+            if (ariaLabel) btn.setAttribute('aria-label', ariaLabel);
+            btn.addEventListener('click', onClick);
+            host.appendChild(btn);
+            return btn;
+        };
+
+        if (step.speaking) {
+            // In silent mode the module's own default for this step is 'silent',
+            // so the silent route leads. Same class either way and the same
+            // one-press cost: one of these is not a downgrade of the other, and
+            // ordering is the only thing that changes.
+            const aloud = ['🗣️ I said it', 'btn-primary', () => SessionUI.advance('aloud'),
+                'I said it aloud'];
+            const silent = ['🤫 I did it silently', 'btn-primary', () => SessionUI.advance('silent'),
+                'I did it silently, without speaking aloud'];
+            const order = step.defaultOutcome === 'silent' ? [silent, aloud] : [aloud, silent];
+            order.forEach(args => button(args[0], args[1], args[2], args[3]));
+            button('↷ Skip this', 'btn-secondary',
+                () => SessionUI.advance('skipped'), 'Skip this step');
+        } else if (step.isTask) {
+            button('✓ Done', 'btn-primary', () => SessionUI.advance('done'), 'Mark this step done');
+            button('↷ Skip this', 'btn-secondary', () => SessionUI.advance('skipped'), 'Skip this step');
+        } else {
+            button('✓ Finish', 'btn-primary', () => SessionUI.advance('done'), 'Finish today\'s session');
+        }
+
+        // Never a trap: leaving keeps the position, which is what resume is for.
+        button('⏸ Pause for now', 'btn-secondary', () => SessionUI.pause(),
+            'Pause today\'s session and come back to this step later');
+    },
+
+    /** Record an outcome through the module's own routes and open what is next. */
+    advance(outcome) {
+        if (typeof Session === 'undefined' || !Session) return;
+        const next = outcome === 'silent' ? Session.markSilent()
+            : outcome === 'skipped' ? Session.skip()
+                : Session.advance(outcome);
+        SessionUI.enter(next);
+    },
+
+    /** Hide the chrome, keep the plan. */
+    pause() {
+        if (state.reviewMode) exitReview();
+        const bar = document.getElementById('sessionBar');
+        if (bar) bar.hidden = true;
+        const plan = Session.plan();
+        const progress = Session.progress();
+        if (plan && progress) {
+            SessionUI.renderPlan(plan, progress);
+            SessionUI.renderResume(plan, progress);
+            const start = document.getElementById('startSession');
+            if (start) {
+                start.textContent = '▶️ Continue today\'s session (step ' +
+                    (progress.index + 1) + ' of ' + progress.total + ')';
+            }
+        }
+        switchSection('dashboard');
+        sessionFocus(document.getElementById('startSession'));
+    },
+
+    /** The session ran out of steps: close the chrome and show the wrap-up. */
+    finish() {
+        if (state.reviewMode) exitReview();
+        const bar = document.getElementById('sessionBar');
+        if (bar) bar.hidden = true;
+        switchSection('dashboard');
+
+        const plan = Session.plan();
+        const progress = Session.progress();
+        if (plan && progress) SessionUI.renderPlan(plan, progress);
+        SessionUI.clear('sessionResume');
+        SessionUI.renderWrapUp();
+
+        const start = document.getElementById('startSession');
+        if (start) {
+            start.textContent = '▶️ Today\'s session is finished';
+            start.disabled = true;
+        }
+        const restart = document.getElementById('restartSession');
+        if (restart) restart.hidden = false;
+        sessionReveal(document.getElementById('sessionWrapUp'));
+    },
+
+    clear(id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = '';
+        if (id === 'sessionResume') el.hidden = true;
+    },
+
+    /** FR-SES-1's own verdict, the shape of the plan, and where the learner is. */
+    renderPlan(plan, progress) {
+        const host = document.getElementById('sessionPlan');
+        if (!host) return;
+        host.textContent = '';
+        if (!plan) return;
+
+        const heading = sessionEl('h4', 'Today\'s plan');
+        host.appendChild(heading);
+
+        // Size, not duration: "about" everywhere, because the minutes are
+        // advisory and the counts are what is actually promised.
+        host.appendChild(sessionEl('p',
+            plan.taskCount + ' thing(s) to do, about ' + plan.minutes + ' minutes, across ' +
+            (plan.strandLabels.join(', ') || 'no strand') + '.',
+            'session-plan-summary'));
+
+        const list = document.createElement('ol');
+        list.className = 'session-steps';
+        plan.steps.forEach((step, i) => {
+            const li = document.createElement('li');
+            li.className = 'session-step-' + (step.status || 'pending');
+            const mark = step.status === 'done' ? '✓ ' : step.status === 'skipped' ? '↷ ' : '';
+            const here = progress && !progress.complete && progress.index === i ? ' — you are here' : '';
+            const count = (typeof step.count === 'number' && step.count > 0) ? ' (' + step.count + ')' : '';
+            li.textContent = mark + step.title + count +
+                ' · about ' + step.minutes + ' min' + here;
+            list.appendChild(li);
+        });
+        host.appendChild(list);
+
+        if (plan.production && plan.production.planned) {
+            host.appendChild(sessionEl('p',
+                'It ends with you saying something of your own. You can do that aloud or silently — neither needs a microphone.',
+                'session-plan-production'));
+        }
+
+        (plan.notes || []).forEach(note => {
+            host.appendChild(sessionEl('p', note, 'session-plan-note'));
+        });
+    },
+
+    /**
+     * plan.shortfall.
+     *
+     * Rendered whenever it is non-empty, not only when meetsFrSes1 is false: a
+     * plan that is four minutes short of its budget is still not the session the
+     * learner was promised, and presenting a short plan as a full one is the
+     * overstatement BR-3 forbids. The heading is what changes.
+     */
+    renderShortfall(plan) {
+        const host = document.getElementById('sessionShortfall');
+        if (!host) return;
+        host.textContent = '';
+        if (!plan || !plan.shortfall || !plan.shortfall.length) return;
+
+        host.appendChild(sessionEl('h4', plan.meetsFrSes1
+            ? 'This is a shorter session than 20 minutes'
+            : 'This is not the full session yet'));
+        host.appendChild(sessionEl('p', plan.meetsFrSes1
+            ? 'It still covers three strands and still ends with you speaking. What it does not do:'
+            : 'What today\'s session cannot give you, in the app\'s own words:',
+        'session-shortfall-intro'));
+
+        const list = document.createElement('ul');
+        list.className = 'session-shortfall-list';
+        plan.shortfall.forEach(line => list.appendChild(sessionEl('li', line)));
+        host.appendChild(list);
+    },
+
+    /**
+     * plan.omitted.
+     *
+     * The module reports what it could not include and why, and hiding that
+     * would undo the honesty it was built for: a learner who is never told the
+     * listening comprehension question does not exist reads its absence as their
+     * own progress. So every entry is printed, with its reason, and with the
+     * requirement code where the planner has one.
+     */
+    renderOmitted(plan) {
+        const host = document.getElementById('sessionOmitted');
+        if (!host) return;
+        host.textContent = '';
+        if (!plan || !plan.omitted || !plan.omitted.length) return;
+
+        host.appendChild(sessionEl('h4', 'Not in today\'s session'));
+        host.appendChild(sessionEl('p',
+            'The 20-minute shape this app is built against has parts it cannot give you yet. They are listed rather than left out quietly, so that an empty space is never mistaken for finished work.',
+            'session-omitted-intro'));
+
+        const list = document.createElement('ul');
+        list.className = 'session-omitted-list';
+        plan.omitted.forEach(entry => {
+            const li = document.createElement('li');
+            const what = document.createElement('strong');
+            what.textContent = entry.title;
+            li.appendChild(what);
+            li.appendChild(document.createTextNode(
+                ' — not in today\'s session because ' + sessionBecause(entry.reason)));
+            if (entry.requirement) {
+                li.appendChild(document.createTextNode(' (' + entry.requirement + ' is not built.)'));
+            }
+            list.appendChild(li);
+        });
+        host.appendChild(list);
+    },
+
+    /** Requirement 6: build() resumed today's plan rather than making a new one. */
+    renderResume(plan, progress) {
+        const host = document.getElementById('sessionResume');
+        if (!host) return;
+        host.textContent = '';
+        if (!plan || !progress || progress.complete) { host.hidden = true; return; }
+        host.hidden = false;
+        host.appendChild(sessionEl('p',
+            '↩ Picking up where you stopped: step ' + (progress.index + 1) + ' of ' +
+            progress.total + ', "' + plan.steps[Math.min(progress.index, plan.steps.length - 1)].title +
+            '". Nothing you finished earlier today needs doing again.',
+            'session-resume-line'));
+    },
+
+    /**
+     * The 1-minute close (FR-SES-5), merged with the two facts the module says it
+     * cannot supply.
+     *
+     * wrapUp().needsFromApp names three: `streak`, `fluencyTrend` and
+     * `tomorrowPreview`. The streak is in state.overallStats. Tomorrow's preview
+     * is assembled below from what is already true. The fluency trend does not
+     * exist anywhere in this build, so it is reported as missing — a wrap-up that
+     * invented a trend line would be the exact overstatement BR-3 forbids, and
+     * TEACHING_METHODOLOGY.md §5 rules out a streak that flatters.
+     *
+     * `wrapUp().elapsedMs` is deliberately NOT shown. It is wall clock between
+     * the first step and the last, and session.js's own decision 3 says wall
+     * clock is not time-on-task for a learner on a commute; printing it as
+     * "you practised for 43 minutes" would be a measurement the app does not have.
+     */
+    renderWrapUp() {
+        const host = document.getElementById('sessionWrapUp');
+        if (!host) return;
+        host.textContent = '';
+        if (typeof Session === 'undefined' || !Session) return;
+        const wrap = Session.wrapUp();
+        if (!wrap) return;
+
+        host.appendChild(sessionEl('h4', wrap.complete
+            ? '🎯 That is today\'s session'
+            : '🎯 Where you are'));
+
+        // What was done, step by step, including what was skipped. A wrap-up that
+        // only lists successes teaches nothing (§5 Tone).
+        const list = document.createElement('ul');
+        list.className = 'session-wrapup-steps';
+        wrap.steps.forEach(step => {
+            const mark = step.status === 'done' ? '✓ ' : step.status === 'skipped' ? '↷ ' : '· ';
+            const tail = step.outcome === 'silent' ? ' (silently)'
+                : step.outcome === 'aloud' ? ' (aloud)'
+                    : step.status === 'skipped' ? ' (skipped)'
+                        : step.status === 'pending' ? ' (not reached)' : '';
+            list.appendChild(sessionEl('li', mark + step.title + tail));
+        });
+        host.appendChild(list);
+
+        host.appendChild(sessionEl('p',
+            'Strands you worked in: ' + (wrap.strandsCovered.join(', ') || 'none yet') +
+            '. Planned: ' + (wrap.strandsPlanned.join(', ') || 'none') + '.',
+            'session-wrapup-strands'));
+
+        // BR-2 / metric M-1, reported as the route it was rather than as a claim
+        // about speech the app never heard.
+        const production = wrap.production;
+        if (production && production.planned) {
+            const line = production.route === 'aloud'
+                ? 'You said your own sentence out loud. That is the part that transfers to a real conversation — nothing recorded it, and nothing scored it.'
+                : production.route === 'silent'
+                    ? 'You composed your own sentence without voicing it. That counts as production: you built the language, which is the part that transfers.'
+                    : production.route === 'skipped'
+                        ? 'You skipped the speaking task, so this session produced no English of your own. That is recorded as it happened, and it costs you nothing — the task will be there tomorrow.'
+                        : 'The speaking task is still ahead of you.';
+            host.appendChild(sessionEl('p', line, 'session-wrapup-production'));
+        } else if (production) {
+            host.appendChild(sessionEl('p', production.note, 'session-wrapup-production'));
+        }
+
+        // --- the three things the module named as app.js's to supply ---
+
+        host.appendChild(sessionEl('p',
+            'Streak: ' + (state.overallStats.currentStreak || 0) + ' day(s), best ' +
+            (state.overallStats.bestStreak || 0) + '. It counts days you completed an exercise, not days you opened the app.',
+            'session-wrapup-streak'));
+
+        host.appendChild(sessionEl('p',
+            'Fluency trend: not measured. Nothing in this version times or scores your speaking (FR-SPK-5), so there is no trend to show — and a made-up one would tell you nothing.',
+            'session-wrapup-trend'));
+
+        host.appendChild(sessionEl('p', 'Tomorrow: ' + SessionUI.tomorrowPreview(),
+            'session-wrapup-tomorrow'));
+
+        if (wrap.previousSession) {
+            host.appendChild(sessionEl('p',
+                'Your previous session (' + wrap.previousSession.date + '): ' +
+                wrap.previousSession.done + ' of ' + wrap.previousSession.steps +
+                ' steps done, ' + wrap.previousSession.skipped + ' skipped.',
+                'session-wrapup-previous'));
+        }
+
+        if ((wrap.omitted || []).length || (wrap.shortfall || []).length) {
+            host.appendChild(sessionEl('p',
+                'What today\'s session could not include is listed above, with the reason for each.',
+                'session-wrapup-pointer'));
+        }
+    },
+
+    /**
+     * FR-SES-5's "tomorrow's preview", built only from facts already on this
+     * device. No forecast: srs.js can say what is due NOW and what is waiting
+     * behind today's cap, and an item behind the cap is already overdue, so
+     * "at least" is the strongest claim available.
+     */
+    tomorrowPreview() {
+        const parts = [];
+        if (window.SRS && typeof SRS.deferredCount === 'function') {
+            const waiting = SRS.deferredCount('vocab') || 0;
+            if (waiting > 0) {
+                parts.push('at least ' + waiting + ' review card(s) already waiting behind today\'s cap');
+            }
+        }
+        const level = resolveDifficulty(state.currentDifficulty, 'grammar');
+        const lessons = grammarLessonsFor(level);
+        const next = lessons[(state.currentGrammarIndex || 0) + 1];
+        if (next) parts.push('the next grammar point, "' + next.title + '"');
+        else if (lessons.length) parts.push('the grammar points you have already met, coming back for review');
+        if (!parts.length) return 'the same shape again — review first, then a grammar point, then speaking.';
+        return parts.join(', ') + '.';
+    }
+};
+
+
+
+// ============================================
 // KEYBOARD NAVIGATION SYSTEM
 // ============================================
 
@@ -6396,6 +7324,11 @@ document.addEventListener('DOMContentLoaded', () => {
         Portability.initUI();
     }
     updateDashboard();
+
+    // "Start today's session" (US-170 / FR-SES-1). After updateDashboard(),
+    // because the wrap-up card reads the streak that call has just painted, and
+    // after Portability.initUI() so the Dashboard's own controls are wired first.
+    SessionUI.init();
 
     // Initialize robustness improvements
     KeyboardNavigation.init();

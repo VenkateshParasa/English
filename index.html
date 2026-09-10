@@ -68,10 +68,70 @@
             <button class="nav-btn" data-section="pronunciation" aria-label="Go to Pronunciation section" aria-controls="pronunciation">🗣️ Pronunciation</button>
         </nav>
 
+        <!-- Session chrome (US-170 / FR-SES-1, FR-A11Y-1).
+             OUTSIDE <main> and outside every .section on purpose: switchSection()
+             toggles `.active` on `.section` elements, and a step routes the learner
+             INTO a section, so chrome that lived inside one would vanish the moment
+             the session moved. This bar follows the learner everywhere.
+
+             It carries step N of M, the strand, and the advisory minutes left. It
+             deliberately does NOT carry a countdown: js/core/session.js is
+             count-boxed, nothing expires, and a clock would be pacing the commute
+             rather than the practice.
+
+             tabindex="-1" so each step can move focus here without adding a stop to
+             the tab order; the controls after it are ordinary buttons, which is all
+             FR-A11Y-1 needs. Empty and hidden until a session starts. -->
+        <div class="session-bar" id="sessionBar" role="region" aria-labelledby="session-bar-title" tabindex="-1" hidden>
+            <h2 class="session-bar-title" id="session-bar-title">Today's session</h2>
+            <p class="session-bar-meta" id="sessionStep" role="status" aria-live="polite"></p>
+            <p class="session-bar-instruction" id="sessionInstruction"></p>
+            <div class="session-bar-note" id="sessionStepNote"></div>
+            <div class="button-group session-bar-controls" id="sessionControls" role="group" aria-label="This step"></div>
+        </div>
+
         <!-- Dashboard Section -->
         <main id="main-content">
             <section id="dashboard" class="section active" role="region" aria-labelledby="dashboard-title">
             <h2 id="dashboard-title">Welcome to Your Learning Journey!</h2>
+
+            <!-- Today's session (US-170 / FR-SES-1, FR-SES-5, BR-1).
+                 First thing on the Dashboard, deliberately: BR-1 is that a learner
+                 completes a useful session WITHOUT choosing what to practise, and
+                 the eight-button nav above is the choice this card exists to make
+                 unnecessary.
+
+                 A shell only. js/core/session.js plans the session and the
+                 "TODAY'S SESSION" block in app.js renders into these hosts:
+                   #sessionResume     the resume banner, when build() resumes
+                   #sessionPlan       the plan: steps, strands, advisory minutes
+                   #sessionShortfall  plan.shortfall — where this plan is not the
+                                      full FR-SES-1 session
+                   #sessionOmitted    plan.omitted — what could not be included,
+                                      and why. Shown, never hidden.
+                   #sessionWrapUp     the FR-SES-5 close
+                 Nothing here is hardcoded to a particular plan. -->
+            <div class="daily-goal session-panel" id="sessionPanel" role="region" aria-labelledby="session-panel-title">
+                <h3 id="session-panel-title">▶️ Today's session</h3>
+                <p>About 20 minutes, in order, with nothing to choose. It ends with you saying something of your own — aloud, or silently if you cannot be overheard.</p>
+                <div class="session-resume" id="sessionResume" role="status" aria-live="polite" hidden></div>
+                <p class="session-silent">
+                    <label>
+                        <input type="checkbox" id="sessionSilent">
+                        I cannot speak aloud right now
+                    </label>
+                    <span class="session-silent-note">The speaking task stays in the session either way — you can whisper it, or type it in your head. Nothing here needs a microphone.</span>
+                </p>
+                <div class="button-group" role="group" aria-label="Today's session">
+                    <button class="btn-primary" id="startSession" aria-label="Start today's session">▶️ Start today's session</button>
+                    <button class="btn-secondary" id="restartSession" hidden aria-label="Discard today's plan and build a new one">↺ Start over</button>
+                </div>
+                <div class="session-plan" id="sessionPlan"></div>
+                <div class="session-shortfall" id="sessionShortfall"></div>
+                <div class="session-omitted" id="sessionOmitted"></div>
+                <div class="session-wrapup" id="sessionWrapUp"></div>
+            </div>
+
             <div class="stats-grid" role="list" aria-label="Learning statistics">
                 <div class="stat-card" role="listitem">
                     <h3>📚 Words Learned</h3>
@@ -84,6 +144,17 @@
                 <div class="stat-card" role="listitem">
                     <h3>📖 Reading Exercises</h3>
                     <p class="stat-number" id="readingCompleted" aria-live="polite" aria-atomic="true">0</p>
+                </div>
+                <!-- US-175. Listening was the one exercise-tracking section with no
+                     lifetime-total card, so its number was counted, summed into
+                     Total Exercises and never shown as a card. The registry row
+                     names this id (`totalCardId: 'listeningCompleted'`) and
+                     updateDashboard() iterates those rows, so this markup plus
+                     that id is the whole fix — no app.js line names this card.
+                     Placed after Reading to keep the cards in nav order. -->
+                <div class="stat-card" role="listitem">
+                    <h3>🎧 Listening Exercises</h3>
+                    <p class="stat-number" id="listeningCompleted" aria-live="polite" aria-atomic="true">0</p>
                 </div>
                 <div class="stat-card" role="listitem">
                     <h3>🧩 Puzzles Solved</h3>
@@ -509,7 +580,7 @@
     <script src="js/core/mistakes.js"></script>
     <!-- Session sequencer (US-801/FR-SES-1). Planning logic only, no DOM: it
          reads Sections, SRS and Mistakes, so it must load after all three.
-         Nothing calls it yet — the "Start today's session" UI is the next story. -->
+         Driven by the "Start today's session" UI in app.js (US-170). -->
     <script src="js/core/session.js"></script><!-- US-305 mistake log by error type (FR-SRS-3). No dependencies; own localStorage key `mistakeLog`. -->
     <!-- Depends on migrations.js (schemaVersion, backupOnce) and srs.js (reset). -->
     <script src="js/core/portability.js"></script>
@@ -529,6 +600,7 @@
          must come after data/grammar.js and before app.js. Authoring one point
          per file keeps a long authoring run from losing more than one point if it
          fails. -->
+    <script src="data/grammar/be.js"></script>
     <script src="data/grammar/countability.js"></script>
     <!-- Strand C pronunciation content. Declares `PRONUNCIATION_VOWELS_STRESS`
          (vowel minimal pairs, word stress, prosody noticing). The Pronunciation

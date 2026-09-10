@@ -2767,3 +2767,223 @@ header h1 {
         width: 100%;
     }
 }
+
+/* ============================================
+   TODAY'S SESSION  (US-170 / FR-SES-1, FR-SES-5)
+   ============================================ */
+
+/* The chrome that follows the learner into every section. Sticky rather than
+   fixed: a fixed bar on a small phone (P1, on a commute) covers the content the
+   step just asked the learner to read. */
+.session-bar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    margin: var(--space-4, 1rem) 0;
+    padding: var(--space-4, 1rem) var(--space-5, 1.25rem);
+    background: var(--background-card, #fff);
+    border: 2px solid var(--primary-400, #8b93f8);
+    border-radius: var(--radius-lg, 0.75rem);
+    box-shadow: var(--shadow-md);
+    line-height: 1.6;
+}
+
+/* `hidden` must win over any display the box model above implies. */
+.session-bar[hidden] {
+    display: none;
+}
+
+/* Focus lands here on every step (see SessionUI.enter), so the ring has to be
+   visible without looking like a control the learner should press. */
+.session-bar:focus {
+    outline: 3px solid var(--border-color-focus, #667eea);
+    outline-offset: 2px;
+}
+
+.session-bar-title {
+    margin: 0;
+    font-size: var(--text-base, 1rem);
+    font-weight: var(--font-weight-semibold, 600);
+    color: var(--text-accent);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+/* Step N of M · strand · about N min. Tabular-ish and calm: it is a position,
+   not a countdown, and it must not read like one. */
+.session-bar-meta {
+    margin: var(--space-1, 0.25rem) 0 0;
+    font-size: var(--text-sm, 0.875rem);
+    color: var(--text-secondary);
+}
+
+.session-bar-instruction {
+    margin: var(--space-2, 0.5rem) 0 0;
+    font-size: var(--text-lg, 1.125rem);
+    font-weight: var(--font-weight-semibold, 600);
+    color: var(--text-primary);
+}
+
+.session-bar-note p {
+    margin: var(--space-2, 0.5rem) 0 0;
+    font-size: var(--text-sm, 0.875rem);
+    color: var(--text-secondary);
+}
+
+.session-bar-note .session-routed {
+    font-size: var(--text-base, 1rem);
+    color: var(--text-primary);
+}
+
+/* Things the app is admitting rather than announcing. Dashed, never red: a
+   missing part is not the learner's mistake (TEACHING_METHODOLOGY.md §5). */
+.session-bar-note .session-reduced,
+.session-bar-note .session-heldback {
+    padding-left: var(--space-3, 0.75rem);
+    border-left: 3px dashed var(--gray-400, #9ca3af);
+}
+
+.session-bar-controls {
+    margin-top: var(--space-4, 1rem);
+}
+
+/* --- the Dashboard card --- */
+
+/* .session-panel also carries .daily-goal, so the card frame is inherited. */
+.session-panel {
+    margin-bottom: var(--space-6, 1.5rem);
+}
+
+.session-panel h4 {
+    margin: var(--space-5, 1.25rem) 0 var(--space-2, 0.5rem);
+    color: var(--text-accent);
+    font-size: var(--text-base, 1rem);
+}
+
+.session-silent {
+    margin: var(--space-3, 0.75rem) 0;
+    font-size: var(--text-sm, 0.875rem);
+}
+
+.session-silent label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2, 0.5rem);
+    font-weight: var(--font-weight-semibold, 600);
+    cursor: pointer;
+}
+
+.session-silent-note {
+    display: block;
+    color: var(--text-secondary);
+}
+
+.session-resume {
+    margin: var(--space-3, 0.75rem) 0;
+    padding: var(--space-3, 0.75rem) var(--space-4, 1rem);
+    background: var(--panel-neutral);
+    border-left: 4px solid var(--primary-500, #667eea);
+    border-radius: var(--radius-md, 0.5rem);
+}
+
+.session-resume[hidden] {
+    display: none;
+}
+
+.session-resume p {
+    margin: 0;
+}
+
+.session-steps {
+    margin: var(--space-2, 0.5rem) 0;
+    padding-left: var(--space-6, 1.5rem);
+    line-height: 1.8;
+}
+
+.session-step-done {
+    color: var(--text-secondary);
+}
+
+.session-step-skipped {
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.session-plan-summary {
+    font-weight: var(--font-weight-semibold, 600);
+}
+
+.session-plan-note,
+.session-omitted-intro,
+.session-shortfall-intro {
+    font-size: var(--text-sm, 0.875rem);
+    color: var(--text-secondary);
+}
+
+/* plan.omitted and plan.shortfall. Deliberately not warning-coloured: these are
+   statements about what the APP cannot do yet, and dressing them as alerts would
+   read to a nervous learner as something they had done wrong. */
+.session-omitted,
+.session-shortfall {
+    margin-top: var(--space-4, 1rem);
+    padding: var(--space-3, 0.75rem) var(--space-4, 1rem);
+    background: var(--panel-neutral);
+    border: 1px dashed var(--gray-400, #9ca3af);
+    border-radius: var(--radius-md, 0.5rem);
+}
+
+.session-omitted:empty,
+.session-shortfall:empty,
+.session-wrapup:empty,
+.session-plan:empty {
+    display: none;
+    padding: 0;
+    border: 0;
+}
+
+.session-omitted-list,
+.session-shortfall-list {
+    margin: var(--space-2, 0.5rem) 0 0;
+    padding-left: var(--space-6, 1.5rem);
+    line-height: 1.7;
+}
+
+.session-wrapup {
+    margin-top: var(--space-4, 1rem);
+    padding: var(--space-4, 1rem);
+    background: var(--panel-neutral);
+    border-left: 4px solid var(--success-500, #22c55e);
+    border-radius: var(--radius-md, 0.5rem);
+}
+
+.session-wrapup-steps {
+    margin: var(--space-2, 0.5rem) 0;
+    padding-left: var(--space-6, 1.5rem);
+    line-height: 1.8;
+    list-style: none;
+}
+
+.session-wrapup p {
+    margin: var(--space-2, 0.5rem) 0;
+}
+
+.session-wrapup-production {
+    font-size: var(--text-base, 1rem);
+    font-weight: var(--font-weight-semibold, 600);
+}
+
+.session-wrapup-trend,
+.session-wrapup-previous,
+.session-wrapup-pointer {
+    font-size: var(--text-sm, 0.875rem);
+    color: var(--text-secondary);
+}
+
+@media (max-width: 600px) {
+    /* Three speaking choices plus Pause do not fit side by side on a phone, and
+       a wrapped row of half-width buttons is how a learner mis-taps "Skip". */
+    .session-bar-controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}

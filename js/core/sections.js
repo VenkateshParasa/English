@@ -110,8 +110,9 @@
  *                   because a learner counts words, not "vocabularies".
  *   totalCardId     id of the big #dashboard .stat-number for this section's
  *                   lifetime total, or null when the dashboard has no card for
- *                   it (listening, today — a real gap, not a design decision;
- *                   adding the markup plus an id here is the whole fix)
+ *                   it. Every exercise-tracking section has one since US-175
+ *                   closed Listening's gap; `dashboard` has none because it is
+ *                   not a learning section.
  *   countsInTotalExercises
  *                   whether this section's total feeds the "Total Exercises"
  *                   row. False for vocabulary, which is reported on its own
@@ -230,15 +231,15 @@
             totalStatKey: 'totalListening',
             avgKey: 'listening',
             statLabel: 'Listening',
-            // Deliberately null, and deliberately NOT quietly fixed here: the
-            // dashboard has never had a Listening card, and inventing one would
-            // change what every existing learner sees on the very commit that
-            // was supposed to change nothing. The number is not hidden — it has
-            // its own "Today's Progress" and "Daily Averages" rows and it is
-            // inside the "Total Exercises" sum. Adding a .stat-card to
-            // index.html and an id here is now the WHOLE fix; updateDashboard()
-            // iterates these rows, so no app.js line names the card. US-163.
-            totalCardId: null,
+            // US-175. Was `null` — the one exercise-tracking section with no
+            // lifetime-total card, so its number counted, fed the "Total
+            // Exercises" sum, appeared in "Today's Progress" and "Daily
+            // Averages", and was the only one a learner could not see as a card.
+            // US-163 made the dashboard iterate these rows, so the whole fix was
+            // this id plus a .stat-card in index.html: no line of app.js names
+            // this card, and __tests__/unit/sections.test.js now asserts the
+            // markup exists because the field is non-null.
+            totalCardId: 'listeningCompleted',
             countsInTotalExercises: true,
             contentGlobal: 'listeningExercises',
             srsType: null,
