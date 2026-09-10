@@ -261,26 +261,68 @@ any new content.
 
 ## 5. Gap summary and priority
 
-| # | Gap | Impact | Effort | Priority |
-|---|---|---|---|---|
-| 1 | No grammar strand — grammar is tested, never taught | Very high | High | **P1** |
-| 2 | Speech check is a substring match reporting "Perfect!" | Very high | Low | **P1** |
-| 3 | Fake IPA from the word generator (`/joyful/`) | High (teaches error) | Low | **P1** |
-| 4 | No pronunciation strand — no minimal pairs, no stress, no schwa | Very high | Medium | **P1** |
-| 5 | No listening comprehension questions | High | Low | **P2** |
-| 6 | No free-speaking prompts or fluency metrics | Very high | Medium | **P2** |
-| 7 | Level names unordered and not CEFR-mapped; no placement test | Medium | Low | **P2** |
-| 8 | No functional / situational dialogues | High | Medium | **P2** |
-| 9 | Generated content is semantically empty ("The penguin meanders madly at the estuary"); generated definitions are boilerplate | Medium | Medium | **P3** |
-| 10 | Curated content thin: 5 sentence exercises and ~2 passages per level | Medium | High | **P3** |
-| 11 | No collocation / word-family / register fields on vocabulary | Medium | Medium | **P3** |
-| 12 | No mistake log — recurring errors are never surfaced | Medium | Medium | **P3** |
-| 13 | No session sequencing; learner must self-direct | Medium | Low | **P3** |
-| 14 | Single TTS voice, single accent, fixed speed | Low | Low | **P4** |
+This table is the **original audit**, and its 14 rows drove every phase of the build. The first
+five columns are left exactly as audited — they are the record of what was found, and rewriting
+them would erase the reason the roadmap looks the way it does. The two right-hand columns are the
+running status, re-verified against source on **2026-09-10** (wave 11).
+
+Status is one of:
+
+- **Closed** — the gap no longer exists; the behaviour the audit asked for is in the build and
+  reachable by a learner.
+- **Partly closed** — the *mechanism* exists and is reachable, but the content, the surface or the
+  learner-facing half is incomplete. Read the note: a partly-closed gap is not "nearly done", and
+  several of these are ⅒ of the way there.
+- **Open** — nothing in the build addresses it yet.
+
+"Reachable by a learner" is the bar deliberately, because several modules in `js/core/` and one
+content file are built and never called — see [REQUIREMENTS.md §9.1](REQUIREMENTS.md).
+Authored-but-unrendered content counts as partly closed, never closed.
+
+| # | Gap (as audited) | Impact | Effort | Priority | Status | Where it stands (2026-09-10) |
+|---|---|---|---|---|---|---|
+| 1 | No grammar strand — grammar is tested, never taught | Very high | High | **P1** | **Partly closed** | Grammar is a real section: nav entry, registry row, lesson/notice/decide/contrast/produce views, `gram:` SRS keys, and feedback that gives the reason, a contrast pair and a retry on every wrong answer rather than a verdict. **Content is 3 points authored of the 24 in §3, of which 2 are reachable** — `articles` (no. 3) in `data/grammar.js` and `countable-uncountable` (no. 4) in `data/grammar/countability.js` are wired; `be` (no. 1) exists as `data/grammar/be.js` and is **not in `index.html` or the precache list**, so it self-registers only once someone adds two lines. `grammarLessons.everyday`, `.confident` and `.fluent` are deliberately empty arrays. The teaching machinery is done; the syllabus is ⅛ authored |
+| 2 | Speech check is a substring match reporting "Perfect!" | Very high | Low | **P1** | **Closed** | `diffSpeechAttempt()` is a word-level LCS diff; `speechAttemptMessage()` reports *"The recogniser missed 2 of 7 words: thirsty, water"*, and on a full match says *"The recogniser understood every word"* — never "Perfect!", because we have no evidence for that claim. Completion now requires **every** target word matched, so reading a paragraph that happens to contain the word no longer passes, and a miss re-queues the words involved through SRS |
+| 3 | Fake IPA from the word generator (`/joyful/`) | High (teaches error) | Low | **P1** | **Closed** | The generator no longer fabricates `/spelling/` as if it were phonetics, and the pronunciation line renders **only** when real phonetics exist (from the dictionary API, or omitted). Authored IPA in the pronunciation files is copied from learner-dictionary sources with the reference accent declared |
+| 4 | No pronunciation strand — no minimal pairs, no stress, no schwa | Very high | Medium | **P1** | **Partly closed** | **Minimal pairs: closed.** A real discrimination drill over **8 pair sets / 78 minimal pairs** — 3 vowel sets (T-P7/8/9) in `data/pronunciation/vowels-stress.js` and 5 consonant sets (T-P5, T-P6 ×2, T-P10, T-P11) in `consonants.js`, both loaded and precached. Per-pair `phon:` SRS, production gated at 80% discrimination measured on *first* answers so the gate cannot be ground open, a miss replays both words slowed **at one matched rate** and names the differing feature, and there is a text-only path for a device that cannot render the contrast. **Stress and prosody: authored, no surface.** The 21 word-stress items and 15 rhythm / final-vowel / cluster noticing items in `vowels-stress.js` are rendered nowhere — the section reads only `.pairs`. **Not started:** the 44-phoneme inventory (§3 part 1), connected speech (part 6) and intonation (part 7). And `AS-3` — whether device TTS distinguishes these pairs audibly at all — is **still unvalidated on a real phone**, which is why every set carries a `ttsRisk`, a `degradeTo` and a no-audio fallback |
+| 5 | No listening comprehension questions | High | Low | **P2** | **Open** | The comprehension questions that exist belong to the **reading** passages. Listening is still: play a TTS sentence, record, run the recogniser. `FR-LSN-1` has no surface, and the session sequencer marks `listen.comprehend` unavailable for exactly this reason |
+| 6 | No free-speaking prompts or fluency metrics | Very high | Medium | **P2** | **Open** | No `speakingPrompts` content, no prompt/timer/record surface (`FR-SPK-3`), no shadowing mode (`FR-SPK-8`), no fluency trend (`FR-SPK-5`). The **only** spoken-production surface in the build is grammar's *say it aloud* self-check — which is why the sequencer's production step has to fall back to it, and why that fallback is reported rather than hidden |
+| 7 | Level names unordered and not CEFR-mapped; no placement test | Medium | Low | **P2** | **Partly closed** | **Naming: closed.** `js/core/levels.js` is the single source of truth — `foundation` (A1–A2), `everyday` (B1), `confident` (B2), `fluent` (C1), each with an explicit `order`, plus permanently-kept legacy aliases so an old backup still restores. The rename shipped with a migration that rewrote **exercise ids**, so completion history survived. **Placement test: does not exist** (`FR-SES-2`); `OQ-5` defers its scoring thresholds until there are enough grammar and pronunciation items to draw from |
+| 8 | No functional / situational dialogues | High | Medium | **P2** | **Open** | No dialogue content of any kind. This is P1's and P3's most-wanted item (stand-ups, client calls, GDs, interviews) and it is untouched |
+| 9 | Generated content is semantically empty ("The penguin meanders madly at the estuary"); generated definitions are boilerplate | Medium | Medium | **P3** | **Open (less harmful)** | Word-bank sentence assembly and generated vocabulary padding are both still there. What changed is that generated entries no longer **fabricate phonetics** (gap 3), so they mislead less; they still do not teach. Curated-first ordering is honoured — the sentence builder reads the curated list before generating — which is `FR-CNT-4`'s rule, but the padding itself is unimproved |
+| 10 | Curated content thin: 5 sentence exercises and ~2 passages per level | Medium | High | **P3** | **Partly closed — and the thinness moved** | Vocabulary, sentences and reading are as audited. What has been added is depth in the two *new* strands: each grammar point carries 3 contrast pairs, 6 practice items and a production task, and pronunciation carries 78 minimal pairs plus 21 stress and 15 noticing items. So content is no longer uniformly thin — it is thin in the old sections and thin-by-count-of-points in grammar (3 of 24, 2 reachable), while pronunciation's authored volume now **exceeds what the app renders** |
+| 11 | No collocation / word-family / register fields on vocabulary | Medium | Medium | **P3** | **Open** | No such fields on any vocabulary entry. `PROJECTORS.coll` exists in `js/core/srs.js` and `data/collocations.js` does not — the scheduler is ready for a content type nobody has authored |
+| 12 | No mistake log — recurring errors are never surfaced | Medium | Medium | **P3** | **Partly closed** | `js/core/mistakes.js` ships the taxonomy as **data** (so a second L1 is `registerCategories()`, not a code change), keyed back to the interference tables in `REQUIREMENTS.md` §3, and it grades evidence strength so a recogniser miss is never counted as a graded wrong answer. The grammar and pronunciation sections call `Mistakes.record()`. **But `topCategories()` is never rendered** — there is no top-5-in-30-days view, which is `FR-SRS-3`'s actual acceptance criterion and the whole of what P4 came for. Errors are now logged and still not surfaced |
+| 13 | No session sequencing; learner must self-direct | Medium | Low | **P3** | **Closed** | `js/core/session.js` plans the §4 session — ≥3 strands, ending in production, count-boxed, no menu choices — and `app.js` now walks it from a `#sessionPanel` card on the Dashboard with a **"Start today's session"** button, per-step rendering, an `aloud`/`silent`/`skip` production route and the `FR-SES-5` wrap-up. Critically it **prints `plan.shortfall` and `plan.omitted` on screen** rather than swallowing them, so the session tells the learner what this build cannot yet give them. What remains is not sequencing: it is the missing surfaces those shortfall lines name — gaps 5 and 6 |
+| 14 | Single TTS voice, single accent, fixed speed | Low | Low | **P4** | **Partly closed** | **Speed: closed.** Playback rate is now chosen per call — 0.6 for a slow pronunciation replay, 0.8 for dictation, 0.9 for a listening model, 1.0 normal — and the discrimination drill deliberately plays *both* words of a compared pair at one matched rate, so a learner never judges a fast clip against a slow one. **Voice and accent: unchanged.** `utterance.lang` is hardcoded `'en-US'` with no `getVoices()` selection, which now also collides with content authored to a **British** reference IPA; the content files carry `ameNote` / `caveats` for the divergences rather than hiding them |
+
+**Net position.** Three of the four `P1` gaps are closed or have their mechanism closed (2, 3, and
+the minimal-pair half of 4); the two `P1` content gaps (1 and the rest of 4) are now bounded
+authoring work rather than open design questions. The `P2` speaking and listening gaps (5, 6, 8) are
+**untouched and are now the largest hole in the app**, and they matter more than they did at audit
+time: the session sequencer (gap 13) is live and needs those surfaces to plan the session §4
+describes, so it now names their absence to the learner as a shortfall line **every time it builds a
+plan**. The app is honest about the hole, which is the right behaviour and not a substitute for
+filling it.
+
+Two failure modes this table is meant to make visible, because both are new since the audit:
+
+1. **Authored content with no surface, or no script tag.** Word stress, prosody noticing and the
+   mistake-log top-5 view are all built and invisible; grammar point 1 (`be`) is authored and not
+   loaded at all. Content that no screen draws teaches nobody, and it is easy to mistake for
+   progress because the files are large and correct.
+2. **Correctly scheduled records with nothing to draw them.** `gram:` and `phon:` items are
+   scheduled properly by `js/core/srs.js`, and the review screen walks vocabulary only, so due
+   grammar and pronunciation records accumulate unseen. This is one defect in one surface, and it
+   silently undoes part of gaps 1, 4 and 12 at once.
 
 All P1 items work within the project's client-only, `localStorage`-only constraint.
 Nothing above requires a backend except automated pronunciation *scoring*, which is
 deliberately replaced here by discrimination drills plus self-assessment rubrics.
+
+> **Note on §3.** The strand headings above still carry the audit's own language — "does not
+> exist", "barely exists". Strands B and C now exist as sections; read those parentheticals as the
+> audit's snapshot, and this table for where each strand actually stands.
 
 ---
 

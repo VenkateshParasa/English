@@ -117,7 +117,7 @@ behaviours that teach errors.
 | ✅ **US-108** | Deterministic sentence exercise mode — **done 2026-09-09** | `FR-RDW-4` | 1 | M |
 | ✅ **US-109** | **Statistics pipeline repaired** — all five types now route through `updateStatistics()`; `state.stats` retained for loading old saves but no longer written — **done 2026-09-09** | `FR-DATA-3`, `BR-8` | 3 | M |
 | **US-130** | `loadProgress()` pushes `loaded.dailyStats` into `dailyHistory` and then overwrites `dailyHistory` from storage two lines later, dropping yesterday's stats on any day rollover | `FR-DATA-3` | 2 | M |
-| ✅ **US-131** | `FR-SRS-2` discrepancy documented rather than laundered; both ladders stated, recommendation recorded as `OQ-10` — **done 2026-09-09** | `FR-SRS-2` | 3 | M |
+| ✅ **US-131** | **Fixed ladder implemented** — `INTERVAL_STEPS = [1,3,7,16,35]`, held at 35, rung from `reps` alone so nothing compounds. Forward-only, no stored record recomputed. Pinned assertion flipped in the same change — **done 2026-09-10** | `FR-SRS-2` | 3 | M |
 | **US-132** | Dictation and scramble toast a hardcoded "Please enter your answer" for *any* validation failure, contradicting the inline message (paste 600 chars and it tells you to enter an answer you did enter) | `NFR-3` | 1 | S |
 | **US-133** | Drag/drop toasts blame the learner for app-supplied data: "Invalid word detected", "Invalid drop operation" | `BR-3` | 1 | S |
 | ✅ **US-134** | IIFE global-object bug fixed in `mistakes.js` (`srs.js` was already fixed). Note it never bit the jest suite, because jsdom makes `window === global` — so a behavioural test could not have caught it; pinned by a source check instead — **done 2026-09-09** | — | 1 | S |
@@ -134,10 +134,10 @@ behaviours that teach errors.
 | **US-145** | `markExerciseComplete` is never called for `vocabulary` or `puzzles`, so those completion sets stay permanently empty and vocabulary never shows ✓/Retake however many quizzes are answered | `FR-DATA-3` | 2 | M |
 | ✅ **US-146** | Progress bar could exceed 100% (8 ticked of 7) when a restored backup carried a goal key no section owns — fixed as part of US-163 — **done 2026-09-10** |\| {})`, accepting arbitrary keys from storage, so the dashboard progress bar can exceed 100% | `FR-DATA-1` | 1 | S |
 | **US-147** | `updateStatisticsDisplay` still hardcodes all five sections across three `innerHTML` blocks — the last un-collapsed site after the registry refactor | — | 2 | S |
-| ✅ **US-148** | `PROJECTORS.gram` now carries `review` and `cefr`; added `auditProjection()` so a dropped authored field warns in development instead of vanishing silently — **done 2026-09-09** | `FR-GRM-3` | 1 | M |
+| ✅ **US-148** | `PROJECTORS.phon` validated per shape against real content; `auditProjection()` reports `shape` and warns by name when no shape matches — **done 2026-09-10** | `FR-GRM-3` | 1 | M |
 | ✅ **US-149** | `data/grammar.js` is now loaded and precached; the Grammar section reads it — **done 2026-09-09** | `FR-GRM-1` | 1 | M |
 | ✅ **US-150** | **Done 2026-09-10.** All 8 pair sets: vowels T-P7/8/9 + consonants T-P5/T-P6(×2)/T-P10/T-P11, 78 minimal pairs, plus 21 stress items and 15 prosody noticing items | `FR-PRN-1` | 5 | M |
-| 🔶 **US-151** | **1 of 3 done 2026-09-10.** `data/grammar/countability.js` (T-G4) landed complete and wired. **`be` (T-G2) and stative progressive (T-G3) did not** — both agents died leaving only PLACEHOLDER skeletons, which were deleted rather than shipped | `FR-GRM-1` | 5 | M |
+| ✅ **US-151** | **All three points authored** — articles (#3), be (#1, T-G2), countable-uncountable (#4). Wired and registering — **done 2026-09-10** | `FR-GRM-1` | 5 | M |
 | ✅ **US-501** | **Grammar section exists** — registry row, markup, loader, and feedback that teaches: every wrong answer shows the authored reason, a contrast pair and a retry, with defensible alternatives accepted. Scheduled as a `gram:` SRS item — **done 2026-09-09** | `FR-GRM-1`, `FR-GRM-2`, `FR-GRM-5` | 3 | M |
 | ✅ **US-152** | Grammar tier double-count fixed via an additive optional level parameter — verified 2 → 1 — **done 2026-09-10** | `FR-DATA-3` | 2 | M |
 | ✅ **US-153** | Tier availability resolves against each section's own content via `Sections.registerContent()`; the grammar loader's local workaround removed — **done 2026-09-10** | `FR-SES-3` | 2 | M |
@@ -154,16 +154,24 @@ behaviours that teach errors.
 | ✅ **US-164** | `ð-d` now reachable — `prn.th` gained `alsoTargets`, keeping one category and one count while routing both drills — **done 2026-09-10** | `FR-SRS-3` | 1 | M |
 | ✅ **US-165** | Four `logAs` sites converged; all five uncountable shapes now produce one finding, one count, one drill — **done 2026-09-10** | `FR-SRS-3` | 1 | M |
 | **US-166** | `data/grammar/countability.js` accepts answers not present in the item's `options` (*some advice*, *bits of information*, *work experience*). The grader must check `accept` before falling through to `fallbackFeedback`, or defensible answers are treated as unrecognised | `FR-GRM-5` | 2 | M |
-| **US-167** | Pronunciation `stress[]` (21 items) and `noticing[]` (15 items) are authored but have no surface. `phon:rhythm`/`final-vowel`/`cluster` also have **no projector**, so they would store under the vowel-pair field list and render empty cards | `FR-PRN-3`, `FR-PRN-8` | 5 | M |
+| ✅ **US-167** | Prosody projectors fixed as part of US-171 — stress 3 → 17 projected fields, noticing 3 → 21 — **done 2026-09-10** | `FR-PRN-3`, `FR-PRN-8` | 5 | M |
 | ✅ **US-168** | `ttsUse` enum added per `minimalPairs` row (58 of 78 flagged: 42 prefer, 7 clip-only, 6 verify, 3 clip-first) — **done 2026-09-10** | `FR-PRN-1` | 2 | S |
 | ✅ **US-169** | Five theme-aware `--panel-*` tokens plus `--text-accent`; the `.pron-*` workaround removed. **Contrast computed, not asserted** — worst case 5.93:1 light / 5.95:1 dark, all AA — **done 2026-09-10** | `NFR-11` | 1 | S |
-| **US-170** | Build the "Start today's session" UI on top of `js/core/session.js`: the button, session chrome (step N of M, strand, advisory minutes), per-step Done/Skip, the three-way speaking choice, a resume banner, and the wrap-up card | `FR-SES-1`, `FR-SES-5` | 5 | M |
-| **US-171** | **Grammar and phoneme SRS reviews are structurally unreachable.** Review mode walks `SRS.getDueWords()`, which is vocab-only, so due `gram:`/`phon:` records are scheduled correctly and no screen ever draws them. The sequencer reports them as held back rather than hiding them | `FR-SRS-1`, `FR-GRM-3` | 5 | M |
+| ✅ **US-170** | **Start-today's-session UI shipped** — Start button, chrome, per-step Done/Skip, the three-way speaking choice, `omitted`/`shortfall` rendered rather than swallowed, resume banner, wrap-up. Completable start to finish with no mic — **done 2026-09-10** | `FR-SES-1`, `FR-SES-5` | 5 | M |
+| ✅ **US-171** | **Scheduler half done** — `PROJECTORS.phon` split into 3 shapes (pair/stress/noticing), `RENDERABLE` now gates on the fields each card needs, `getDue()` returns `shape`. Found a 4th affected key the report missed: `phon:word-stress`, 21 items. The `app.js` review surface is **`US-177`** — **partly done 2026-09-10** | `FR-SRS-1`, `FR-GRM-3` | 5 | M |
 | **US-172** | `markExerciseComplete` pushes to `exerciseHistory` unconditionally while counters are guarded, so re-completing appends a duplicate record. Affects all seven sections; the field is undocumented either way | `FR-DATA-3` | 1 | S |
 | **US-173** | `.exercise-card` hard-codes `background: #f9f9f9` and `.instruction` `#555`. Fixed scoped to grammar/pronunciation only, because the legacy blocks below hard-code `background: white` — flipping the card globally would trade light-on-light for dark-on-dark | `NFR-11` | 2 | S |
 | **US-174** | Decorative 4px accent stripes are below the 3:1 non-text threshold on light tints (2.07–2.43). Pre-existing, unchanged by the theme fix | `NFR-11` | 1 | C |
-| **US-175** | Listening still has no dashboard stat card (`totalCardId: null`). Now a two-line fix — markup plus id — since no `app.js` line names it | — | 1 | S |
+| ✅ **US-175** | Listening dashboard stat card added; verified populating with the dashboard otherwise byte-identical — **done 2026-09-10** | — | 1 | S |
 | **US-176** | The Alt+N shortcut ceiling is a single-character comparison, so it silently stops working at 10 sections | — | 1 | C |
+| **US-177** | Build the **typed review surface**. `startReview()` still walks `getDueWords()` (vocab-only), so due `gram:`/`phon:` records remain undrawn. `srs.js` now hands `getDue(null)` entries carrying `shape`; the four-step switchover must land in **one** commit or the badge and the button disagree | `FR-SRS-1`, `FR-GRM-3` | 5 | M |
+| **US-178** | **`BR-2` is unreachable above `foundation`.** Grammar content exists only at that tier, so a learner on Everyday or Confident gets no grammar step and no speaking step — `meetsFrSes1: false`. The UI says so loudly; the fix is content | `BR-2` | 3 | M |
+| **US-179** | `pron.produce` can never open from inside a session: the gate needs 10+ attempts at 80%+ on one pair, but the session's pronunciation step is count-boxed at ~8 items | `FR-PRN-6` | 2 | S |
+| **US-180** | Records written under the old flat `phon` projector store 3 fields, so they count as due but not actionable until re-scheduled. They heal on the next `scheduleItem()` with history intact — no data rewrite | `FR-SRS-1` | 1 | S |
+| **US-181** | `Mistakes.topCategories()` is **never rendered** — `FR-SRS-3`'s acceptance criterion (top-5 over 30 days) is unmet. Errors are logged and still not surfaced | `FR-SRS-3` | 3 | M |
+| **US-182** | No mistake-category id for a dropped **subject** ("Am in a meeting") — a real Indian-English form next to `T-G2`. `gram.copula`'s label is false for it | `FR-SRS-3` | 1 | S |
+| **US-183** | `renderGrammarCorrect` prints "Both answers here are right" over a list, misreading for `be-p5`'s three accepted answers; `completeGrammarPoint` hardcodes "All six done" | — | 1 | S |
+| **US-184** | `updateStatisticsDisplay`'s three `statBox` calls still use `innerHTML` — the last HTML-string path on the dashboard | `NFR-12` | 1 | S |
 | **US-110** | **Stop the crossword awarding the daily goal for a blank grid** (D2) | `BR-3` | 2 | M |
 | ✅ **US-111** | Guard the quiz counters against re-clicking a correct answer — **done 2026-09-09** | `FR-VOC-1` | 1 | M |
 | ✅ **US-112** | Stop dictation double-counting the reading passage — **done 2026-09-09** | `FR-DATA-3` | 1 | M |
@@ -569,15 +577,15 @@ one with a spike attached.
 | Sprint | Theme | Points | Cumulative |
 |---|---|---|---|
 | 0 | Unblock | 6 | 6 |
-| 1 | Honesty | 145 | 151 |
-| 2 | Data integrity | 19 | 170 |
-| 3 | Extensibility | 22 | 192 |
-| 4 | Pronunciation | 33 | 225 |
-| 5 | Grammar | 36 | 261 |
-| 6 | Speaking | 28 | 289 |
-| 7 | Listening & vocabulary | 40 | 329 |
-| 8 | Session & platform | 44 | 373 |
+| 1 | Honesty | 162 | 168 |
+| 2 | Data integrity | 19 | 187 |
+| 3 | Extensibility | 22 | 209 |
+| 4 | Pronunciation | 33 | 242 |
+| 5 | Grammar | 36 | 278 |
+| 6 | Speaking | 28 | 306 |
+| 7 | Listening & vocabulary | 40 | 346 |
+| 8 | Session & platform | 44 | 390 |
 
-**373 points total, of which 135 are done — 36%.** Sprints 2 and 3 complete; Grammar and Pronunciation exist as sections; the session sequencer exists as a module. ** Sprints 2 and 3 complete; Grammar and Pronunciation both now exist as sections. ** Sprints 2 and 3 are complete; the Grammar section now exists. ** **Sprints 2 and 3 are both complete.** ** **Sprint 2 is complete** and Sprint 3 is 17 of 22.** At 8–12 points a week of evenings that is
+**390 points total, of which 156 are done — 40%.** Sprints 2 and 3 complete. Grammar and Pronunciation exist as sections and the session sequencer has a UI, so a learner can now press one button and be walked through a session. ** Sprints 2 and 3 complete; Grammar and Pronunciation exist as sections; the session sequencer exists as a module. ** Sprints 2 and 3 complete; Grammar and Pronunciation both now exist as sections. ** Sprints 2 and 3 are complete; the Grammar section now exists. ** **Sprints 2 and 3 are both complete.** ** **Sprint 2 is complete** and Sprint 3 is 17 of 22.** At 8–12 points a week of evenings that is
 roughly **5–7 months** for everything. Sprint 1 is the one to finish first: it is where every
 honesty defect lives.

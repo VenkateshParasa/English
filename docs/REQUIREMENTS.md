@@ -9,7 +9,20 @@ Companions: [PROGRESS.md](PROGRESS.md) (state of play, open decisions) ·
 [TEACHING_METHODOLOGY.md](TEACHING_METHODOLOGY.md) (pedagogy contract) ·
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) (build plan)
 
-**Version:** 1.1 · **Date:** 2026-09-09
+**Version:** 1.2 · **Date:** 2026-09-10
+
+> **1.2 (wave 11 reconciliation)** — three changes, all where the build had moved past this
+> document again. **`FR-SES-1`** is expanded from one acceptance row into a specified module: the
+> session sequencer shipped as `js/core/session.js` and made three product decisions this
+> requirement did not anticipate — it is **count-boxed, not time-boxed**; it resolves the
+> `BR-2`/`FR-A11Y-4` contradiction by treating **silent production as production** and reporting
+> the route; and it **refuses to shorten a plan silently**. Those decisions are correct and are now
+> requirements rather than code comments. **`BR-2`** is amended to say *production*, not
+> *audibility*, which is what makes it satisfiable alongside `FR-A11Y-4`. **§9.1** adds a
+> **module map**, because six shipped `js/core/` modules were not named anywhere in this document.
+> Separately, `OQ-10` (the interval ladder) is **resolved**: `js/core/srs.js` now implements the
+> fixed `1 → 3 → 7 → 16 → 35` ladder holding at its last rung, so `FR-SRS-2` states the shipped
+> rule and keeps the discrepancy and both options' consequences as recorded history.
 
 > **1.1 (wave 6 reconciliation)** — two changes, both where six waves of implementation had moved
 > past this document. `FR-DATA-6` / `OQ-6`: the recording-eviction rule is amended from
@@ -69,7 +82,7 @@ Four properties, in priority order:
 | # | Requirement | Priority |
 |---|---|---|
 | **BR-1** | A learner completes a useful 15–20 minute session **without choosing what to practise** | M |
-| **BR-2** | Every session produces **unscripted spoken output** | M |
+| **BR-2** | Every session produces **unscripted spoken output** — *production*, not *audibility* | M |
 | **BR-3** | The app **never overstates** what it knows about the learner's accuracy | M |
 | **BR-4** | Full core function **offline**, on a mid-range Android phone | M |
 | **BR-5** | Errors are **diagnosed by type** and resurfaced by spaced repetition | M |
@@ -78,6 +91,23 @@ Four properties, in priority order:
 | **BR-8** | Progress is **visible over weeks**, not just today | S |
 | **BR-9** | Zero running cost; no accounts, no server, no third-party analytics | M |
 | **BR-10** | A second first language can be added as **content, not code** | S |
+
+**Amendment (wave 11) — `BR-2` is about production, not audibility.** As originally worded, `BR-2`
+("every session produces unscripted spoken output") read as a hard requirement that the learner
+make a *sound*, which put it in direct contradiction with `FR-A11Y-4` ("every speaking task has a
+silent / skip-and-mark-done path"). Both are `M`, so a contradiction between them is not
+resolvable by priority — one of the two wordings had to be wrong. The sequencer
+(`js/core/session.js`, `resolveSilentTension()`) resolved it by drawing the distinction this
+document had left implicit:
+
+> The thing that transfers is **composing the utterance**, not vibrating the air. A learner who
+> reads a prompt, builds an unscripted answer and produces it sub-vocally, in a whisper, or by
+> typing it has done the language work. A learner who skips the prompt has not.
+
+So `BR-2` requires unscripted **production**; `FR-A11Y-4` governs the **channel** it is produced
+through. See `FR-SES-1` below for the three completion routes, which one does *not* satisfy `BR-2`,
+and why the app reports the route rather than laundering it. This also fixes what metric `M-1`
+measures: not "did audio happen", but "did an unscripted production route complete".
 
 ---
 
@@ -231,7 +261,7 @@ sessions and words-learned can all rise while the learner still cannot talk.
 
 | # | Metric | Source | Why |
 |---|---|---|---|
-| M-1 | % of sessions containing ≥1 unscripted spoken production | session log | Direct test of `BR-2` |
+| M-1 | % of sessions containing ≥1 unscripted spoken production, **split by route** (`aloud` / `silent`) | session log (`Session.productionSummary()`) | Direct test of `BR-2`. A `skipped` production counts as **no** production, so the metric cannot be inflated by the `FR-A11Y-4` escape hatch |
 | M-2 | D7 / D30 return rate | local streak data | Habit is the precondition for everything else |
 | M-3 | Sessions per week vs the 15–20 min/day assumption | local | Tests `AS-1` |
 | M-4 | SRS due-queue completion rate against the ≤20/day cap | `srsData` | An unmanageable backlog is the top reason SRS apps get abandoned |
@@ -369,70 +399,227 @@ Per [CURRICULUM.md §6](CURRICULUM.md), each deferred item has a **substitute** 
 | # | Requirement | Acceptance criteria | Pri |
 |---|---|---|---|
 | **FR-SRS-1** | The scheduler is **generalised** beyond vocabulary | Keys namespaced `vocab:` / `gram:` / `phon:` / `coll:`; existing records migrate without loss | M |
-| **FR-SRS-2** | Lapse resets to 1 day and lowers ease; success advances along a documented interval ladder | **The specified ladder and the shipped ladder differ — see the note below. `OQ-10` decides which one is correct; `US-131` implements the decision.** Lapse behaviour is met and verified by unit test | M |
+| **FR-SRS-2** | Lapse resets to 1 day and lowers ease; success advances along a documented interval ladder | The ladder is the **fixed** `1 → 3 → 7 → 16 → 35`, **holding** at 35 rather than multiplying past it. `ease` still moves on every outcome but does **not** decide intervals — it is a queue-order tie-break only. Lapse behaviour is met. Both halves verified by unit test | M |
 | **FR-SRS-3** | A **mistake log** by error type, with a top-5 view | Mistakes are categorised (article omission, /v/–/w/, past-tense agreement …) and the learner can see their top 5 for the last 30 days | M |
 | **FR-SRS-4** | The daily queue is **capped at ~20 items**; the rest defer | Queue never exceeds the cap; deferred items are not lost | M |
 | **FR-SRS-5** | **Self-reported** outcomes may schedule but never certify | A self-marked production task can shorten an interval; it is stored flagged as self-reported and never counted as verified-correct | M |
 
-#### `FR-SRS-2` — open discrepancy on the interval ladder. Tracked as `US-131`, decided by `OQ-10`.
+#### `FR-SRS-2` — the interval ladder. Question raised as `OQ-10`, implemented as `US-131`, **resolved in favour of the fixed ladder.**
 
-This requirement and [TEACHING_METHODOLOGY.md §3](TEACHING_METHODOLOGY.md) have specified
-**1 → 3 → 7 → 16 → 35** days since they were written. `js/core/srs.js` has never produced that
-sequence. The two have disagreed from the start; this note states the disagreement rather than
-resolving it by quietly rewriting one side.
+**Status when this section was last verified against source (2026-09-10):** the decision has
+landed in `js/core/srs.js`. The discrepancy below is kept as history, because the reasoning is
+what makes the resolution a decision rather than a drift, and because stored records written under
+the old rule are still out there.
 
-| | Ladder | Where it is written |
+##### The discrepancy, as it stood
+
+This requirement and [TEACHING_METHODOLOGY.md §3](TEACHING_METHODOLOGY.md) specified
+**1 → 3 → 7 → 16 → 35** days from the day they were written. `js/core/srs.js` never produced that
+sequence — it produced **1 → 3 → 8 → 22 → 62**. The two disagreed from the start, and neither side
+was silently rewritten to match the other.
+
+| | Ladder | Where it was written |
 |---|---|---|
 | **Specified** | 1 → 3 → **7 → 16 → 35** | `FR-SRS-2`, `TEACHING_METHODOLOGY.md` §3 |
-| **Shipped** | 1 → 3 → **8 → 22 → 62** | `SRS._applyGraded()` in `js/core/srs.js`, pinned by `__tests__/unit/srs.test.js` |
+| **Shipped (until wave 11)** | 1 → 3 → **8 → 22 → 62** | `SRS._applyGraded()` in `js/core/srs.js`, pinned by `__tests__/unit/srs.test.js` |
 
-**How the shipped numbers arise.** `_applyGraded()` hardcodes only the first two rungs
+**How the old numbers arose.** `_applyGraded()` hardcoded only the first two rungs
 (`reps === 1` → `interval = 1`, `reps === 2` → `interval = 3`) and from the third success onwards
-computes `Math.round(rec.interval * rec.ease)`. `ease` starts at `DEFAULT_EASE = 2.5` and gains
+computed `Math.round(rec.interval * rec.ease)`. `ease` starts at `DEFAULT_EASE = 2.5` and gains
 `+0.1` on every success, clamped to `MAX_EASE = 2.8`; a lapse subtracts `0.2`, floored at
 `MIN_EASE = 1.3`. So for an item answered correctly every time: `round(3 × 2.7) = 8`,
-`round(8 × 2.8) = 22`, `round(22 × 2.8) = 62`. The test suite documents this openly — the
-assertion `expect(rec.interval).toBe(8)` carries a `KNOWN DIVERGENCE` comment naming
-`TEACHING_METHODOLOGY.md` §3 — so the tests currently enshrine the code, and changing the code
-means changing that assertion in the same commit.
+`round(8 × 2.8) = 22`, `round(22 × 2.8) = 62`.
 
-**Consequence of each, stated honestly.**
+**Consequence of each option, stated honestly.** This is the part that had to be written down
+before either could be chosen, and it is why the choice was not obvious:
 
-- **SM-2 multiplicative growth (shipped).** The interval is a function of the item's own history,
-  so a word the learner keeps getting right accelerates away and a word they keep lapsing on
-  stays close. Per-item adaptation is the whole point of SM-2 and it is why the algorithm won.
-  The cost is unboundedness and unpredictability: `ease` caps at 2.8 but the interval does not cap
-  at all, so the ladder continues 62 → 174 → 487 → 1,364 days. Seven consecutive right answers put
-  an item **16 months** out; eight put it nearly four years out. On a four-option quiz a run that
-  long is reachable by luck, and a self-study learner has no "I actually forgot this" control to
-  pull it back with — so neither they nor the author can say when a given word will next appear.
-- **Fixed ladder (specified).** Predictable, inspectable, and it caps how far any item can drift:
-  the sequence is the same for every item, so "35 days" is the furthest anything goes before the
-  ladder is extended deliberately. That makes the schedule explainable to a learner and testable
+- **SM-2 multiplicative growth (the old code).** The interval is a function of the item's own
+  history, so a word the learner keeps getting right accelerates away and a word they keep lapsing
+  on stays close. Per-item adaptation is the whole point of SM-2 and it is why the algorithm won.
+  The cost is unboundedness and unpredictability: `ease` caps at 2.8 but the interval did not cap at
+  all, so the ladder continued 62 → 174 → 487 → 1,364 days. Seven consecutive right answers put an
+  item **16 months** out; eight put it nearly four years out. On a four-option quiz a run that long
+  is reachable by luck, and a self-study learner has no "I actually forgot this" control to pull it
+  back with — so neither they nor the author could say when a given word would next appear.
+- **Fixed ladder (the specification).** Predictable, inspectable, and it caps how far any item can
+  drift: the sequence is the same for every item, so 35 days is the furthest anything goes before
+  the ladder is extended deliberately. That makes the schedule explainable to a learner and testable
   without simulating ease. The cost is that it discards per-item adaptation — a word the learner
-  finds trivial and one they find hard are asked for on the same schedule — which is a real loss
-  of scheduling efficiency, though `ease` can still be retained as a *tie-break* on queue order
-  without driving the intervals.
+  finds trivial and one they find hard are asked for on the same schedule — which is a real loss of
+  scheduling efficiency, mitigated but not erased by keeping `ease` as a queue-order tie-break.
 
-Note also that a fixed ladder needs a defined behaviour **past its last rung** (repeat 35 days
-forever, or multiply from there), and that whichever ladder wins, the existing `srsData` records
-carry the intervals the old rule produced. Changing the rule is forward-only — nothing recomputes
-history — which is why `US-131` is deliberately **not** part of the migration wave.
+##### What is in the code now
 
-The rest of `FR-SRS-2` — "a lapse resets to 1 day and lowers ease" — **is** met: `_applyGraded()`
-sets `reps = 0`, `interval = 0`, `due = now` and `ease = Math.max(MIN_EASE, ease - 0.2)` on a
-wrong answer, so the item stays in the current session's queue and comes back at the 1-day rung on
-its next success. That half needs no decision.
+Verified in `js/core/srs.js`:
+
+- `INTERVAL_STEPS = [1, 3, 7, 16, 35]`, with `MAX_INTERVAL_DAYS` derived from its last element, so
+  the cap is a fact about the app rather than a comment.
+- `intervalForReps(reps)` clamps into the array: `reps ≤ 1` reads the first rung, and **past the
+  last rung the interval holds at 35** rather than multiplying. That settles the open sub-question —
+  the cap is real.
+- `_applyGraded()` sets `rec.interval = intervalForReps(rec.reps)` on a success. The rung is a
+  function of **`reps` alone**, never of the previous interval, so nothing compounds and one
+  implausible stored `interval` no longer poisons every interval after it.
+- `ease` is retained and still moves (`+0.1` on success to `MAX_EASE`, `−0.2` on a lapse to
+  `MIN_EASE`), but only as the **third sort key** in `_dueRecords()` — after due date, then lapse
+  count. Lower ease first, so a harder item leads among items that are otherwise equal, and a
+  missing `ease` reads as `DEFAULT_EASE` rather than sorting as the easiest or hardest thing in the
+  queue. Per-item difficulty therefore still influences *order within a day*, and no longer
+  influences *when an item returns*.
+- `SELF_REPORT_INTERVAL_DAYS` is now derived as `INTERVAL_STEPS[0]` rather than hardcoded `1`, so
+  `FR-SRS-5`'s floor and the ladder's first rung cannot drift apart.
+
+**The migration answer: forward-only, and it self-corrects.** No stored record is recomputed, no
+`due` date is rewritten, and `migrations.js` has no entry for this — a rule change is not a data
+change. A record sitting on `interval: 62` keeps that due date until the learner next answers it;
+because 62 is reps 5 under the old ladder, the next success reads rung `min(6, 5) = 5` → **35 days**,
+so the interval *drops* to the cap. A legacy record with a large interval but small or missing
+`reps` resolves to an *earlier* rung, which is the safe direction: the scheduler under-claims how
+well an item is known. **Residual, stated rather than hidden:** a record the old rule already pushed
+174+ days out keeps that date, and pulling those in would be a separate one-time migration.
+
+**"Verified by unit test" is met.** `__tests__/unit/srs.test.js` was flipped in the same wave and its
+`KNOWN DIVERGENCE` marker is gone. It now pins the ladder itself (`[1, 3, 7, 16, 35]`, asserted both
+literally and against `SRS.INTERVAL_STEPS`), the **hold** at the last rung over 12 consecutive
+successes, `intervalForReps()`'s clamping of `0`, a negative, `undefined` and `NaN` to the first rung
+(sooner, never later), the ease **ordering** tie-break — two equally-overdue items with equal lapses,
+harder one first — and that `SRS.INTERVAL_STEPS` is exported as a copy so a caller cannot rewrite the
+policy by mutating the array. The lapse half was already covered. ⚠️ One caveat on the whole suite,
+recorded in its own header: **jest is not installed in this repo**, so these tests are read and
+maintained but not currently executed by a local `npm test`.
+
+The other half of `FR-SRS-2` — "a lapse resets to 1 day and lowers ease" — **is** met and was never
+in dispute: `_applyGraded()` sets `reps = 0`, `interval = 0`, `due = now` and
+`ease = Math.max(MIN_EASE, ease - 0.2)` on a wrong answer, so the item stays in the current
+session's queue and comes back at the 1-day rung on its next success.
 
 ### 6.8 Session & levels — `SES`
 
 | # | Requirement | Acceptance criteria | Pri |
 |---|---|---|---|
-| **FR-SES-1** | A **"start today's session"** path sequences ~20 minutes across ≥3 strands, one of which is Speaking | Following the sequencer requires no menu choices and ends with a spoken production | M |
+| **FR-SES-1** | A **"start today's session"** path sequences ~20 minutes across ≥3 strands, one of which is Speaking | Following the sequencer requires no menu choices and ends with a spoken production. Work is **count-boxed, not time-boxed**; the production step has an `aloud` and a `silent` route and is never dropped; a plan that cannot meet any clause of this requirement **says so** rather than shrinking quietly. Planning is specified below and lives in `js/core/session.js`; `app.js` owns the `#sessionPanel` Dashboard card that walks it | M |
 | **FR-SES-2** | A **placement check** sets the starting tier | 12 items (4 listening, 4 grammar-in-context, 2 spoken, 2 vocabulary depth); re-offered every 30 active days | S |
 | **FR-SES-3** | Four **CEFR-aligned** tiers: `foundation` `everyday` `confident` `fluent` | Legacy keys `basic`/`intermediate`/`medium` resolve permanently via alias | M |
 | **FR-SES-4** | **Promotion** follows the `TEACHING_METHODOLOGY.md §4` thresholds; demotion is never automatic | ≥85% grammar first-try, ≥80% discrimination, ≥5 free-speaking tasks over 10 sessions. Easier content is offered, never announced as a downgrade | S |
 | **FR-SES-5** | The dashboard shows **streak, fluency trend and tomorrow's preview** | Present at session end | S |
+
+#### `FR-SES-1` — the sequencer, and the three decisions it made
+
+Wave 11 shipped this requirement in two halves. **Planning** is `js/core/session.js` (`US-801`): no
+DOM, no audio, no SRS writes, its own `localStorage` key `sessionPlan`, loaded after
+`sections.js` / `srs.js` / `mistakes.js`. It answers four questions: what to do next and in what
+order (`build`), where the learner is in that order (`current` / `progress`), what the plan could
+*not* include and why (`omitted` / `shortfall`), and where they were when the phone rang (`load` /
+`resume`). **Walking** is `app.js`'s `#sessionPanel` card on the Dashboard (`US-170`): the "Start
+today's session" button, per-step rendering, the production routes, and the `FR-SES-5` wrap-up. The
+split is deliberate and worth keeping — the planner is testable without a DOM, and `app.js` declares
+what it can draw through `Session.registerSurfaces()` rather than the planner guessing.
+
+In building it, three product decisions had to be made that this requirement did not anticipate.
+All three are judged correct, so they are recorded here as requirements rather than left as
+reasoning in a code comment.
+
+##### Decision 1 — the session is **count-boxed**, not time-boxed
+
+"~20 minutes" is a promise about **size**, and it is honoured with a count of items, not a
+countdown. Nothing in a session expires. Steps carry advisory minutes — that is what makes the
+plan *read* as a 20-minute session, and it is how the budget is split into counts via a
+conservative per-item `pace` (a vocabulary card at ~15s, a discrimination item at ~20s including
+feedback) — but a step ends when the work ends.
+
+Three reasons, in order of weight:
+
+1. **We cannot measure what a timer would pace.** P1 practises on a commute with the screen locked
+   half the time. Wall-clock elapsed is not time-on-task, so a 3-minute timer measures the train.
+2. **A step that expires mid-answer is a punishment, and it lands hardest on the slowest learner.**
+   That is P2, who "will abandon anything that feels like a test she is failing" (§2 P2, `NFR-15`).
+   Cutting off a half-finished thought teaches quitting.
+3. **A count is a promise the app can keep.** "9 review items, then 1 grammar point, then 9 minimal
+   pairs" is a session whose end the learner can see, and it does not depend on how fast they read.
+
+The one timer that exists is *inside* the free-speaking task, because `FR-SPK-3` asks for "prompt,
+timer, record" — and that is a stopwatch the learner starts, surfaced as `targetSeconds`, not a
+guillotine. **Consequence to accept:** the app cannot promise a 20-minute session to the minute,
+and must not claim to. `plan.minutes` is advisory and is reported as such; overshooting the count
+is how a "20-minute session" becomes a 35-minute one and stops being trusted, which is why `pace`
+is deliberately pessimistic rather than optimistic.
+
+##### Decision 2 — **silent production is production**; the route is reported, never laundered
+
+This is the `BR-2` / `FR-A11Y-4` resolution (see the amendment under §1.4). Concretely:
+
+- The production step is **always planned** when any production surface exists. It is `required`
+  and `terminal`: no option removes it — not silent mode, not a skip, not a 15-minute budget.
+  Dropping it is the thing that would violate `BR-2`, so it is not representable.
+- It has **two completion routes, `aloud` and `silent`**, and both mark it done. Neither is
+  presented as the lesser path and **neither requires a microphone** (`FR-SPK-9`: only
+  discrimination may gate on audio).
+- `silent` is a **production mode, not a skip**: sub-vocal or whispered speech, or typing the
+  utterance the prompt asked for. In silent mode it is the step's default outcome.
+- `skipped` remains available, because `FR-A11Y-4`'s floor is that a learner can get from start to
+  finish without speaking or granting mic access. A skipped production still completes the session.
+- **Nothing is laundered.** The session reports the route and flags the claim `selfReported`, so a
+  silently-completed session counts as a silent production and a skipped one counts as **no**
+  production. That is what `M-1` has to measure to mean anything, and what `BR-3` requires of every
+  claim this app makes.
+
+**Consequence to accept:** a learner who skips every production task has sessions that do not
+satisfy `BR-2`, and the app says so in the wrap-up. That is a reporting outcome, not a locked door —
+and it is the honest version of the alternative, which is to count a skip as a production and have
+`M-1` mean nothing.
+
+##### Decision 3 — a degraded plan is **short and says so**; it never shrinks silently
+
+The §4 session shape names five activities. Three of them currently have nothing that can draw
+them: there is no listening comprehension question (`FR-LSN-1`), no shadowing mode (`FR-SPK-8`) and
+no free-production prompt surface (`FR-SPK-3`). A sequencer that plans "4 min: listen →
+comprehension → shadow" against that build sends the learner to a screen that cannot honour the
+instruction — which is worse than no sequencer: it is the app overstating itself, and `BR-3`
+forbids that.
+
+So a step survives only if **three independent facts all hold**, and this is now part of the
+acceptance criteria:
+
+| # | Fact | Source |
+|---|---|---|
+| 1 | A **surface** exists that can render it | `SURFACES` / `registerSurfaces()` — app.js declares what it can draw |
+| 2 | The section behind it has authored **content** | `Sections.contentCount()` |
+| 3 | The step's own **precondition** holds | the step's `requires()` — e.g. review is dropped when nothing is due |
+
+Whatever fails is named on `plan.omitted` with a reason. The freed minutes are redistributed over
+the surviving steps but **never past 1.5× a step's §4 share**, because without that clamp a build
+where only vocabulary content exists would prescribe 20 minutes of vocabulary review — which is not
+the §4 session, it is the old single-section app with a progress bar. With it, the plan comes out
+short and reports `plan.shortMinutes`.
+
+The verdict is then computed and stated, not assumed. `plan.meetsFrSes1` is the conjunction of four
+checks — ≥3 strands, Speaking among them, ends with a production over *task* steps, and no menu
+choices — and each failure emits an explicit `plan.shortfall` line naming the requirement it misses.
+Budget shortfall is reported but is deliberately **not** part of the verdict, because minutes are
+advisory by Decision 1.
+
+Two consequences worth stating:
+
+- **"Ends with a spoken production" and `FR-SES-5`'s 1-minute wrap-up are both satisfiable**, because
+  the wrap-up is the *app* reporting back, not the learner doing something. The check runs over task
+  steps only, so the last thing the learner **does** is speak.
+- **A shortfall is a real state the UI must render, and does.** Today's build produces them:
+  `listen.comprehend`, `speak.shadow` and `speak.free` are all unavailable, and `srs.review` renders
+  **vocabulary only** (due `gram:` and `phon:` records are scheduled correctly and no screen draws
+  them — see the module map in §9.1). The Dashboard card prints `plan.shortfall` and `plan.omitted`
+  on screen rather than swallowing them, and `app.js` states the rule plainly: *an honest empty space
+  is a bug report; a hidden one is a lie.* Any future session surface inherits that obligation.
+
+##### Two structural rules the module also fixes
+
+- **No hardcoded section list.** Strand membership derives from each registry row's `srsType`, with
+  one small additive table for rows that have none. A section added to the registry and not
+  classified is reported by `Session.unclassifiedSections()` rather than silently ignored.
+- **Speaking is not a section.** Strand E exists today only as sub-surfaces of other sections
+  (grammar's *say it aloud* task, the pronunciation production gate), so the production step
+  resolves through an **ordered list of alternatives**, best first, and the plan records which one
+  it got: `speak.free` (what §4 and `FR-SPK-3` ask for) → `grammar.produce` (the honest fallback
+  that ships today) → `pron.produce` (gated per pair by `FR-PRN-6`, so not unscripted).
 
 ### 6.9 Data — `DATA`
 
@@ -586,6 +773,41 @@ live-bug review:
 P3 → `NFR-1/4/6`, `FR-SPK-3/4` · P4 → `FR-SES-2`, `FR-SRS-3`, `FR-PRN-2`, `FR-SPK-6` ·
 P5 → `FR-CNT-1`…`FR-CNT-5`, `NFR-13`.
 
+### 9.1 Module map — every `js/core/` module, and the requirement that owns it
+
+Added in wave 11. Twelve modules exist in `js/core/`; **six of them were not named anywhere in this
+document**, which is how three of the session sequencer's product decisions ended up living only in
+a code comment (see `FR-SES-1`). This table is the inverse index: from shipped module to owning
+requirement. It is deliberately here in §9 rather than in §6 — a module is not a requirement, and
+the point of the map is to make an *unowned* module visible.
+
+Verified against `index.html`'s script order and `app.js` call sites on 2026-09-10. "Wired" means
+`app.js` actually calls it, not merely that a `<script>` tag loads it.
+
+| Module | Owning requirement(s) | Wired? | Notes |
+|---|---|---|---|
+| `levels.js` | `FR-SES-3` | yes | The four CEFR tiers plus the permanent legacy aliases. Identity aliases are what make the `migrations.js` exercise-id rewrite idempotent |
+| `migrations.js` | `FR-DATA-1`, `FR-DATA-2`, `NFR-9` | yes | One `SCHEMA_VERSION` over both `learningProgress` and `srsData`; `backupOnce()` before any rewrite; fails closed |
+| `srs.js` | `FR-SRS-1`, `FR-SRS-2`, `FR-SRS-4`, `FR-SRS-5` | yes | See the `FR-SRS-2` note and `OQ-10` for the open ladder question. `PROJECTORS` / `RENDERABLE` / `auditProjection()` are the content contract that `CONTENT_AUTHORING_GUIDE.md` §7 documents |
+| `sections.js` | **none — architectural** | yes | The section registry. It replaced ~12 hand-maintained literals in `app.js`, each of which was a silent-failure site (a section missing from `updateStatistics`'s `switch` rendered perfectly and counted nothing). It carries no product requirement and should not be given one; it is the reason `FR-CNT-2` ("new content types live in new files") is cheap, and `Session` reads it rather than hardcoding a strand list |
+| `mistakes.js` | `FR-SRS-3`, `BR-5`, `FR-CNT-3` | yes | The taxonomy is **data**, so `BR-10`'s second-L1 profile is `registerCategories()` rather than a code change. Evidence strength is tracked: a recogniser miss is stored under a weaker class than a graded wrong answer and kept out of the ranked diagnosis (`BR-3`, `FR-PRN-5`) |
+| `session.js` | `FR-SES-1`, `FR-SES-5`, `BR-1`, `BR-2`, `FR-A11Y-4` | yes | The sequencer. Specified in full under `FR-SES-1`. Planning only, no DOM; `app.js` owns the `#sessionPanel` Dashboard card, calls `registerSurfaces()` with per-surface predicates checkable against the named render function, and draws `plan.shortfall` / `plan.omitted` rather than swallowing them |
+| `portability.js` | `FR-DATA-4`, `FR-DATA-5`, `BR-7`, `CON-3` | yes | Exports by **deny-list** over `localStorage`, carrying raw strings so a round trip is byte-identical and a key written by a newer release survives. Validate-whole-file-then-commit with rollback, because `localStorage` has no transaction. A new module key is exported automatically — which is why `sessionPlan` needed no change here |
+| `blobstore.js` | `FR-DATA-6`, `NFR-10`, `CON-3` | **not called** | IndexedDB recording archive with the pinned-baseline retention amended into `FR-DATA-6` in wave 6. `BlobStore.DB_VERSION` is unrelated to `Migrations.SCHEMA_VERSION` |
+| `error-handler.js` | **none — infrastructure** | yes (26 call sites) | Cross-cutting error logging. No owning requirement, and arguably needs none, but note the class of bug it caused: `AppErrorHandler` was permanently `undefined` for a full wave because a top-level `const` in a classic script is a *lexical* global, not a `window` property (`CON-4`), so every error-logging guard in four core modules was a silent no-op |
+| `storage.js` | **superseded** | no | Never instantiated. `portability.js` harvested its useful half and fixed two blocking defects: an instance call to a `static` `Validator` method, and an `englishLearning_` key prefix the app has never written, which would have exported an empty file. Kept only as history; nothing should be built on it |
+| `validator.js` | `FR-CNT-1`, `NFR-13` (nominally) | no | Content/record schema checks, unwired. Its level enum was corrected during the CEFR rename or it would have rejected every valid record after it. `FR-CNT-1`'s "fails loudly at author time" is currently met by per-file authoring invariants and tests, **not** by this module |
+| `notification.js` | **none** | no | Unwired toast/notification manager. No requirement asks for it |
+
+**What this map makes visible.** Three modules are unwired (`storage`, `validator`,
+`notification`) and one built-and-uncalled module implements an `S` requirement (`blobstore`,
+`FR-DATA-6`), so four of twelve are not reachable by a learner. And one live gap deserves naming
+here because it crosses three modules: `srs.js` schedules `gram:` and `phon:` records correctly,
+`app.js`'s review screen walks vocabulary only, and `session.js` therefore refuses to count them —
+so due grammar and pronunciation records exist, accumulate and are never shown. That is a defect in
+the review surface, not in any of the three modules, and it is the largest single shortfall the
+sequencer reports.
+
 ---
 
 ## 10. Open questions
@@ -603,7 +825,7 @@ Each blocks something specific. Recommendations given; decisions are the maintai
 | **OQ-7** | Do **puzzles** (word search, crossword, scramble, matching) belong to any strand? | Whether they are maintained through refactors | Keep matching and scramble as warm-ups; retire word search and crossword. They are the most code per unit of teaching value |
 | **OQ-8** | Which **frequency list** for `FR-VOC-6`? | Vocabulary ordering | A freely-licensed list (new-GSL or SUBTLEX-derived). Not Oxford 3000/5000 — copyrighted, and this repo is MIT |
 | **OQ-9** | Which **audio source** for prosody (`FR-PRN-8`)? | Sentence stress, linking, intonation | None is free and adequate. Teach by noticing; if recording, use a native speaker, not a Telugu-L1 voice |
-| **OQ-10** | **Which interval ladder is correct** — the fixed `1 → 3 → 7 → 16 → 35` that `FR-SRS-2` and `TEACHING_METHODOLOGY.md` §3 specify, or the SM-2 multiplicative `1 → 3 → 8 → 22 → 62` that `js/core/srs.js` actually ships? | `FR-SRS-2`, `US-131`, and every acceptance test that asserts an interval | **Adopt the fixed ladder, and keep `ease` for ordering only.** Reasons, in order: (1) it is what the pedagogy contract says, and a methodology document that the scheduler ignores is worse than no document; (2) `ease` caps at 2.8 but the interval does not cap at all, so seven consecutive right answers put an item 16 months out (62 → 174 → 487 days) and eight put it nearly four years out — on a four-option quiz a run that long is reachable by luck, and a self-study learner has no "I actually forgot this" control to pull it back with, so the ladder must not be able to run away; (3) a fixed ladder is testable without simulating ease, and `FR-SRS-2`'s acceptance criterion is "verified by unit test". Implement as an explicit `INTERVAL_STEPS` array with a defined past-the-end rule (recommendation: hold at the last rung rather than multiply, so the cap is real), keep `ease` as the `_dueRecords()` tie-break so per-item difficulty still influences *order* within a day, and flip the `KNOWN DIVERGENCE` assertion in `__tests__/unit/srs.test.js` in the same commit. Forward-only: no stored record is recomputed |
+| **OQ-10** | ~~**Which interval ladder is correct**~~ — the fixed `1 → 3 → 7 → 16 → 35` that `FR-SRS-2` and `TEACHING_METHODOLOGY.md` §3 specify, or the SM-2 multiplicative `1 → 3 → 8 → 22 → 62` that `js/core/srs.js` shipped? Sub-question: what happens **past the last rung** of a fixed ladder? | `FR-SRS-2`, `US-131`, and every acceptance test that asserts an interval | **RESOLVED (wave 11, verified in source 2026-09-10): the fixed ladder, holding at 35.** `js/core/srs.js` now declares `INTERVAL_STEPS = [1, 3, 7, 16, 35]`, derives `MAX_INTERVAL_DAYS` from it, and computes each success's interval as `intervalForReps(rec.reps)` — a function of `reps` alone, clamped, so it holds at 35 instead of multiplying and nothing compounds. `ease` is kept and still moves, but only as the third sort key in `_dueRecords()` (due date → lapses → lowest ease first), so per-item difficulty still shapes queue *order* and no longer shapes *when* an item returns. `SELF_REPORT_INTERVAL_DAYS` is derived from `INTERVAL_STEPS[0]`. Forward-only: nothing recomputes history, and a stored `interval: 62` drops to 35 on its next graded success rather than continuing to 174. **Reasons the fixed ladder won** (recorded so the decision is auditable): (1) it is what the pedagogy contract says, and a methodology document the scheduler ignores is worse than no document; (2) the multiplicative interval had no cap at all — seven right answers put an item 16 months out and eight nearly four years, a run reachable by luck on a four-option quiz, with no learner-facing "I actually forgot this" control to pull it back; (3) a fixed ladder is testable without simulating ease, which is what this requirement's own acceptance criterion asks for. **The accepted cost:** per-item interval adaptation is gone; a word the learner finds trivial and one they find hard now return on the same schedule, and only the queue order distinguishes them. **Tests reconciled in the same wave** — `__tests__/unit/srs.test.js`'s `KNOWN DIVERGENCE` marker is gone and it now pins the ladder, the hold at 35, `intervalForReps()`'s clamping, the ease ordering tie-break, and that `INTERVAL_STEPS` is exported as a copy. Extending the ladder past 35 days later is a deliberate change to the contents of one array, which is exactly the property the array was chosen for |
 
 ---
 
