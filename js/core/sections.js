@@ -25,7 +25,8 @@
  * WHY `dashboard` IS A ROW
  * It is a real nav target: it has a .nav-btn, a #dashboard element and an
  * Alt+1 shortcut, and the Alt+N ceiling is derived from ids().length, which must
- * still be 6. It simply has no exercises, so every learning-specific field is
+ * therefore keep counting it (8 rows today: dashboard plus seven learning
+ * sections). It simply has no exercises, so every learning-specific field is
  * null/false and it is excluded from exercises()/exerciseIds()/goalKeys().
  * Read `ids()` as "nav targets" and `exerciseIds()` as "learning sections".
  *
@@ -273,6 +274,44 @@
             srsType: 'gram',
             tracksExercises: true,
             hasDifficulty: true
+        },
+        {
+            // US-401. Appended for the same positional reason `grammar` was: this
+            // list is the Alt+N order, so slotting Pronunciation in beside
+            // Listening — where it belongs pedagogically — would renumber
+            // Puzzles and Grammar for every learner who has already learned the
+            // shortcuts. This row is Alt+8.
+            id: 'pronunciation',
+            label: 'Pronunciation',
+            icon: '🗣️',
+            indexKey: 'currentPronunciationIndex',
+            goalKey: 'pronunciation',
+            prevBtnId: 'prevPronunciation',
+            nextBtnId: 'nextPronunciation',
+            statusId: 'pronunciationStatus',
+            dailyStatKey: 'pronunciationCompleted',
+            totalStatKey: 'totalPronunciation',
+            avgKey: 'pronunciation',
+            statLabel: 'Pronunciation',
+            totalCardId: 'pronunciationCompleted',
+            countsInTotalExercises: true,
+            // `PRONUNCIATION_VOWELS_STRESS.pairs` — the vowel minimal-pair sets,
+            // plus `PRONUNCIATION_CONSONANTS.pairs` when that sibling file is
+            // loaded (the app.js probe reads both; neither is required).
+            // Note the shape difference from every other content map in this
+            // column: it is NOT keyed by level. The probe in app.js therefore
+            // reports it at `foundation` only, so that one authored pair cannot
+            // be completed once per tier — see the comment on that probe.
+            contentGlobal: 'PRONUNCIATION_VOWELS_STRESS',
+            // The third section wired to the scheduler: one record per phoneme
+            // PAIR, keyed 'phon:<pair id>' (TEACHING_METHODOLOGY.md §3,
+            // FR-PRN-2 — accuracy is a per-pair fact, never a per-word one).
+            srsType: 'phon',
+            tracksExercises: true,
+            // Deliberately false. The content is one set of pairs authored from
+            // the Telugu-L1 interference table, not four tiers of it, so a level
+            // selector here would be a control with nothing behind it.
+            hasDifficulty: false
         }
     ];
 

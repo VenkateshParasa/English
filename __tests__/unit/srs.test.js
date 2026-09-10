@@ -859,15 +859,42 @@ describe('PROJECTORS.gram — against the authored schema, not a guess (US-148)'
         expect(rec.type).toBe(lesson.srsType);
     });
 
-    it('leaves PROJECTORS.phon alone while data/pronunciation.js does not exist', () => {
-        // Deliberately NOT re-guessed. The list below is the original guess and
-        // is pinned only so that whoever lands data/pronunciation.js sees this
-        // test and checks it against the real schema rather than inheriting a
-        // guess silently. Change this list and the projector together.
-        expect(SRS.PROJECTORS.phon)
-            .toEqual(['id', 'pair', 'label', 'examples', 'minimalPairs', 'difficulty']);
-        expect(require('fs').existsSync(
-            require('path').join(__dirname, '../../data/pronunciation.js'))).toBe(false);
+    it('projects every field the phon content authors, now that it exists', () => {
+        // This used to pin the ORIGINAL GUESS and assert that no pronunciation
+        // content existed, so that whoever landed it would see this test. They
+        // did: data/pronunciation/vowels-stress.js is here, and the projector was
+        // corrected against it (it had been dropping 16 authored fields including
+        // `articulatoryCue`, `productionGate` and `phonemes` — the whole of the
+        // teaching). The assertion is now the real contract: audit a real pair
+        // and require that nothing an author wrote is silently dropped.
+        const content = require(
+            require('path').join(__dirname, '../../data/pronunciation/vowels-stress.js'));
+        const pair = content.PRONUNCIATION_VOWELS_STRESS.pairs[0];
+
+        const audit = SRS.auditProjection('phon', pair);
+        expect(audit.dropped).toEqual([]);
+        expect(audit.phantom).toEqual([]);
+
+        // The four the Pronunciation section (US-401) cannot render a review card
+        // without, called out by name so a future trim of the list is loud.
+        ['articulatoryCue', 'contrastFeature', 'phonemes', 'productionGate']
+            .forEach(f => expect(SRS.PROJECTORS.phon).toContain(f));
+    });
+
+    it('stores a phon record under the key the content declares', () => {
+        // The FR-PRN-6 production gate reads a per-pair accuracy counter keyed the
+        // same way. If scheduleItem() ever normalised the IPA ref differently from
+        // the authored `srsKey`, the gate would read a counter nothing writes to
+        // and would never open — silently.
+        const content = require(
+            require('path').join(__dirname, '../../data/pronunciation/vowels-stress.js'));
+        content.PRONUNCIATION_VOWELS_STRESS.pairs.forEach(pair => {
+            const rec = SRS.scheduleItem('phon', pair.id, pair, false);
+            expect(rec.key).toBe(pair.srsKey);
+            expect(rec.key).toBe(pair.productionGate.requiresKey);
+            expect(rec.type).toBe('phon');
+            expect(rec.ref).toBe(pair.id);
+        });
     });
 });
 

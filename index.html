@@ -65,6 +65,7 @@
             <button class="nav-btn" data-section="listening" aria-label="Go to Listening section" aria-controls="listening">🎧 Listening</button>
             <button class="nav-btn" data-section="puzzles" aria-label="Go to Puzzles section" aria-controls="puzzles">🧩 Puzzles</button>
             <button class="nav-btn" data-section="grammar" aria-label="Go to Grammar section" aria-controls="grammar">📐 Grammar</button>
+            <button class="nav-btn" data-section="pronunciation" aria-label="Go to Pronunciation section" aria-controls="pronunciation">🗣️ Pronunciation</button>
         </nav>
 
         <!-- Dashboard Section -->
@@ -92,6 +93,10 @@
                     <h3>📐 Grammar Points</h3>
                     <p class="stat-number" id="grammarCompleted" aria-live="polite" aria-atomic="true">0</p>
                 </div>
+                <div class="stat-card" role="listitem">
+                    <h3>🗣️ Pronunciation Drills</h3>
+                    <p class="stat-number" id="pronunciationCompleted" aria-live="polite" aria-atomic="true">0</p>
+                </div>
             </div>
             <div class="daily-goal" role="complementary" aria-labelledby="daily-goal-title">
                 <h3 id="daily-goal-title">Today's Goal</h3>
@@ -103,6 +108,7 @@
                     <label><input type="checkbox" id="goalListening" disabled aria-label="Listening practice completed"> Listening Practice</label>
                     <label><input type="checkbox" id="goalPuzzle" disabled aria-label="Puzzle activity completed"> Puzzle Activity</label>
                     <label><input type="checkbox" id="goalGrammar" disabled aria-label="Grammar point completed"> Grammar Point</label>
+                    <label><input type="checkbox" id="goalPronunciation" disabled aria-label="Pronunciation drill completed"> Pronunciation Drill</label>
                 </div>
             </div>
 
@@ -166,7 +172,13 @@
             <div class="vocab-container">
                 <div class="word-card" id="wordCard" role="article" aria-labelledby="currentWord">
                     <h3 class="word" id="currentWord" aria-live="polite">Loading...</h3>
-                    <p class="pronunciation" id="pronunciation" aria-label="Pronunciation"></p>
+                    <!-- id renamed from `pronunciation` to `wordPronunciation` in US-401:
+                         the Pronunciation SECTION needs #pronunciation, and the section
+                         registry's whole contract is that `#{id}` is the section. This
+                         element is the vocabulary card's IPA line; its `.pronunciation`
+                         CLASS (styles.css) is unchanged, and app.js's
+                         setPronunciationDisplay() is the only code that looked it up. -->
+                    <p class="pronunciation" id="wordPronunciation" aria-label="Pronunciation"></p>
                     <p class="definition" id="definition" aria-label="Definition"></p>
                     <p class="example" id="example" aria-label="Example sentence"></p>
                     <button class="btn-primary" id="speakWord" aria-label="Pronounce the word">🔊 Pronounce</button>
@@ -436,6 +448,47 @@
                 </div>
             </div>
         </section>
+
+        <!-- Pronunciation Section (US-401 / FR-PRN-1, FR-PRN-2, FR-PRN-6, FR-PRN-9).
+             A shell only: loadPronunciationPair() in app.js renders one vowel
+             minimal-pair set from data/pronunciation/vowels-stress.js into
+             #pronunciationTeaching, #pronunciationDrill and #pronunciationProduce.
+
+             There is deliberately NO .diff-btn group here: the pair sets are
+             authored once from the Telugu-L1 interference table, not per tier,
+             and js/core/sections.js records that as `hasDifficulty: false`.
+
+             #pronunciationStatus is created at runtime by
+             updateCompletionIndicator(), which inserts it after the h2 below —
+             so that h2 must stay a DIRECT child of this section. -->
+        <section id="pronunciation" class="section" role="region" aria-labelledby="pronunciation-title">
+            <h2 id="pronunciation-title">🗣️ Pronunciation</h2>
+            <div class="pron-container">
+                <div class="exercise-card pron-lesson" role="article" aria-labelledby="pronunciationPairTitle">
+                    <h3 id="pronunciationPairTitle">Loading...</h3>
+                    <div id="pronunciationTeaching" aria-label="The two sounds, and how to feel the difference"></div>
+                </div>
+
+                <div class="exercise-card pron-drill" role="form" aria-labelledby="pronunciation-drill-title">
+                    <h3 id="pronunciation-drill-title">Which word did you hear?</h3>
+                    <p class="instruction">Press play, then pick the word. A wrong answer replays both words slowly and names the difference — and you can try again straight away.</p>
+                    <div id="pronunciationDrill" aria-label="Discrimination drill"></div>
+                </div>
+
+                <div class="exercise-card pron-produce" role="group" aria-labelledby="pronunciation-produce-title">
+                    <h3 id="pronunciation-produce-title">Now say it yourself</h3>
+                    <div id="pronunciationProduce" aria-label="Speaking task"></div>
+                </div>
+
+                <div class="exercise-card">
+                    <div class="navigation-buttons" role="navigation" aria-label="Pronunciation pair navigation">
+                        <button class="btn-secondary" id="prevPronunciation" aria-label="Previous sound pair">← Previous</button>
+                        <button class="btn-primary" id="nextPronunciation" aria-label="Next sound pair">Next →</button>
+                    </div>
+                    <div class="feedback" id="pronunciationFeedback" role="status" aria-live="polite"></div>
+                </div>
+            </div>
+        </section>
         </main>
     </div>
 
@@ -474,9 +527,14 @@
          fails. -->
     <script src="data/grammar/countability.js"></script>
     <!-- Strand C pronunciation content. Declares `PRONUNCIATION_VOWELS_STRESS`
-         (vowel minimal pairs, word stress, prosody noticing). Not yet read by a
-         section — the Pronunciation section is US-401. -->
+         (vowel minimal pairs, word stress, prosody noticing). The Pronunciation
+         section (US-401) reads `.pairs` from it; `.stress` and `.noticing` are
+         authored and not yet surfaced. -->
     <script src="data/pronunciation/vowels-stress.js"></script>
+    <!-- Consonant pair sets (T-P5 /v/-/w/, T-P6 /θ/-/t/ and /ð/-/d/, T-P10 /z/,
+         T-P11 /f/-/p/). Same schema as vowels-stress.js; pronunciationPairs()
+         concatenates both sources, so order between them does not matter. -->
+    <script src="data/pronunciation/consonants.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

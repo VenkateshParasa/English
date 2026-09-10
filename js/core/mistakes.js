@@ -30,7 +30,8 @@
  *   Mistakes.categories(opts)            -> copies, optionally filtered
  *   Mistakes.getCategory(id)             -> copy of one row, or null
  *   Mistakes.isKnownCategory(id)         -> boolean
- *   Mistakes.categoryIds()               -> every registered id
+ *   Mistakes.categoryIds(opts)           -> registered ids, same filters as categories()
+ *   Mistakes.unknownCategories(ids)      -> the ids in `ids` that are not registered
  *   Mistakes.registerCategories(rows)    -> { added, replaced, rejected } (FR-CNT-3)
  *   Mistakes.resetCategories()           -> back to the built-ins
  *   Mistakes.drillTarget(id)             -> { strand, target, srsKey, label } | null
@@ -210,14 +211,49 @@
             drill: { strand: 'grammar', target: 'present-simple-vs-continuous' }
         },
         {
+            // US-159. This row covers ONE error — an uncountable noun treated
+            // as countable — in all three of the shapes it surfaces in:
+            //
+            //   the -s            "three informations", "advices"
+            //   the article       "an advice", "a work", "a meat"
+            //   the bare number   "three information"
+            //
+            // It used to be labelled for the -s alone, which sent the other two
+            // shapes looking for a home: the articles lesson logged "a work" as
+            // `gram.articles`, the countability lesson logged the same error as
+            // this id, and a learner who met it in both lessons was handed two
+            // findings for one habit. Widening the label rather than adding a
+            // second row is the deliberate call, on three grounds:
+            //
+            //  1. Both shapes need the same remediation. `drill.target` here is
+            //     already `countable-uncountable`, and a separate row would
+            //     have to point at the same drill — so the split would buy the
+            //     learner two half-sized counts and one destination.
+            //  2. `gram.articles` above already merges omission and wrong
+            //     choice for exactly this reason ("article omission, 4.7 times"
+            //     is not a sentence anyone should be handed). Splitting
+            //     countability while merging articles would be incoherent.
+            //  3. The id is NOT renamed, even though it now says "plural" and
+            //     the row covers more than plurals. record() writes this string
+            //     into `mistakeLog`, so a rename orphans every entry already
+            //     stored under it — topCategories keeps such an entry in
+            //     storage but cannot describe it, so the learner's history
+            //     would silently stop being ranked instead of moving. Ids are
+            //     opaque storage keys and are never shown; the label is what
+            //     the learner reads, so the label is what widens.
+            //
+            // The finer grain is not lost: content carries `errorKind`
+            // (`plural-s-on-uncountable` / `uncountable-with-article` /
+            // `number-without-unit-word` / `many-with-uncountable`), which is
+            // authoring and analysis data and is never displayed.
             id: 'gram.uncountable-plural',
             code: 'T-G4',
             strand: 'grammar',
             l1: 'telugu',
             priority: 'M',
-            label: 'Plural "-s" on a word that has no plural',
-            explanation: '"Information", "advice" and "furniture" never take -s in English; the counting happens outside the word.',
-            example: '"three informations" → "three pieces of information"',
+            label: '"-s", "a" or a number on a word English does not count',
+            explanation: '"Information", "advice", "furniture" and "work" name stuff rather than separate items, so nothing that counts goes on the word itself — no -s, no "a", no number in front. The counting moves to a unit word instead.',
+            example: '"three informations" → "three pieces of information"; "I am looking for a work" → "I am looking for a job"',
             drill: { strand: 'grammar', target: 'countable-uncountable' }
         },
         {
@@ -757,6 +793,17 @@
         },
 
         /**
+         * One filter predicate, shared by categories() and categoryIds() so the
+         * two can never disagree about what `{ strand: 'grammar' }` means.
+         */
+        _matches(cat, o) {
+            if (o.strand && cat.strand !== o.strand) return false;
+            if (o.l1 && cat.l1 !== null && cat.l1 !== o.l1) return false;
+            if (typeof o.reportable === 'boolean' && cat.reportable !== o.reportable) return false;
+            return true;
+        },
+
+        /**
          * Registered rows as copies.
          * @param {Object} [opts] - { strand, l1, reportable } filters. `l1` also
          *        matches rows with l1 === null, which are not L1-specific and
@@ -765,17 +812,60 @@
         categories(opts) {
             const o = opts || {};
             return this.categoryList
-                .filter(c => {
-                    if (o.strand && c.strand !== o.strand) return false;
-                    if (o.l1 && c.l1 !== null && c.l1 !== o.l1) return false;
-                    if (typeof o.reportable === 'boolean' && c.reportable !== o.reportable) return false;
-                    return true;
-                })
+                .filter(c => this._matches(c, o))
                 .map(_copyCategory);
         },
 
-        categoryIds() {
-            return this.categoryList.map(c => c.id);
+        /**
+         * Registered ids, optionally filtered exactly as categories() filters.
+         *
+         * The filter exists for content authors (US-160). A content file that
+         * needs "the grammar ids that are live right now" asks
+         * `Mistakes.categoryIds({ strand: 'grammar' })` rather than keeping its
+         * own copy of the list, which is a copy that goes stale the moment a row
+         * is added here — and did: `data/grammar.js`'s MISTAKE_CATEGORIES was
+         * missing `gram.register-indian`, so the guard meant to catch a typo
+         * would have rejected a correct id instead.
+         *
+         * @param {Object} [opts] - as categories(); omit for every id.
+         */
+        categoryIds(opts) {
+            if (!opts) return this.categoryList.map(c => c.id);
+            return this.categoryList.filter(c => this._matches(c, opts)).map(c => c.id);
+        },
+
+        /**
+         * Which of these ids are NOT registered — the author-time typo guard,
+         * asked of the module that owns the taxonomy instead of duplicated as a
+         * literal list somewhere else (US-160).
+         *
+         * A content file or its test collects every `logAs` / `mistakeCategory`
+         * it declares and passes them here; `[]` means they all resolve.
+         * Anything returned would have been REJECTED by record() at runtime —
+         * the mistake would go unlogged rather than land in the wrong bucket —
+         * so this is the check that turns a silent data loss into a failing
+         * test (FR-CNT-1: fail loudly at author time).
+         *
+         * Ids are reported once each, and an empty or non-string entry is
+         * reported as itself stringified, so the message names the offending
+         * value rather than counting how many places repeat it.
+         *
+         * @param {Array|string} ids
+         * @returns {string[]} the unrecognised ids, deduplicated
+         */
+        unknownCategories(ids) {
+            const list = Array.isArray(ids) ? ids : [ids];
+            const out = [];
+            const seen = {};
+            for (let i = 0; i < list.length; i++) {
+                const id = _norm(list[i]);
+                if (this.isKnownCategory(id)) continue;
+                const named = id || String(list[i]);
+                if (seen[named]) continue;
+                seen[named] = true;
+                out.push(named);
+            }
+            return out;
         },
 
         getCategory(id) {

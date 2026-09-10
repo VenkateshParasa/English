@@ -2336,3 +2336,325 @@ header h1 {
         width: 100%;
     }
 }
+
+/* ==========================================================================
+   PRONUNCIATION SECTION (US-401)
+   ==========================================================================
+   Reuses .exercise-card / .btn-* / .feedback / .button-group from the sections
+   above, so this block styles only what is new: the IPA, the phoneme glosses,
+   the articulatory cue, the audio-honesty banner and the locked production task.
+
+   Two rules this block is built around:
+   - IPA must stay legible at 200% zoom and be selectable (methodology §6), so it
+     is sized in `em` against its own line and never set in a smaller font.
+   - Colour is never the only signal: every drill state also carries a ✓ / ✗
+     glyph and its own sentence, and the wrong-answer panel keeps the option
+     buttons live so the retry is on the same screen as the ✗ (FR-A11Y-5). */
+
+.pron-container {
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.pron-meta {
+    font-size: 0.9rem;
+    color: var(--text-secondary, #555);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: var(--space-3, 0.75rem);
+}
+
+/* The one feelable line naming the difference. Same weight as .grammar-rule:
+   this is the sentence the learner should be able to say back. */
+.pron-label {
+    font-size: 1.15rem;
+    line-height: 1.6;
+    padding: var(--space-4, 1rem);
+    background: var(--info-50, #eff6ff);
+    border-left: 4px solid var(--info-500, #3b82f6);
+    border-radius: var(--radius-md, 0.5rem);
+    margin-bottom: var(--space-5, 1.25rem);
+}
+
+/* Every panel in this section whose BACKGROUND is a fixed light tint (--*-50 or
+   --gray-50) pins its text colour as well, including the secondary text nested
+   inside it. Without this, dark mode leaves light-grey text on a near-white
+   panel: the surrounding .exercise-card is fine because it tints from
+   --background-card, which is a theme variable, and these tints are not.
+   Panels that DO use --background-card are deliberately absent from this list so
+   they keep following the theme. (The .grammar-* block above has the same
+   construction and the same latent problem; left alone rather than restyled from
+   a section that has no business touching it.) */
+.pron-label,
+.pron-cue,
+.pron-audio-notice,
+.pron-feedback.is-correct,
+.pron-feedback.is-wrong,
+.pron-locked {
+    color: var(--gray-900, #111827);
+}
+
+.pron-cue .pron-mirror,
+.pron-audio-notice .pron-note,
+.pron-feedback .pron-note,
+.pron-feedback .pron-replay,
+.pron-locked p {
+    color: var(--gray-600, #4b5563);
+}
+
+/* IPA. Slightly larger than body text, not smaller — a symbol the learner has to
+   read character by character is the last thing to shrink. */
+.pron-ipa {
+    font-size: 1.1em;
+    font-family: "Charis SIL", "Doulos SIL", "Gentium Plus", "Segoe UI", system-ui, sans-serif;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+.pron-phonemes {
+    margin: 0 0 var(--space-5, 1.25rem);
+}
+
+.pron-phonemes dt {
+    font-size: 1.2rem;
+    font-weight: 700;
+    margin-top: var(--space-4, 1rem);
+    color: var(--primary-600, #5a67d8);
+}
+
+.pron-keyword {
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: var(--text-secondary, #555);
+}
+
+.pron-phonemes dd {
+    margin: var(--space-2, 0.5rem) 0 0;
+    padding: var(--space-3, 0.75rem);
+    background: var(--background-card, #fff);
+    border: 1px solid var(--gray-200, #e5e7eb);
+    border-radius: var(--radius-md, 0.5rem);
+    line-height: 1.7;
+}
+
+/* The FR-PRN-9 gloss: every symbol shown gets one, so it is styled as part of
+   the symbol rather than as an aside. */
+.pron-gloss {
+    font-weight: 600;
+}
+
+.pron-feel,
+.pron-mirror {
+    color: var(--text-secondary, #555);
+}
+
+/* The articulatory cue is load-bearing (REQUIREMENTS.md §3.3), never decorative,
+   so it gets a panel of its own and is never collapsed. */
+.pron-cue {
+    padding: var(--space-4, 1rem);
+    margin-bottom: var(--space-4, 1rem);
+    background: var(--success-50, #f0fdf4);
+    border-left: 4px solid var(--success-500, #22c55e);
+    border-radius: var(--radius-md, 0.5rem);
+    line-height: 1.7;
+}
+
+.pron-cue h4 {
+    margin: 0 0 var(--space-2, 0.5rem);
+    color: var(--primary-600, #5a67d8);
+}
+
+.pron-cue-inline {
+    padding: var(--space-3, 0.75rem);
+    background: var(--background-card, #fff);
+    border-left: 4px solid var(--success-500, #22c55e);
+    border-radius: var(--radius-md, 0.5rem);
+}
+
+.pron-accuracy {
+    margin-top: var(--space-4, 1rem);
+    padding-top: var(--space-3, 0.75rem);
+    border-top: 1px dashed var(--gray-300, #d1d5db);
+}
+
+.pron-accuracy-own {
+    font-size: 1.05rem;
+}
+
+.pron-accuracy-list,
+.pron-selfcheck {
+    margin: 0 0 var(--space-3, 0.75rem) 1.25rem;
+    line-height: 1.7;
+}
+
+/* AS-3 is unverified, so this banner is not a footnote — it is what the learner
+   needs before deciding whether to trust a miss. `untrusted` is the case where
+   the content itself says a bundled recording is required and none ships. */
+.pron-audio-notice {
+    padding: var(--space-4, 1rem);
+    margin-bottom: var(--space-4, 1rem);
+    border-radius: var(--radius-md, 0.5rem);
+    line-height: 1.7;
+}
+
+.pron-audio-tts {
+    background: var(--gray-50, #f9fafb);
+    border-left: 4px solid var(--gray-400, #9ca3af);
+}
+
+.pron-audio-untrusted,
+.pron-audio-unavailable {
+    background: var(--warning-50, #fffbeb);
+    border-left: 4px solid var(--warning-500, #f59e0b);
+}
+
+.pron-prompt {
+    font-size: 1.1rem;
+    line-height: 1.6;
+    margin-bottom: var(--space-3, 0.75rem);
+}
+
+.pron-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2, 0.5rem);
+    margin: var(--space-3, 0.75rem) 0;
+}
+
+.pron-option {
+    /* 44px minimum, and wider than a grammar option because the two words are
+       the whole question and must be easy to hit without misreading. */
+    min-height: 48px;
+    min-width: 7rem;
+    padding: var(--space-2, 0.5rem) var(--space-4, 1rem);
+    font-size: 1.15rem;
+    font-family: inherit;
+    background: var(--gray-50, #f9fafb);
+    border: 2px solid var(--gray-300, #d1d5db);
+    border-radius: var(--radius-md, 0.5rem);
+    cursor: pointer;
+}
+
+.pron-option:hover:not(:disabled) {
+    border-color: var(--primary-600, #5a67d8);
+}
+
+.pron-option:focus-visible,
+.pron-play:focus-visible {
+    outline: 3px solid var(--info-500, #3b82f6);
+    outline-offset: 2px;
+}
+
+.pron-option.correct {
+    border-color: var(--success-500, #22c55e);
+    background: var(--success-50, #f0fdf4);
+}
+
+.pron-option.incorrect {
+    border-color: var(--error-500, #ef4444);
+    background: var(--error-50, #fef2f2);
+}
+
+.pron-feedback {
+    display: none;
+    margin-top: var(--space-3, 0.75rem);
+    padding: var(--space-4, 1rem);
+    border-radius: var(--radius-md, 0.5rem);
+    line-height: 1.7;
+}
+
+.pron-feedback.visible {
+    display: block;
+}
+
+.pron-feedback.is-correct {
+    background: var(--success-50, #f0fdf4);
+    border: 1px solid var(--success-500, #22c55e);
+}
+
+.pron-feedback.is-wrong {
+    background: var(--error-50, #fef2f2);
+    border: 1px solid var(--error-500, #ef4444);
+}
+
+.pron-feedback p {
+    margin-bottom: var(--space-3, 0.75rem);
+}
+
+.pron-feedback p:last-child {
+    margin-bottom: 0;
+}
+
+.pron-verdict {
+    font-size: 1.15rem;
+}
+
+/* The named feature — the sentence FR-PRN-1 exists for. */
+.pron-feature {
+    font-size: 1.1rem;
+}
+
+.pron-contrast-pair {
+    margin: 0 0 var(--space-3, 0.75rem) 0;
+    padding-left: var(--space-4, 1rem);
+    list-style: none;
+    border-left: 3px solid var(--gray-400, #9ca3af);
+    line-height: 1.9;
+}
+
+.pron-replay,
+.pron-note,
+.pron-fallback-why .pron-note {
+    color: var(--text-secondary, #555);
+}
+
+.pron-cannot {
+    margin-top: var(--space-3, 0.75rem);
+}
+
+/* The FR-PRN-6 gate. Deliberately not a greyed-out copy of the task: the reason
+   for the gate is that the self-check is unusable before the ear is ready, so
+   showing it behind an overlay would defeat the point. It states the threshold,
+   the learner's own numbers, and why — never "locked 🔒" with no reason. */
+.pron-locked {
+    padding: var(--space-4, 1rem);
+    background: var(--gray-50, #f9fafb);
+    border: 1px dashed var(--gray-400, #9ca3af);
+    border-radius: var(--radius-md, 0.5rem);
+    line-height: 1.7;
+}
+
+.pron-locked-head {
+    font-weight: 700;
+    font-size: 1.05rem;
+}
+
+.pron-task {
+    font-size: 1.1rem;
+    line-height: 1.6;
+}
+
+.pron-selfcheck-q {
+    font-size: 1.1rem;
+    font-weight: 600;
+    padding: var(--space-3, 0.75rem);
+    background: var(--background-card, #fff);
+    border-radius: var(--radius-md, 0.5rem);
+}
+
+.pron-produce h4 {
+    margin: var(--space-5, 1.25rem) 0 var(--space-2, 0.5rem);
+    color: var(--primary-600, #5a67d8);
+}
+
+@media (max-width: 600px) {
+    .pron-options {
+        flex-direction: column;
+    }
+
+    .pron-option {
+        width: 100%;
+    }
+}

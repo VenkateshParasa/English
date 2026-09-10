@@ -10,8 +10,10 @@
  * 'undefined'`, never `window.grammarLessons` (which is always undefined).
  *
  * Covers CURRICULUM.md §3 Strand B, per FR-GRM-1…FR-GRM-5.
- * Currently authored: point 3, articles (the US-500 spike). The other 23 points
- * follow this schema exactly; the tier arrays are pre-created and empty so that
+ * Authored here: point 3, articles (the US-500 spike). Point 4, countability,
+ * lives in data/grammar/countability.js and pushes itself into
+ * `grammarLessons.foundation` on load. The remaining 22 points follow this
+ * schema exactly; the tier arrays are pre-created and empty so that
  * `grammarLessons[level]` never throws for a tier with no content yet.
  *
  * -----------------------------------------------------------------------------
@@ -76,9 +78,18 @@
  *                      per-sub-rule accuracy later.
  *   prompt             the sentence(s) with '___' for the gap. Enough context
  *                      that the answer set is closed (authoring guide §3 rule 2).
- *   options            the choices. Every option must be a member of the same
- *                      grammatical set — here always the four article choices,
- *                      so nothing but the article varies.
+ *   options            the choices offered to the learner. Every option must
+ *                      belong to ONE grammatical set, so that nothing but the
+ *                      target form varies between them. The set is chosen per
+ *                      point, not fixed by this schema: the articles point below
+ *                      offers the four article choices (a / an / the /
+ *                      ZERO_ARTICLE), while point 4 in
+ *                      data/grammar/countability.js offers sets like ["advice",
+ *                      "advices", "an advice", "some advices"] and ["much",
+ *                      "many", "a lot of", "a"]. This is what is *offered*, not
+ *                      the full set of right answers: `accept` may also list a
+ *                      defensible answer nobody was shown (FR-GRM-5), and typed
+ *                      input outside `options` is what `fallbackFeedback` is for.
  *   accept             array of EVERY defensible answer, each
  *                      { answer, means }. `means` is what that choice makes the
  *                      sentence mean. FR-GRM-5 lives here: if a second reading
@@ -147,28 +158,61 @@
  *                      review is not always the first practice item.
  *
  * -----------------------------------------------------------------------------
- * SRS PROJECTION CONTRACT — read before wiring US-506
+ * SRS PROJECTION CONTRACT — js/core/srs.js is the authority, not this comment
  * -----------------------------------------------------------------------------
- * `SRS.scheduleItem('gram', lesson.id, lesson, correct)` stores only the fields
- * listed in `PROJECTORS.gram` (js/core/srs.js); everything else is silently
- * dropped from the review card. As of writing that list is
+ * `SRS.scheduleItem('gram', lesson.id, lesson, correct)` does not store the
+ * lesson. It stores a *projection* of it: `PROJECTORS.gram` in js/core/srs.js
+ * names the fields copied onto `rec.data`, and a field absent from that list is
+ * silently dropped from every review record. Nothing throws and nothing fails a
+ * test — the field is simply not there when the card renders.
  *
- *     gram: ['id', 'title', 'explanation', 'example', 'practice', 'difficulty']
+ * So do not read a field list off this comment, and do not paste one back in.
+ * This file does not own the registry, an earlier copy of the list here rotted,
+ * and a reviewer then read the comment instead of the code and reported a
+ * long-fixed defect as live. Ask the code what a given item loses:
  *
- * which does not match this content or the sketch in CONTENT_AUTHORING_GUIDE.md
- * §6: `explanation` and `example` exist in neither, and `rule` and `review` —
- * the two fields a review card actually needs — are not projected. A grammar
- * review would therefore render a title and six practice items with no rule to
- * show on a wrong answer.
+ *     SRS.auditProjection('gram', lesson)
+ *       -> { type, fields, projected, dropped, omitted, phantom, ignored }
  *
- * The minimum a `gram:` review card needs from this schema:
+ *   projected  the review card will see it.
+ *   dropped    YOU AUTHORED IT AND NO CARD WILL EVER SEE IT. This is the bug
+ *              the audit exists to surface; it is never intentional.
+ *   omitted    unprojected on purpose (`DELIBERATE_OMISSIONS.gram`) — see below.
+ *   phantom    the projector asks for a field this lesson does not have. Either
+ *              the projector was edited against a guess, or the content is
+ *              incomplete.
+ *   ignored    identity fields (`NON_CONTENT_FIELDS`: srsType/srsRef/srsKey).
+ *              schedule() lifts them onto the record as type/ref/key, so their
+ *              absence from the payload is not loss.
  *
- *     gram: ['id', 'title', 'cefr', 'rule', 'explain', 'contrast',
- *            'practice', 'review', 'mistakeCategory', 'difficulty']
+ * ADDING A FIELD TO THIS SCHEMA IS THEREFORE TWO EDITS: here, and
+ * `PROJECTORS.gram`. `_project()` runs the same audit on every scheduled item
+ * and warns once per type+field under Node and on localhost (force it either way
+ * with `SRS_PROJECTION_WARNINGS = true|false`), so a Jest run will name the
+ * field you forgot — but only for content something actually schedules.
  *
- * Do not solve this by duplicating fields under both names — two copies of a
- * paragraph drift. Fix the projector, and add any new field here to it at the
- * same time.
+ * Deliberately unprojected — `DELIBERATE_OMISSIONS.gram`, reported as `omitted`.
+ * These are decisions, not oversights; do not "fix" one by widening the
+ * projector:
+ *   notice · decide · whyItMatters · spokenNote · commonErrors
+ *       First-teaching material. A review is by definition not the first
+ *       teaching — FR-GRM-3 wants a due point reviewable "without re-teaching
+ *       the whole lesson", and a card that re-runs the noticing exchange and the
+ *       decision procedure is just the lesson again.
+ *   prerequisites · syllabusNumber · tags
+ *       Authoring and ordering metadata. A card has no use for them.
+ * Every one of these still lives here in the content, so a *lesson* view reads
+ * them from this file directly. Only the review card is projected.
+ *
+ * One field not to go looking for: no grammar point has `difficulty`. `tier`
+ * carries the level (js/core/levels.js ids), and the projector takes it from
+ * there. An earlier draft of this comment recommended adding `difficulty`;
+ * `difficulty`, `explanation` and `example` are precisely the phantom fields a
+ * projector once declared for `gram` while dropping `rule`, and they have been
+ * removed already. Re-adding any of them re-creates that bug.
+ *
+ * And never close a projection gap by duplicating a paragraph under a second
+ * field name — two copies of a paragraph drift. Fix the projector.
  * -----------------------------------------------------------------------------
  */
 
@@ -252,10 +296,33 @@ const grammarLessons = {
             srsKey: "gram:articles",
             mistakeCategory: "gram.articles",
 
-            // Articles need the count/uncount distinction that point 4 teaches.
-            // Advisory only — see the note in GRAMMAR_SAMPLE_REVIEW.md about
-            // whether points 3 and 4 should swap.
-            prerequisites: ["countable-uncountable"],
+            // Deliberately empty, and it has to stay empty in BOTH directions:
+            // point 4 (data/grammar/countability.js) keeps `prerequisites: []`
+            // for the same reason, so there is no 3↔4 edge left to close.
+            //
+            // This point previously listed ["countable-uncountable"], which was
+            // a cycle waiting to happen: this is syllabusNumber 3 and that point
+            // is 4, so the edge made the earlier point require the later one, and
+            // any loader that orders by `prerequisites` either deadlocks or drops
+            // one of the two. GRAMMAR_SAMPLE_REVIEW.md §7.2 is the origin of that
+            // entry ("you cannot choose a/the/zero without countability").
+            //
+            // The dependency it was recording is real but is on the *concept*,
+            // not on point 4 as a lesson, and this point teaches the subset it
+            // needs in place: `decide` step 1 asks "can I count this thing",
+            // p4 turns on uncountable *meat*, p6 on uncountable *work*, and p3's
+            // `alsoNotice` covers *milk*. It is also mutual — point 4 teaches the
+            // article facts it uses ("a" means one, so it cannot precede stuff)
+            // in place for exactly the same reason. A relationship that runs both
+            // ways cannot be a prerequisite edge in either direction, so it is
+            // recorded as prose here and stays out of the graph.
+            //
+            // If a later author decides the full lesson-level dependency IS real,
+            // do not renumber here: CURRICULUM.md §3 Strand B fixes the numbering
+            // (3 = articles, 4 = countability), so the syllabus would be the
+            // thing with the order wrong. Change §3 first, then `syllabusNumber`
+            // on both points to follow it, and only then add the edge.
+            prerequisites: [],
 
             rule: "Before you name a thing, ask what your listener already knows: use **the** when you both have the same one in mind, **a** or **an** when you are introducing one they do not know about yet, and nothing at all when you mean the thing in general or an amount you cannot count.",
 

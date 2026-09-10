@@ -29,45 +29,64 @@ const rows = Sections.SECTIONS;
 const ids = Sections.ids();
 
 describe('registry shape', () => {
-    it('exposes the seven current sections in nav order', () => {
+    it('exposes the eight current sections in nav order', () => {
         expect(ids).toEqual([
             'dashboard', 'vocabulary', 'sentences', 'reading', 'listening', 'puzzles',
             // US-501. Appended, not slotted in after `sentences` where it belongs
             // pedagogically: this order is positional for the Alt+N shortcuts.
-            'grammar'
+            'grammar',
+            // US-401, appended for the same reason — Alt+8. Pronunciation belongs
+            // beside Listening pedagogically and must not go there, because
+            // inserting it would move Puzzles and Grammar for existing learners.
+            'pronunciation'
+        ]);
+    });
+
+    it('appends new sections rather than renumbering the existing ones', () => {
+        // The whole reason both new sections are at the end. If this ever fails,
+        // somebody has silently changed every learner's keyboard shortcuts.
+        expect(ids.slice(0, 7)).toEqual([
+            'dashboard', 'vocabulary', 'sentences', 'reading', 'listening',
+            'puzzles', 'grammar'
         ]);
     });
 
     it('tracks exercises for every section except the dashboard', () => {
         expect(Sections.exerciseIds()).toEqual([
-            'vocabulary', 'sentences', 'reading', 'listening', 'puzzles', 'grammar'
+            'vocabulary', 'sentences', 'reading', 'listening', 'puzzles', 'grammar',
+            'pronunciation'
         ]);
     });
 
     it('has one daily goal per learning section', () => {
         expect(Sections.goalKeys()).toEqual([
-            'vocab', 'sentence', 'reading', 'listening', 'puzzle', 'grammar'
+            'vocab', 'sentence', 'reading', 'listening', 'puzzle', 'grammar',
+            'pronunciation'
         ]);
     });
 
     it('has an index field only for sections walked item by item', () => {
         expect(Sections.indexKeys()).toEqual([
             'currentWordIndex', 'currentSentenceIndex',
-            'currentPassageIndex', 'currentListeningIndex', 'currentGrammarIndex'
+            'currentPassageIndex', 'currentListeningIndex', 'currentGrammarIndex',
+            'currentPronunciationIndex'
         ]);
     });
 
     it('zeroMap covers every learning section', () => {
         expect(Sections.zeroMap('dailyStatKey')).toEqual({
             wordsLearned: 0, sentencesCompleted: 0, readingCompleted: 0,
-            listeningCompleted: 0, puzzlesSolved: 0, grammarCompleted: 0
+            listeningCompleted: 0, puzzlesSolved: 0, grammarCompleted: 0,
+            pronunciationCompleted: 0
         });
         expect(Sections.zeroMap('totalStatKey')).toEqual({
             totalWords: 0, totalSentences: 0, totalReading: 0,
-            totalListening: 0, totalPuzzles: 0, totalGrammar: 0
+            totalListening: 0, totalPuzzles: 0, totalGrammar: 0,
+            totalPronunciation: 0
         });
         expect(Sections.zeroMap('avgKey')).toEqual({
-            words: 0, sentences: 0, reading: 0, listening: 0, puzzles: 0, grammar: 0
+            words: 0, sentences: 0, reading: 0, listening: 0, puzzles: 0,
+            grammar: 0, pronunciation: 0
         });
     });
 
@@ -98,10 +117,11 @@ describe('registry shape', () => {
     });
 
     it('returns null for an unknown id rather than throwing', () => {
-        // Was 'grammar' until US-501 made it a real row. Any id that is not a
-        // section will do; what is being tested is that a miss is null, not a
-        // throw and not an inherited Object property.
-        expect(Sections.get('pronunciation')).toBeNull();
+        // Was 'grammar' until US-501 made it a real row, then 'pronunciation'
+        // until US-401 did the same. Any id that is not a section will do; what
+        // is being tested is that a miss is null, not a throw and not an
+        // inherited Object property.
+        expect(Sections.get('collocations')).toBeNull();
         expect(Sections.get(undefined)).toBeNull();
         // Object.create(null) storage, so inherited names cannot masquerade.
         expect(Sections.get('toString')).toBeNull();
@@ -202,11 +222,34 @@ describe('index.html markup matches the registry', () => {
         }
     );
 
+    it.each(rows.filter(s => s.totalCardId).map(s => [s.id, s.totalCardId]))(
+        '%s has a dashboard #%s .stat-number card',
+        (sectionId, cardId) => {
+            const el = doc.getElementById(cardId);
+            expect(el).not.toBeNull();
+            expect(el.classList.contains('stat-number')).toBe(true);
+        }
+    );
+
     it('loads sections.js before app.js', () => {
         const srcs = Array.from(doc.querySelectorAll('script[src]'))
             .map(s => s.getAttribute('src'));
         // app.js's `state` literal calls Sections.zeroMap() at parse time.
         expect(srcs.indexOf('js/core/sections.js')).toBeGreaterThan(-1);
         expect(srcs.indexOf('js/core/sections.js')).toBeLessThan(srcs.indexOf('app.js'));
+    });
+
+    it('loads every content file a section names before app.js', () => {
+        // A section whose content script is missing or late renders an empty
+        // card and counts nothing — the failure this registry exists to prevent,
+        // one layer down.
+        const srcs = Array.from(doc.querySelectorAll('script[src]'))
+            .map(s => s.getAttribute('src'));
+        const appAt = srcs.indexOf('app.js');
+        ['data.js', 'data/grammar.js', 'data/pronunciation/vowels-stress.js']
+            .forEach(src => {
+                expect(srcs.indexOf(src)).toBeGreaterThan(-1);
+                expect(srcs.indexOf(src)).toBeLessThan(appAt);
+            });
     });
 });

@@ -10,7 +10,10 @@
  *      fixed problem stops being ranked first;
  *   3. retention is bounded, by age and by count;
  *   4. recogniser- and self-sourced entries never enter the ranked diagnosis
- *      (BR-3, FR-SRS-5, FR-PRN-5).
+ *      (BR-3, FR-SRS-5, FR-PRN-5);
+ *   5. a category id is learner data, so a row's WORDING widens and its id
+ *      never changes — and an entry whose id has left the taxonomy is kept and
+ *      unranked, not dropped (US-159).
  *
  * Where a test pins a *policy number* rather than a behaviour it reads the
  * constant off the module, so retuning the policy does not look like a
@@ -189,6 +192,151 @@ describe('registerCategories — a second L1 as data (FR-CNT-3 / BR-10)', () => 
         Mistakes.resetCategories();
         expect(Mistakes.categoryIds()).toHaveLength(builtIn);
         expect(Mistakes.isKnownCategory('gram.hi.progressive-habitual')).toBe(false);
+    });
+});
+
+describe('countability: one error, one routing (US-159 / T-G4)', () => {
+    // "I am looking for a work", "a meat", "an advice" and "three information"
+    // are one habit — an uncountable noun treated as countable — and they used
+    // to arrive under two ids depending on which lesson surfaced them. These
+    // tests pin the decision: ONE row, widened to cover every shape, and the id
+    // left alone because it is in learner storage.
+
+    it('names all three shapes, not only the plural -s', () => {
+        const cat = Mistakes.getCategory('gram.uncountable-plural');
+        // The label is what the learner reads, and it has to be true for
+        // "a work", where no -s is present.
+        expect(cat.label).toMatch(/"a"/);
+        expect(cat.label).toMatch(/-s/);
+        expect(cat.label).toMatch(/number/);
+        // ...and the example teaches both ends of the range.
+        expect(cat.explanation + ' ' + cat.example).toMatch(/a work/);
+        expect(cat.explanation + ' ' + cat.example).toMatch(/information/);
+    });
+
+    it('keeps the shipped id, because record() writes it into learner storage', () => {
+        // Renaming this to something that reads better (gram.uncountable-counted,
+        // say) would orphan every entry already logged under the old string.
+        expect(Mistakes.isKnownCategory('gram.uncountable-plural')).toBe(true);
+        expect(Mistakes.getCategory('gram.uncountable-plural').code).toBe('T-G4');
+    });
+
+    it('sends every shape to the one drill that fixes them', () => {
+        // A second row would have had to point at this same target, so the
+        // split would have bought two half-counts and one destination.
+        expect(Mistakes.drillTarget('gram.uncountable-plural')).toMatchObject({
+            strand: 'grammar',
+            target: 'countable-uncountable',
+            srsKey: 'gram:countable-uncountable'
+        });
+    });
+
+    it('reports ONE finding when both lessons log the same habit', () => {
+        // What the learner sees once data/grammar.js's articles point converges
+        // on this id: five occurrences of one thing, not two rankings of one.
+        Mistakes.record('gram.uncountable-plural', { at: daysAgo(2), given: 'a work' });
+        Mistakes.record('gram.uncountable-plural', { at: daysAgo(2), given: 'a meat' });
+        Mistakes.record('gram.uncountable-plural', { at: daysAgo(1), given: 'an advice' });
+        Mistakes.record('gram.uncountable-plural', { at: daysAgo(1), given: 'a luggage' });
+        Mistakes.record('gram.uncountable-plural', { at: daysAgo(1), given: 'three information' });
+
+        const top = Mistakes.topCategories();
+        expect(top).toHaveLength(1);
+        expect(top[0].id).toBe('gram.uncountable-plural');
+        expect(top[0].count).toBe(5);
+        expect(top[0].share).toBe(1);
+    });
+
+    it('still ranks separately from gram.articles while content has not converged', () => {
+        // Documents the CURRENT state honestly rather than asserting a fix that
+        // needs an edit in data/grammar.js: the articles point still logs
+        // "a work" as gram.articles, so today the learner sees two rows. This
+        // test is the one that flips to a single row when that edit lands.
+        Mistakes.record('gram.articles', { at: daysAgo(2), given: 'a work' });
+        Mistakes.record('gram.uncountable-plural', { at: daysAgo(1), given: 'an advice' });
+        expect(Mistakes.topCategories().map(r => r.id).sort())
+            .toEqual(['gram.articles', 'gram.uncountable-plural']);
+    });
+});
+
+describe('an id that is no longer registered still resolves (id stability)', () => {
+    // Category ids live in learner data. The documented behaviour is that an
+    // entry whose category has gone is KEPT in storage and merely left out of
+    // the ranking — dropping it would destroy history on a content change, and
+    // throwing would cost the learner the app. Any future decision to retire a
+    // routing depends on this holding.
+    const retired = { id: 'gram.retired-routing', strand: 'grammar', label: 'A routing that later went away' };
+
+    it('does not throw, and does not drop the entries', () => {
+        Mistakes.registerCategories(retired);
+        seed('gram.retired-routing', [3, 4]);
+        seed('gram.articles', [3]);
+        expect(Mistakes.topCategories().map(r => r.id)).toContain('gram.retired-routing');
+
+        Mistakes.resetCategories();                 // the row is gone
+        expect(Mistakes.isKnownCategory('gram.retired-routing')).toBe(false);
+
+        expect(() => Mistakes.topCategories()).not.toThrow();
+        expect(Mistakes.topCategories().map(r => r.id)).toEqual(['gram.articles']);
+        expect(Mistakes.stats().entries).toBe(3);
+        expect(Mistakes.entries().filter(e => e.category === 'gram.retired-routing')).toHaveLength(2);
+    });
+
+    it('keeps counting and can still be listed, so nothing is silently lost', () => {
+        Mistakes.registerCategories(retired);
+        seed('gram.retired-routing', [2, 5]);
+        Mistakes.resetCategories();
+        // These two do not consult the taxonomy, by design: the raw log is the
+        // record of what happened, whatever the taxonomy currently says.
+        expect(Mistakes.countsByCategory()['gram.retired-routing'].count).toBe(2);
+        expect(Mistakes.history('gram.retired-routing')).toHaveLength(2);
+    });
+
+    it('ranks again the moment the id is registered again', () => {
+        Mistakes.registerCategories(retired);
+        seed('gram.retired-routing', [1, 2]);
+        Mistakes.resetCategories();
+        expect(Mistakes.topCategories()).toEqual([]);
+        Mistakes.registerCategories(retired);
+        expect(Mistakes.topCategories()[0].id).toBe('gram.retired-routing');
+        expect(Mistakes.topCategories()[0].count).toBe(2);
+    });
+});
+
+describe('the taxonomy answers the typo guard itself (US-160)', () => {
+    // data/grammar.js keeps a literal MISTAKE_CATEGORIES array so an author's
+    // `logAs` typo fails a test. A duplicated list goes stale — that one is
+    // missing gram.register-indian, so the guard would reject a valid id. These
+    // pin the module-side replacement for it.
+
+    it('filters ids by strand, so a content file need not keep its own list', () => {
+        const grammarIds = Mistakes.categoryIds({ strand: 'grammar' });
+        expect(grammarIds).toContain('gram.articles');
+        expect(grammarIds).toContain('gram.register-indian');   // the omission in question
+        expect(grammarIds).toContain('gram.uncountable-plural');
+        expect(grammarIds).not.toContain('prn.v-w');
+        expect(grammarIds.every(id => Mistakes.isKnownCategory(id))).toBe(true);
+        // Unfiltered still means everything, as it always did.
+        expect(Mistakes.categoryIds()).toHaveLength(Mistakes.categoryList.length);
+    });
+
+    it('names the unknown ids and stays quiet when they all resolve', () => {
+        expect(Mistakes.unknownCategories(Mistakes.categoryIds())).toEqual([]);
+        expect(Mistakes.unknownCategories(['gram.articles', 'gram.register-indian'])).toEqual([]);
+        expect(Mistakes.unknownCategories('gram.artcles')).toEqual(['gram.artcles']);
+    });
+
+    it('reports each bad id once, however many places repeat it', () => {
+        expect(Mistakes.unknownCategories([
+            'gram.articles', 'gram.artcles', 'gram.artcles', 'gram.uncountble-plural'
+        ])).toEqual(['gram.artcles', 'gram.uncountble-plural']);
+    });
+
+    it('flags exactly what record() would have refused to log', () => {
+        const bad = 'gram.uncountable-counted';   // a plausible id that does not exist
+        expect(Mistakes.unknownCategories([bad])).toEqual([bad]);
+        expect(Mistakes.record(bad)).toBeNull();
+        expect(Mistakes.stats().entries).toBe(0);
     });
 });
 

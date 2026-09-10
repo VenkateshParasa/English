@@ -53,6 +53,7 @@ const state = {
     currentPassageIndex: 0,
     currentListeningIndex: 0,
     currentGrammarIndex: 0,
+    currentPronunciationIndex: 0,
     currentPuzzle: 'wordsearch',
     vocabProgress: 0,
     // Legacy counters kept for backwards-compatible loading of old saves only.
@@ -74,6 +75,30 @@ const state = {
     // Enhanced progress tracking
     completedExercises: freshCompletedExercises(),
     exerciseHistory: [],
+    /**
+     * Per-phoneme-pair discrimination accuracy — FR-PRN-2.
+     *
+     *     { 'phon:iː-ɪ': { attempts: 12, correct: 10 }, ... }
+     *
+     * Keyed by the SAME key as the pair's SRS record, on purpose: FR-PRN-6 gates
+     * the production task on ~80% accuracy for that pair, and the gate has to be
+     * able to find the counter from the pair.
+     *
+     * Kept here rather than on the SRS record because an SRS record cannot answer
+     * "out of how many". `reps` resets to 0 on every lapse and `lapses` counts
+     * only failures, so attempts are not recoverable from a record — deriving an
+     * accuracy from them would be a made-up number, which is exactly what
+     * TEACHING_METHODOLOGY.md principle 3 forbids. srs.js also projects `data`
+     * through PROJECTORS.phon, so a counter smuggled in there would be silently
+     * dropped anyway.
+     *
+     * Only the AUDIO discrimination drill writes here. The text-only fallback is
+     * graded and useful, but it tests which vowel a word contains, not whether
+     * the learner can hear the contrast — feeding it in would open the FR-PRN-6
+     * gate for a learner who has never heard the difference, which is the exact
+     * perception blind spot the gate exists to close (PROGRESS.md §6.aa).
+     */
+    pronunciationAccuracy: {},
     generatedExercises: {
         sentences: [],
         reading: [],
@@ -375,6 +400,15 @@ function loadProgress() {
                 state[key] = loaded[key] || 0;
             });
             state.exerciseHistory = loaded.exerciseHistory || [];
+
+            // Per-pair discrimination accuracy (FR-PRN-2). Sanitised rather than
+            // trusted: it is the input to the FR-PRN-6 production gate, so a
+            // corrupt or hand-edited record must not be able to unlock a task by
+            // claiming `correct: 999`. Records written before US-401 simply have
+            // no such field, which reads as "no attempts yet" — correct.
+            state.pronunciationAccuracy = sanitizePronunciationAccuracy(
+                loaded.pronunciationAccuracy
+            );
             
             // Restore completed exercises sets
             if (loaded.completedExercises) {
@@ -1935,6 +1969,10 @@ function updateDashboard() {
     // (US-501) and an older cached index.html would not have it.
     const grammarCard = document.getElementById('grammarCompleted');
     if (grammarCard) grammarCard.textContent = state.overallStats.totalGrammar || 0;
+    // Same guard, same reason: this card arrived with the Pronunciation section
+    // (US-401) and an older cached index.html would not have it.
+    const pronCard = document.getElementById('pronunciationCompleted');
+    if (pronCard) pronCard.textContent = state.overallStats.totalPronunciation || 0;
     
     // Daily goals
     Object.keys(state.dailyGoals).forEach(key => {
@@ -1983,6 +2021,10 @@ function updateStatisticsDisplay() {
                 <span>Grammar:</span> <strong>${state.dailyStats.grammarCompleted || 0}</strong>
                 ${getComparisonBadge(state.dailyStats.grammarCompleted || 0, state.overallStats.averageDaily.grammar || 0)}
             </div>
+            <div class="stat-row">
+                <span>Pronunciation:</span> <strong>${state.dailyStats.pronunciationCompleted || 0}</strong>
+                ${getComparisonBadge(state.dailyStats.pronunciationCompleted || 0, state.overallStats.averageDaily.pronunciation || 0)}
+            </div>
         `;
     }
     
@@ -2004,7 +2046,7 @@ function updateStatisticsDisplay() {
                 <span>Total Words:</span> <strong>${state.overallStats.totalWords}</strong>
             </div>
             <div class="stat-row">
-                <span>Total Exercises:</span> <strong>${state.overallStats.totalSentences + state.overallStats.totalReading + state.overallStats.totalListening + state.overallStats.totalPuzzles + (state.overallStats.totalGrammar || 0)}</strong>
+                <span>Total Exercises:</span> <strong>${state.overallStats.totalSentences + state.overallStats.totalReading + state.overallStats.totalListening + state.overallStats.totalPuzzles + (state.overallStats.totalGrammar || 0) + (state.overallStats.totalPronunciation || 0)}</strong>
             </div>
         `;
     }
@@ -2031,6 +2073,9 @@ function updateStatisticsDisplay() {
             </div>
             <div class="stat-row">
                 <span>Grammar:</span> <strong>${state.overallStats.averageDaily.grammar || 0}</strong>
+            </div>
+            <div class="stat-row">
+                <span>Pronunciation:</span> <strong>${state.overallStats.averageDaily.pronunciation || 0}</strong>
             </div>
         `;
     }
@@ -2141,8 +2186,13 @@ function generateVocabularyWord(index, difficulty) {
 // Show the pronunciation line only when we actually have phonetics.
 // Generated words carry no IPA, and an empty element would still take up
 // its margin and render as a blank gap under the word.
+//
+// The element id is `wordPronunciation`, renamed from the bare `pronunciation`
+// in US-401: the section registry's contract is that `#{section id}` IS the
+// section element, and `pronunciation` is now a section. This lookup was the
+// only reader; the `.pronunciation` class it is styled by did not change.
 function setPronunciationDisplay(pronunciation) {
-    const el = document.getElementById('pronunciation');
+    const el = document.getElementById('wordPronunciation');
     if (!el) return;
     const value = pronunciation || '';
     el.textContent = value;
@@ -4635,6 +4685,1342 @@ function initializeGrammarButtons() {
 }
 
 // ============================================
+// PRONUNCIATION SECTION (US-401)
+// ============================================
+//
+// A minimal-pair DISCRIMINATION drill, and deliberately only that.
+// docs/CURRICULUM.md calls it the highest-value pronunciation feature available
+// offline, and REQUIREMENTS.md §6 names it the one speech task this app can grade
+// honestly: we chose the clip, so we know the answer. Everything else in the
+// strand either cannot be graded (production — FR-PRN-5) or does not need audio
+// at all (the `stress` and `noticing` arrays, which this section does NOT render;
+// see the note at the end of this block for what they would need).
+//
+// The four requirements this section implements, and where:
+//   FR-PRN-1  play one word, learner picks which; a miss replays BOTH words
+//             slowed, back to back, and NAMES the differing feature
+//             — renderPronunciationWrong()
+//   FR-PRN-2  accuracy per PAIR, not per item, keyed like the SRS record
+//             — state.pronunciationAccuracy / pronRecordAttempt()
+//   FR-PRN-6  discrimination gates production for that pair
+//             — pronGate() / renderPronunciationProduce()
+//   FR-PRN-9  every IPA symbol shown carries a plain-English gloss
+//             — pronPhonemeBlock(), and `phonemes[].gloss` is the only place a
+//               symbol is ever introduced
+//
+// ⚠️ AS-3 IS UNVERIFIED. Nobody has confirmed that a real device's built-in voice
+// says these pairs differently, and data/pronunciation/vowels-stress.js is
+// authored on the assumption that it may not: every set carries `audio.ttsRisk`,
+// `audio.requiresBundledClip` and a gradable `textOnlyFallback`. There are no
+// bundled clips in this repo, so this section is on TTS today and says so out
+// loud BEFORE the learner answers anything (pronAudioNotice), with one click to
+// the written exercise. A learner whose device audio is useless — or absent —
+// can complete the section from text alone and is never stuck.
+//
+// ⚠️ data/pronunciation/vowels-stress.js is a classic script declaring a LEXICAL
+// global, so `window.PRONUNCIATION_VOWELS_STRESS` is permanently undefined. Every
+// access below goes through a bare `typeof` check, as that file's header requires.
+
+/** Playback rates. The slow one is used for BOTH words of a replayed pair, which
+ *  is PROGRESS.md §6.aa rule 4: compare at matched speed, never fast-vs-slow. */
+const PRON_RATE_NORMAL = 1;
+const PRON_RATE_SLOW = 0.6;
+
+/**
+ * Every authored pair set that this section can actually render, in order.
+ *
+ * TWO SOURCES, ON PURPOSE. `PRONUNCIATION_VOWELS_STRESS.pairs` is the vowel file
+ * (T-P7/8/9) and is wired today. `PRONUNCIATION_CONSONANTS.pairs` is its sibling
+ * — the consonant contrasts, authored to exactly the same `pairs[]` shape — and
+ * is read here the moment index.html loads it, WITHOUT another edit to this file.
+ * It is appended after the vowels rather than interleaved, because
+ * `state.currentPronunciationIndex` and the `pronunciation_foundation_N` exercise
+ * ids are positional: inserting would silently move a learner's completed pairs.
+ * Wiring the consonants is therefore a <script> tag plus a precache entry, and
+ * nothing here.
+ *
+ * A row that cannot be rendered HONESTLY is dropped rather than half-drawn: no
+ * `phonemes` means no FR-PRN-9 gloss and the learner would be shown bare IPA; no
+ * `minimalPairs` means there is no drill; no `contrastFeature` means the
+ * FR-PRN-1 wrong-answer message has nothing to name. Dropping is loud, because a
+ * pair that quietly disappears is a content bug nobody would find.
+ */
+function pronunciationPairs() {
+    const sources = [];
+    if (typeof PRONUNCIATION_VOWELS_STRESS !== 'undefined' && PRONUNCIATION_VOWELS_STRESS) {
+        sources.push(PRONUNCIATION_VOWELS_STRESS.pairs);
+    }
+    if (typeof PRONUNCIATION_CONSONANTS !== 'undefined' && PRONUNCIATION_CONSONANTS) {
+        sources.push(PRONUNCIATION_CONSONANTS.pairs);
+    }
+    const out = [];
+    sources.forEach(list => {
+        if (!Array.isArray(list)) return;
+        list.forEach(p => {
+            if (!p || !p.id) return;
+            const missing = ['phonemes', 'minimalPairs', 'contrastFeature', 'articulatoryCue']
+                .filter(f => !p[f] || (Array.isArray(p[f]) && !p[f].length));
+            if (missing.length) {
+                console.warn('Pronunciation: pair "' + p.id + '" is missing ' +
+                             missing.join(', ') + ', so it cannot be drilled honestly ' +
+                             'and is not shown. Fix the content file.');
+                return;
+            }
+            out.push(p);
+        });
+    });
+    return out;
+}
+
+/**
+ * The content markup convention (`**target form**`, `*cited word*`) is a
+ * repo-wide authoring rule (docs/CONTENT_AUTHORING_GUIDE.md), not a grammar one,
+ * and the pronunciation content uses it too (`lengthNote`, `minimalPairs[].note`).
+ * The three renderers that implement it happen to be named after the section that
+ * needed them first; they are reused verbatim here rather than duplicated,
+ * because two copies of a text renderer drift. Aliased so this section reads
+ * honestly without renaming thirty grammar call sites for no behaviour change.
+ */
+const pronText = appendGrammarText;
+const pronParagraph = grammarParagraph;
+const pronDisclosure = grammarDisclosure;
+
+/**
+ * The SRS/accuracy key for a pair, normalised the way srs.js will normalise it.
+ *
+ * Derived rather than read straight from `pair.srsKey` so the counter and the
+ * scheduler cannot disagree: SRS.scheduleItem() runs the ref through
+ * Migrations.srsRef(), and if the authored key ever stopped matching that, the
+ * FR-PRN-6 gate would read an accuracy counter no drill was writing to — a gate
+ * that silently never opens. The authored key is checked against it instead, so
+ * a mismatch is loud and one line to fix in the content.
+ */
+function pronPairKey(pair) {
+    if (!pair || !pair.id) return '';
+    const key = (window.SRS && typeof SRS._typedKey === 'function')
+        ? SRS._typedKey('phon', pair.id)
+        : 'phon:' + pair.id;
+    const authored = (pair.productionGate && pair.productionGate.requiresKey) || pair.srsKey;
+    if (authored && authored !== key) {
+        console.warn('Pronunciation: pair "' + pair.id + '" declares the SRS key "' +
+                     authored + '" but this build stores it under "' + key +
+                     '". Per-pair accuracy and the FR-PRN-6 gate use "' + key + '".');
+    }
+    return key;
+}
+
+/**
+ * `{ [key]: { attempts, correct } }` with every value forced to a sane shape.
+ *
+ * This is the input to a gate, so it is sanitised on the way in from storage
+ * rather than trusted: `correct` is clamped to `attempts`, both are clamped to
+ * non-negative integers, and anything unrecognisable is dropped. A hand-edited
+ * `{ attempts: 1, correct: 999 }` must not unlock a production task.
+ */
+function sanitizePronunciationAccuracy(raw) {
+    const out = {};
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    Object.keys(raw).forEach(key => {
+        const rec = raw[key];
+        if (!rec || typeof rec !== 'object') return;
+        const attempts = Math.max(0, Math.floor(Number(rec.attempts) || 0));
+        const correct = Math.min(attempts, Math.max(0, Math.floor(Number(rec.correct) || 0)));
+        if (attempts === 0 && correct === 0) return;
+        out[key] = { attempts: attempts, correct: correct };
+    });
+    return out;
+}
+
+/** `{ attempts, correct, rate }` for a pair key. `rate` is null with no attempts —
+ *  "no data" and "0%" are different facts and must not be conflated on screen. */
+function pronAccuracy(key) {
+    const rec = (state.pronunciationAccuracy || {})[key];
+    const attempts = (rec && rec.attempts) || 0;
+    const correct = (rec && rec.correct) || 0;
+    return {
+        attempts: attempts,
+        correct: correct,
+        rate: attempts > 0 ? correct / attempts : null
+    };
+}
+
+/**
+ * Record ONE graded discrimination attempt against the pair (FR-PRN-2).
+ *
+ * Only ever called for a learner's FIRST answer on a drill item. A retry after a
+ * miss is for the mouth, not for the number: re-counting it would let a learner
+ * grind the FR-PRN-6 gate open by pressing the other button, which would put a
+ * self-comparison task in front of exactly the learner it is meant to protect.
+ */
+function pronRecordAttempt(key, correct) {
+    if (!key) return;
+    if (!state.pronunciationAccuracy || typeof state.pronunciationAccuracy !== 'object') {
+        state.pronunciationAccuracy = {};
+    }
+    const rec = state.pronunciationAccuracy[key] || { attempts: 0, correct: 0 };
+    rec.attempts += 1;
+    if (correct) rec.correct += 1;
+    state.pronunciationAccuracy[key] = rec;
+    saveProgress();
+}
+
+/**
+ * FR-PRN-6: is the production/self-comparison task available for this pair?
+ *
+ * Thresholds come from the CONTENT (`productionGate.minAccuracy` /
+ * `.minAttempts`), not from a constant here, because the author is the one who
+ * knows how wide the perception blind spot is for a given contrast. The 0.8 / 10
+ * defaults only apply to a pair that forgot to declare a gate — failing OPEN
+ * there would be the wrong default, so an absent gate still gates.
+ */
+function pronGate(pair) {
+    const gate = (pair && pair.productionGate) || {};
+    const minAccuracy = typeof gate.minAccuracy === 'number' ? gate.minAccuracy : 0.8;
+    const minAttempts = typeof gate.minAttempts === 'number' ? gate.minAttempts : 10;
+    const acc = pronAccuracy(pronPairKey(pair));
+    return {
+        open: acc.attempts >= minAttempts && acc.rate !== null && acc.rate >= minAccuracy,
+        minAccuracy: minAccuracy,
+        minAttempts: minAttempts,
+        attempts: acc.attempts,
+        correct: acc.correct,
+        rate: acc.rate
+    };
+}
+
+/** Can this device speak at all? Feature-detected, never assumed. */
+function pronAudioUsable() {
+    return !!(window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined');
+}
+
+/**
+ * Speak one or more short texts back to back at one rate.
+ *
+ * speechAPI.speak() calls speechSynthesis.cancel() on entry, so calling it twice
+ * in a row plays only the second word — which is precisely the FR-PRN-1 "replay
+ * both, back to back" case. The first text therefore goes through speechAPI (so
+ * rate, lang, and the replay state stay identical to the rest of the app) and the
+ * rest are queued onto the same synthesis queue without cancelling, which is what
+ * that queue is for.
+ *
+ * @returns {boolean} whether anything was actually spoken — the caller uses this
+ *          to tell the learner the truth when nothing came out.
+ */
+function pronSpeak(texts, rate) {
+    const list = (Array.isArray(texts) ? texts : [texts]).filter(t => !!t);
+    if (!list.length || !pronAudioUsable()) return false;
+    try {
+        speechAPI.speak(list[0], rate);
+        for (let i = 1; i < list.length; i++) {
+            const u = new SpeechSynthesisUtterance(list[i]);
+            u.rate = rate;
+            u.lang = 'en-US';
+            window.speechSynthesis.speak(u);
+        }
+        return true;
+    } catch (e) {
+        AppErrorHandler.logError(e, 'pronunciation playback');
+        return false;
+    }
+}
+
+/** A labelled play button. Speaks `texts` at `rate` and says so if nothing plays. */
+function pronPlayButton(label, texts, rate, ariaLabel) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-secondary pron-play';
+    btn.textContent = label;
+    if (ariaLabel) btn.setAttribute('aria-label', ariaLabel);
+    btn.addEventListener('click', () => {
+        if (!pronSpeak(texts, rate)) {
+            Toast.warning('This device could not play that. The written exercise below needs no sound.');
+        }
+    });
+    return btn;
+}
+
+/**
+ * How far the audio can be trusted for this pair, stated before the learner
+ * answers anything rather than after they have collected a miss.
+ *
+ * 'unavailable'  the device cannot speak at all
+ * 'untrusted'    the author marked this set `requiresBundledClip` and no clip
+ *                ships in this repo, so it is running on the one thing they said
+ *                not to trust it on
+ * 'tts'          TTS with a stated risk the learner should know about
+ */
+function pronAudioNotice(pair) {
+    if (!pronAudioUsable()) {
+        return {
+            level: 'unavailable',
+            text: 'This device cannot play audio, so the listening drill is not available. The written exercise below teaches the other half of this problem — which English words use which sound — and needs no sound at all.'
+        };
+    }
+    const audio = (pair && pair.audio) || {};
+    if (audio.requiresBundledClip) {
+        return {
+            level: 'untrusted',
+            text: 'Honest warning before you start: this pair is played by your phone\'s built-in voice, and the author of this content marked it as a set that needs a real recording. **If the two words sound identical on this device, that is far more likely to be the voice than your ear.** Use the written exercise instead — a miss recorded against a voice that cannot say the difference is worse than no score at all.'
+        };
+    }
+    return {
+        level: 'tts',
+        text: 'These clips are your phone\'s built-in voice, not a recording of a person, and nobody has yet checked how well it says this pair on your device. If a word sounds wrong rather than just unfamiliar, trust the written exercise over the audio.'
+    };
+}
+
+/**
+ * Per-render state for the pair on screen. Rebuilt by loadPronunciationPair().
+ *
+ *   items       the drill queue: the pair's authored minimalPairs, in order
+ *   step        which item is on screen
+ *   target      'a' or 'b' — which member was PLAYED (the answer)
+ *   graded      the first answer on this item has been recorded
+ *   wrongSeen   any first-answer miss on this pair since it was loaded
+ *   scheduled   the SRS outcome for this render has been written (write once)
+ *   mode        'audio' (graded, feeds the gate) or 'text' (graded, does not)
+ */
+let pronunciationSession = null;
+
+/**
+ * The lapse half of the SRS contract (TEACHING_METHODOLOGY.md §3: a phoneme pair
+ * resets on a "wrong discrimination choice").
+ *
+ * Written on the FIRST miss and once per render, exactly like the grammar
+ * section: nine misses on one pair are one pair to review, not nine, and a
+ * learner who walks away after the first miss still leaves the evidence.
+ */
+function schedulePronunciationLapse(pair) {
+    if (!pronunciationSession || pronunciationSession.scheduled) return;
+    pronunciationSession.scheduled = true;
+    if (window.SRS && typeof SRS.scheduleItem === 'function') {
+        SRS.scheduleItem('phon', pair.id, pair, false);
+    }
+}
+
+/**
+ * The success half: a clean round extends the interval. Only when the learner
+ * finished every item of this round with no first-answer miss — a pair they got
+ * wrong and then fixed must not buy a longer interval, same rule as grammar and
+ * the same rule as srs.js applies to self-reports.
+ */
+function schedulePronunciationSuccess(pair) {
+    if (!pronunciationSession || pronunciationSession.scheduled ||
+        pronunciationSession.wrongSeen) return;
+    pronunciationSession.scheduled = true;
+    if (window.SRS && typeof SRS.scheduleItem === 'function') {
+        SRS.scheduleItem('phon', pair.id, pair, true);
+    }
+}
+
+/** Log the miss by type so it can be resurfaced (FR-SRS-3, principle 4). */
+function recordPronunciationMistake(pair, item, heard, chosen) {
+    if (typeof Mistakes === 'undefined' || !Mistakes || typeof Mistakes.record !== 'function') return;
+    if (!pair.mistakeCategory) return;
+    Mistakes.record(pair.mistakeCategory, {
+        item: item.a + '/' + item.b,
+        given: chosen,
+        expected: heard,
+        source: 'pronunciationDiscrimination'
+    });
+}
+
+/** `<span class="pron-ipa">` — IPA is marked up so it can be styled legibly at
+ *  200% zoom (FR-A11Y / methodology §6) and is never the only thing on screen. */
+function pronIpa(text) {
+    const span = document.createElement('span');
+    span.className = 'pron-ipa';
+    span.textContent = text;
+    return span;
+}
+
+/**
+ * FR-PRN-9. The two symbols of the pair, each with its plain-English gloss, what
+ * the mouth does, and what the learner can FEEL — the last of these is the
+ * load-bearing one (PROGRESS.md §6.aa rule 2: a learner who cannot yet hear the
+ * contrast can still check their own mouth).
+ *
+ * This is the only place either symbol is introduced, which is what makes the
+ * FR-PRN-9 guarantee hold rather than depend on remembering it at each use.
+ */
+function pronPhonemeBlock(pair) {
+    const list = document.createElement('dl');
+    list.className = 'pron-phonemes';
+    (pair.phonemes || []).forEach(p => {
+        const dt = document.createElement('dt');
+        dt.appendChild(pronIpa(p.symbol));
+        if (p.keyword) {
+            const kw = document.createElement('span');
+            kw.className = 'pron-keyword';
+            kw.textContent = ' as in ' + p.keyword;
+            dt.appendChild(kw);
+        }
+        list.appendChild(dt);
+
+        const dd = document.createElement('dd');
+        // The gloss is the FR-PRN-9 string itself, e.g. '/iː/ — the "ee" in sheep'.
+        dd.appendChild(pronParagraph(p.gloss, 'pron-gloss'));
+        if (p.articulation) dd.appendChild(pronParagraph(p.articulation));
+        if (p.feel) dd.appendChild(pronParagraph(p.feel, 'pron-feel'));
+        if (p.keyword) {
+            const row = document.createElement('div');
+            row.className = 'button-group';
+            row.appendChild(pronPlayButton('▶ Hear ' + p.keyword, p.keyword,
+                PRON_RATE_NORMAL, 'Hear the word ' + p.keyword));
+            row.appendChild(pronPlayButton('▶ Slowly', p.keyword,
+                PRON_RATE_SLOW, 'Hear the word ' + p.keyword + ' slowly'));
+            dd.appendChild(row);
+        }
+        list.appendChild(dd);
+    });
+    return list;
+}
+
+/**
+ * FR-PRN-2's other half: "learner can see per-pair accuracy". The number for the
+ * pair on screen, plus all three pairs, because the whole point of tracking per
+ * pair is that it is the learner's own profile — which contrast is their problem.
+ *
+ * Says "not tried yet" rather than "0%" when there are no attempts: those are
+ * different facts and printing the second for the first is a small lie.
+ */
+function pronAccuracyBlock(pair) {
+    const host = document.createElement('div');
+    host.className = 'pron-accuracy';
+    const own = pronAccuracy(pronPairKey(pair));
+
+    host.appendChild(pronParagraph(
+        own.attempts === 0
+            ? 'You have not tried this pair yet.'
+            : 'On this pair you have picked the right word **' + own.correct +
+              ' of ' + own.attempts + '** times (' + Math.round(own.rate * 100) + '%).',
+        'pron-accuracy-own'
+    ));
+
+    const pairs = pronunciationPairs();
+    if (pairs.length > 1) {
+        host.appendChild(pronDisclosure('Your accuracy on all three pairs', body => {
+            const ul = document.createElement('ul');
+            ul.className = 'pron-accuracy-list';
+            pairs.forEach(p => {
+                const acc = pronAccuracy(pronPairKey(p));
+                const li = document.createElement('li');
+                const name = document.createElement('strong');
+                name.textContent = (p.pair || []).join(' ~ ') || p.id;
+                li.appendChild(name);
+                li.appendChild(document.createTextNode(
+                    acc.attempts === 0
+                        ? ' — not tried yet'
+                        : ' — ' + acc.correct + ' of ' + acc.attempts +
+                          ' (' + Math.round(acc.rate * 100) + '%)'
+                ));
+                ul.appendChild(li);
+            });
+            body.appendChild(ul);
+            body.appendChild(pronParagraph(
+                'Only the listening drill counts here. The written exercise is useful but it does not test your ear, so it is kept out of this number.',
+                'pron-note'
+            ));
+        }));
+    }
+    return host;
+}
+
+/** The teaching card: what the two sounds are, and how to feel the difference. */
+function renderPronunciationTeaching(pair) {
+    const title = document.getElementById('pronunciationPairTitle');
+    if (title) {
+        title.textContent = (pair.pair || []).join(' or ') + ' — ' +
+            (pair.phonemes || []).map(p => p.keyword).filter(Boolean).join(' / ');
+    }
+
+    const host = document.getElementById('pronunciationTeaching');
+    if (!host) return;
+    host.textContent = '';
+
+    const meta = document.createElement('p');
+    meta.className = 'pron-meta';
+    meta.textContent = 'Pair ' + (pronunciationSession.index + 1) + ' of ' +
+        pronunciationSession.total +
+        (pair.code ? ' · ' + pair.code : '') +
+        (pair.difficulty ? ' · ' + pair.difficulty + ' contrast' : '');
+    host.appendChild(meta);
+
+    // The feelable difference in one line. Never the auditory one — that is the
+    // thing the learner cannot yet use.
+    host.appendChild(pronParagraph(pair.label, 'pron-label'));
+    host.appendChild(pronPhonemeBlock(pair));
+
+    // REQUIREMENTS.md §3.3: the articulatory cue is load-bearing, not
+    // decorative, so it is never behind a disclosure.
+    const cue = document.createElement('div');
+    cue.className = 'pron-cue';
+    const cueHead = document.createElement('h4');
+    cueHead.textContent = 'How to feel the difference';
+    cue.appendChild(cueHead);
+    cue.appendChild(pronParagraph(pair.articulatoryCue));
+    if (pair.mirrorCheck) cue.appendChild(pronParagraph(pair.mirrorCheck, 'pron-mirror'));
+    host.appendChild(cue);
+
+    if (pair.lengthNote) {
+        host.appendChild(pronDisclosure('How much can you trust "long versus short"?', body => {
+            body.appendChild(pronParagraph(pair.lengthNote));
+        }));
+    }
+
+    if (Array.isArray(pair.caveats) && pair.caveats.length) {
+        host.appendChild(pronDisclosure('Honest limits of this drill', body => {
+            const ul = document.createElement('ul');
+            pair.caveats.forEach(c => {
+                const li = document.createElement('li');
+                pronText(li, c);
+                ul.appendChild(li);
+            });
+            body.appendChild(ul);
+        }));
+    }
+
+    host.appendChild(pronAccuracyBlock(pair));
+}
+
+// ---------------------------------------------------------------------------
+// The drill (FR-PRN-1)
+// ---------------------------------------------------------------------------
+
+/** Switch this render between the audio drill and the written fallback. */
+function pronSetMode(pair, mode) {
+    pronunciationSession.mode = mode;
+    pronunciationSession.step = 0;
+    // Cleared with the step: `target` is a fact about one item, and carrying it
+    // across a mode switch would make the first word of the new round play
+    // whichever side the abandoned one happened to land on.
+    pronunciationSession.target = null;
+    pronunciationSession.graded = false;
+    renderPronunciationDrill(pair);
+}
+
+/** The banner that tells the learner what the audio is worth, before they answer. */
+function pronNoticeBlock(pair, host) {
+    // Already in the written exercise on a device that CAN speak: the AS-3
+    // warning has done its job and repeating it here would be noise. What the
+    // learner needs at this point is the way back.
+    if (pronunciationSession.mode === 'text' && pronAudioUsable()) {
+        const box = document.createElement('div');
+        box.className = 'pron-audio-notice pron-audio-tts';
+        box.appendChild(pronParagraph('You are on the written exercise, which needs no sound.'));
+        const back = document.createElement('button');
+        back.type = 'button';
+        back.className = 'btn-secondary';
+        back.textContent = 'Back to the listening drill';
+        back.addEventListener('click', () => pronSetMode(pair, 'audio'));
+        box.appendChild(back);
+        host.appendChild(box);
+        return;
+    }
+
+    const notice = pronAudioNotice(pair);
+    const box = document.createElement('div');
+    box.className = 'pron-audio-notice pron-audio-' + notice.level;
+    box.appendChild(pronParagraph(notice.text));
+    if (notice.level !== 'unavailable' && pronunciationSession.mode === 'audio' &&
+        pair.textOnlyFallback) {
+        const swap = document.createElement('button');
+        swap.type = 'button';
+        swap.className = 'btn-secondary';
+        swap.textContent = 'Use the written exercise instead';
+        swap.addEventListener('click', () => pronSetMode(pair, 'text'));
+        box.appendChild(swap);
+    }
+    host.appendChild(box);
+}
+
+/** Render whichever drill this render is running. */
+function renderPronunciationDrill(pair) {
+    const host = document.getElementById('pronunciationDrill');
+    if (!host) return;
+    host.textContent = '';
+
+    pronNoticeBlock(pair, host);
+
+    if (pronunciationSession.mode === 'text') {
+        renderPronunciationTextItem(pair, host);
+    } else {
+        renderPronunciationAudioItem(pair, host);
+    }
+}
+
+/**
+ * One discrimination item: play one word of the pair, learner picks which.
+ *
+ * The word played is chosen at random per item so the answer cannot be learned
+ * from the position of the button. The two option buttons stay in the AUTHORED
+ * order (`a` then `b`), so the learner is choosing between two words and not
+ * between two positions.
+ */
+function renderPronunciationAudioItem(pair, host) {
+    const items = pronunciationSession.items;
+    const item = items[pronunciationSession.step];
+    if (!item) return;
+
+    // Only decided once per item: re-rendering after a retry must replay the
+    // same word, or the retry is a different question.
+    if (!pronunciationSession.target) {
+        pronunciationSession.target = Math.random() < 0.5 ? 'a' : 'b';
+    }
+    const heard = item[pronunciationSession.target];
+
+    const prompt = document.createElement('p');
+    prompt.className = 'pron-prompt';
+    prompt.textContent = 'Word ' + (pronunciationSession.step + 1) + ' of ' + items.length +
+        '. Play it, then choose the word you heard.';
+    host.appendChild(prompt);
+
+    const controls = document.createElement('div');
+    controls.className = 'button-group';
+    controls.appendChild(pronPlayButton('▶ Play', heard, PRON_RATE_NORMAL, 'Play the word'));
+    controls.appendChild(pronPlayButton('▶ Play slowly', heard, PRON_RATE_SLOW, 'Play the word slowly'));
+    host.appendChild(controls);
+
+    const options = document.createElement('div');
+    options.className = 'pron-options';
+    options.setAttribute('role', 'group');
+    options.setAttribute('aria-label', 'Which word did you hear');
+
+    const feedback = document.createElement('div');
+    feedback.className = 'pron-feedback';
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+
+    ['a', 'b'].forEach(side => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'pron-option';
+        btn.textContent = item[side];
+        btn.addEventListener('click', () => {
+            answerPronunciationItem(pair, item, side, btn, options, feedback);
+        });
+        options.appendChild(btn);
+    });
+    host.appendChild(options);
+    host.appendChild(feedback);
+
+    // FR-A11Y-4 / AS-3: an escape hatch that costs the learner nothing and is
+    // not silently recorded as a wrong answer, because it is not one.
+    if (pair.textOnlyFallback) {
+        const cannot = document.createElement('button');
+        cannot.type = 'button';
+        cannot.className = 'btn-secondary pron-cannot';
+        cannot.textContent = 'I cannot hear a difference — switch to the written exercise';
+        cannot.addEventListener('click', () => {
+            Toast.info('Nothing was recorded as wrong. Switching to the written exercise.');
+            pronSetMode(pair, 'text');
+        });
+        host.appendChild(cannot);
+    }
+
+    // Auto-play the item on arrival: it is a listening task, and requiring two
+    // presses to reach the question is friction for no gain. Silent failure is
+    // fine here — the Play buttons above are still there, and the notice block
+    // has already said what to do if nothing comes out.
+    pronSpeak(heard, PRON_RATE_NORMAL);
+}
+
+/** Grade one discrimination answer, then teach. */
+function answerPronunciationItem(pair, item, chosenSide, button, optionsHost, feedbackHost) {
+    if (!pronunciationSession) return;
+    const correct = chosenSide === pronunciationSession.target;
+    const heard = item[pronunciationSession.target];
+    const chosen = item[chosenSide];
+    const firstAnswer = !pronunciationSession.graded;
+
+    optionsHost.querySelectorAll('.pron-option').forEach(b => b.classList.remove('selected'));
+    button.classList.add('selected');
+    button.classList.toggle('correct', correct);
+    button.classList.toggle('incorrect', !correct);
+
+    // FR-PRN-2. First answer only — see pronRecordAttempt().
+    if (firstAnswer) {
+        pronunciationSession.graded = true;
+        pronRecordAttempt(pronunciationSession.key, correct);
+        if (!correct) {
+            pronunciationSession.wrongSeen = true;
+            schedulePronunciationLapse(pair);
+            recordPronunciationMistake(pair, item, heard, chosen);
+        }
+    }
+
+    feedbackHost.textContent = '';
+    feedbackHost.className = 'pron-feedback visible ' + (correct ? 'is-correct' : 'is-wrong');
+
+    if (correct) {
+        renderPronunciationCorrect(pair, item, heard, feedbackHost, firstAnswer);
+    } else {
+        renderPronunciationWrong(pair, item, heard, chosen, feedbackHost, optionsHost, firstAnswer);
+    }
+
+    // The number on the teaching card has just changed, and so may the gate.
+    renderPronunciationTeaching(pair);
+    renderPronunciationProduce(pair);
+}
+
+/**
+ * A right answer. Methodology §2 and §5: confirm the specific thing, do not
+ * praise. So it says which word it was and which sound that is — no "Great job!".
+ */
+function renderPronunciationCorrect(pair, item, heard, feedbackHost, firstAnswer) {
+    const verdict = document.createElement('p');
+    verdict.className = 'pron-verdict';
+    verdict.textContent = '✓ That was ';
+    const word = document.createElement('strong');
+    word.textContent = heard;
+    verdict.appendChild(word);
+    verdict.appendChild(document.createTextNode('. '));
+    verdict.appendChild(pronIpa(
+        pronunciationSession.target === 'a' ? item.aIpa : item.bIpa
+    ));
+    feedbackHost.appendChild(verdict);
+
+    // Which of the two sounds that word contains, with its gloss (FR-PRN-9).
+    // phonemes[0] is `pair[0]` is the `a` member, by the content's own schema.
+    const phoneme = (pair.phonemes || [])[pronunciationSession.target === 'a' ? 0 : 1];
+    if (phoneme) feedbackHost.appendChild(pronParagraph(phoneme.gloss, 'pron-gloss'));
+    if (item.note) feedbackHost.appendChild(pronParagraph(item.note, 'pron-note'));
+
+    if (!firstAnswer) {
+        feedbackHost.appendChild(pronParagraph(
+            'Your first answer on this word is the one that was recorded, so this does not change the number — it is the practice that matters here.',
+            'pron-note'
+        ));
+    }
+
+    feedbackHost.appendChild(pronNextButton(pair));
+}
+
+/**
+ * THE FR-PRN-1 WRONG-ANSWER PATH, in the order the requirement and
+ * TEACHING_METHODOLOGY.md §2 list it:
+ *
+ *   1. what was actually played, and what they chose        (honest, not a scold)
+ *   2. BOTH words replayed back to back and SLOWED          — replayed on arrival
+ *      and re-playable, both at the same rate (§6.aa rule 4)
+ *   3. the differing FEATURE named                          — `contrastFeature`
+ *   4. what to do with the mouth                            — `articulatoryCue`
+ *   5. the mirror check as the retry cue                    — `mirrorCheck`
+ *   6. a retry, on the same screen as the ✗                 — FR-A11Y-5
+ *
+ * `pair.discrimination.wrongAnswer` is NOT rendered here. It reads "Both words
+ * replay back to back and slowed. Name the feature, not the verdict: …" — an
+ * instruction to whoever wires the drill, with the learner-facing sentence quoted
+ * inside it. Printing it verbatim would show the learner the instructions. The
+ * message below is composed from the fields that ARE learner-facing, which is
+ * what that instruction asks for.
+ */
+function renderPronunciationWrong(pair, item, heard, chosen, feedbackHost, optionsHost, firstAnswer) {
+    const verdict = document.createElement('p');
+    verdict.className = 'pron-verdict';
+    verdict.textContent = '✗ That was ';
+    const right = document.createElement('strong');
+    right.textContent = heard;
+    verdict.appendChild(right);
+    verdict.appendChild(document.createTextNode(', not '));
+    const wrong = document.createElement('em');
+    wrong.textContent = chosen;
+    verdict.appendChild(wrong);
+    verdict.appendChild(document.createTextNode('.'));
+    feedbackHost.appendChild(verdict);
+
+    // 2. Both words, back to back, slowed, at one matched rate.
+    const played = pronSpeak([item.a, item.b], PRON_RATE_SLOW);
+    const replay = document.createElement('p');
+    replay.className = 'pron-replay';
+    replay.textContent = played
+        ? 'Playing both slowly, one after the other: ' + item.a + ', then ' + item.b + '.'
+        : 'This device could not replay them. Read on — the difference below is one you can feel without hearing anything.';
+    feedbackHost.appendChild(replay);
+
+    const replayRow = document.createElement('div');
+    replayRow.className = 'button-group';
+    replayRow.appendChild(pronPlayButton(
+        '▶ Play both again, slowly', [item.a, item.b], PRON_RATE_SLOW,
+        'Play ' + item.a + ' and ' + item.b + ' slowly, one after the other'
+    ));
+    feedbackHost.appendChild(replayRow);
+
+    // 3. The feature. This is the sentence FR-PRN-1 exists for.
+    const feature = document.createElement('p');
+    feature.className = 'pron-feature';
+    feature.textContent = 'The difference is ';
+    const named = document.createElement('strong');
+    named.textContent = pair.contrastFeature;
+    feature.appendChild(named);
+    feature.appendChild(document.createTextNode('.'));
+    feedbackHost.appendChild(feature);
+
+    // Which of the two sounds each word has, each with its gloss (FR-PRN-9).
+    const list = document.createElement('ul');
+    list.className = 'pron-contrast-pair';
+    ['a', 'b'].forEach((side, i) => {
+        const phoneme = (pair.phonemes || [])[i];
+        const li = document.createElement('li');
+        const w = document.createElement('strong');
+        w.textContent = item[side];
+        li.appendChild(w);
+        li.appendChild(document.createTextNode(' '));
+        li.appendChild(pronIpa(side === 'a' ? item.aIpa : item.bIpa));
+        if (phoneme) {
+            li.appendChild(document.createTextNode(' — '));
+            pronText(li, phoneme.gloss);
+        }
+        list.appendChild(li);
+    });
+    feedbackHost.appendChild(list);
+
+    // 4 and 5. What to do with the mouth, and how to check it.
+    feedbackHost.appendChild(pronParagraph(pair.articulatoryCue, 'pron-cue-inline'));
+    if (pair.mirrorCheck) {
+        feedbackHost.appendChild(pronParagraph(pair.mirrorCheck, 'pron-mirror'));
+    }
+    if (item.note) feedbackHost.appendChild(pronParagraph(item.note, 'pron-note'));
+
+    if (firstAnswer) {
+        feedbackHost.appendChild(pronParagraph(
+            'This one is recorded as a miss and this pair will come back sooner. Most learners take a while with it — try the same word again now.',
+            'pron-note'
+        ));
+    }
+
+    // 6. Retry, in place, with the options still live (FR-A11Y-5). The panel is
+    // deliberately NOT cleared: the cue, the replay and "Next word" all stay
+    // reachable, so a learner who tries again and still cannot hear it is not
+    // trapped on an item with no way forward. Answering again rebuilds the panel.
+    const retryRow = document.createElement('div');
+    retryRow.className = 'button-group';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn-primary';
+    retry.textContent = 'Play it again and try this word once more';
+    retry.addEventListener('click', () => {
+        optionsHost.querySelectorAll('.pron-option').forEach(b => {
+            b.classList.remove('selected', 'correct', 'incorrect');
+        });
+        pronSpeak(heard, PRON_RATE_NORMAL);
+    });
+    retryRow.appendChild(retry);
+    retryRow.appendChild(pronNextButton(pair));
+    feedbackHost.appendChild(retryRow);
+}
+
+/** "Next word" / "Finish", advancing the round or completing it. */
+function pronNextButton(pair) {
+    const last = pronunciationSession.step >= pronunciationSession.items.length - 1;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = last ? 'btn-primary' : 'btn-secondary';
+    btn.textContent = last ? 'Finish this pair' : 'Next word →';
+    btn.addEventListener('click', () => {
+        if (last) {
+            completePronunciationDrill(pair);
+            return;
+        }
+        pronunciationSession.step += 1;
+        pronunciationSession.target = null;
+        pronunciationSession.graded = false;
+        renderPronunciationDrill(pair);
+    });
+    return btn;
+}
+
+// ---------------------------------------------------------------------------
+// The written fallback (AS-3): gradable, needs no audio, and is honest about
+// what it does not measure
+// ---------------------------------------------------------------------------
+
+/** How a fallback answer is shown. A symbol answer gets its FR-PRN-9 gloss. */
+function pronFallbackLabel(pair, answer) {
+    const phoneme = (pair.phonemes || []).find(
+        p => p && String(p.symbol).replace(/\//g, '') === answer
+    );
+    if (phoneme) return phoneme.gloss;
+    if (answer === 'both') return 'One of each — both sounds are in the word';
+    if (answer === 'neither') return 'Neither of them';
+    return String(answer);
+}
+
+/** The answer space of a fallback: the pair's two symbols, plus any extra the
+ *  items actually use ('both', 'neither'). Never an option no item can be. */
+function pronFallbackOptions(pair) {
+    const items = (pair.textOnlyFallback && pair.textOnlyFallback.items) || [];
+    const used = [];
+    items.forEach(it => {
+        if (it && it.answer != null && used.indexOf(it.answer) === -1) used.push(it.answer);
+    });
+    const symbols = (pair.phonemes || []).map(p => String(p.symbol).replace(/\//g, ''));
+    const ordered = symbols.filter(s => used.indexOf(s) !== -1);
+    used.forEach(a => { if (ordered.indexOf(a) === -1) ordered.push(a); });
+    return ordered;
+}
+
+function renderPronunciationTextItem(pair, host) {
+    const fallback = pair.textOnlyFallback;
+    if (!fallback || !Array.isArray(fallback.items) || !fallback.items.length) {
+        host.appendChild(pronParagraph(
+            'No written exercise is written for this pair yet, so there is nothing here that works without sound.'
+        ));
+        return;
+    }
+
+    const items = fallback.items;
+    const step = Math.min(pronunciationSession.step, items.length - 1);
+    const item = items[step];
+
+    const why = document.createElement('div');
+    why.className = 'pron-fallback-why';
+    why.appendChild(pronParagraph(fallback.prompt, 'pron-prompt'));
+    why.appendChild(pronParagraph(
+        'This is graded and it counts as finishing this pair, but it is deliberately kept out of your listening accuracy: it tests which sound a word has, not whether you can hear the two apart.',
+        'pron-note'
+    ));
+    host.appendChild(why);
+
+    const count = document.createElement('p');
+    count.className = 'pron-prompt';
+    count.textContent = 'Word ' + (step + 1) + ' of ' + items.length + ': ';
+    const word = document.createElement('strong');
+    word.textContent = item.word;
+    count.appendChild(word);
+    host.appendChild(count);
+
+    const options = document.createElement('div');
+    options.className = 'pron-options';
+    options.setAttribute('role', 'group');
+    options.setAttribute('aria-label', 'Which sound does this word have');
+
+    const feedback = document.createElement('div');
+    feedback.className = 'pron-feedback';
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+
+    pronFallbackOptions(pair).forEach(answer => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'pron-option';
+        btn.textContent = pronFallbackLabel(pair, answer);
+        btn.addEventListener('click', () => {
+            const correct = answer === item.answer;
+            options.querySelectorAll('.pron-option').forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+            btn.classList.toggle('correct', correct);
+            btn.classList.toggle('incorrect', !correct);
+
+            feedback.textContent = '';
+            feedback.className = 'pron-feedback visible ' + (correct ? 'is-correct' : 'is-wrong');
+
+            const verdict = document.createElement('p');
+            verdict.className = 'pron-verdict';
+            verdict.textContent = (correct ? '✓ ' : '✗ ') + item.word + ' ';
+            verdict.appendChild(pronIpa(item.ipa));
+            feedback.appendChild(verdict);
+            feedback.appendChild(pronParagraph(
+                pronFallbackLabel(pair, item.answer), 'pron-gloss'
+            ));
+            if (item.hint) feedback.appendChild(pronParagraph(item.hint, 'pron-note'));
+
+            const row = document.createElement('div');
+            row.className = 'button-group';
+            const last = step >= items.length - 1;
+            const next = document.createElement('button');
+            next.type = 'button';
+            next.className = last ? 'btn-primary' : 'btn-secondary';
+            next.textContent = last ? 'Finish this pair' : 'Next word →';
+            next.addEventListener('click', () => {
+                if (last) {
+                    completePronunciationDrill(pair);
+                    return;
+                }
+                pronunciationSession.step = step + 1;
+                renderPronunciationDrill(pair);
+            });
+            row.appendChild(next);
+            // No "back to the audio drill" button here: pronNoticeBlock() puts
+            // one at the top of this card on every render, and two of the same
+            // control on one screen is a way to make the learner wonder whether
+            // they do different things.
+            feedback.appendChild(row);
+        });
+        options.appendChild(btn);
+    });
+
+    host.appendChild(options);
+    host.appendChild(feedback);
+
+    if (fallback.why && step === 0) {
+        host.appendChild(pronDisclosure('Why this is worth doing without audio', body => {
+            body.appendChild(pronParagraph(fallback.why));
+        }));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Completion
+// ---------------------------------------------------------------------------
+
+/**
+ * The call that makes the section count. updateStatistics('pronunciation') reads
+ * the registry row, so `pronunciationCompleted` / `totalPronunciation` / the
+ * `pronunciation` daily average all move with no section-specific code.
+ *
+ * `pronunciationSession.level` is passed to both markExerciseComplete() and
+ * isExerciseCompleted() for the reason US-152 documents: the id must be stamped
+ * with the tier the content actually came from. Pronunciation content is not
+ * tiered at all, so its probe reports it at `foundation` only and every id is
+ * `pronunciation_foundation_N` whatever level button is lit — otherwise one pair
+ * would be completable, and counted, once per tier.
+ */
+function completePronunciationDrill(pair) {
+    const index = pronunciationSession.index;
+    const level = pronunciationSession.level;
+    const alreadyDone = isExerciseCompleted('pronunciation', index, level);
+
+    // Only in the audio drill is a clean round evidence about the learner's ear.
+    if (pronunciationSession.mode === 'audio') schedulePronunciationSuccess(pair);
+
+    if (!alreadyDone) {
+        state.dailyGoals.pronunciation = true;
+        updateStatistics('pronunciation');
+        updateDashboard();
+    }
+    markExerciseComplete('pronunciation', index, level);
+
+    const done = document.getElementById('pronunciationFeedback');
+    if (done) {
+        const gate = pronGate(pair);
+        let msg;
+        if (pronunciationSession.mode === 'text') {
+            msg = 'Written exercise finished. Nothing was claimed about your ear here — when the audio is worth trusting, the listening drill is what moves the number.';
+        } else if (pronunciationSession.wrongSeen) {
+            msg = 'Round finished. This pair will come back sooner, which is the point of getting one wrong.';
+        } else {
+            msg = 'Round finished with every word right first time.';
+        }
+        if (pronunciationSession.mode === 'audio' && !gate.open) {
+            msg += ' Speaking practice for this pair opens at ' +
+                Math.round(gate.minAccuracy * 100) + '% over ' + gate.minAttempts +
+                ' tries — you are at ' + gate.correct + ' of ' + gate.attempts + '.';
+        }
+        // 'success' / 'info', which are the only classes styles.css defines for
+        // .feedback. A finished round with misses in it is `info`, not `error`:
+        // getting one wrong is how the pair earns a shorter interval, and §5 says
+        // do not use a red ✗ without the fix, which was already on the item.
+        showFeedback('pronunciationFeedback', msg,
+            pronunciationSession.wrongSeen ? 'info' : 'success');
+    }
+
+    // Re-run the gate and repaint the ✓ / Retake indicator.
+    renderPronunciationProduce(pair);
+    updateNavigationButtons('pronunciation');
+}
+
+// ---------------------------------------------------------------------------
+// Production / self-comparison (FR-PRN-4, FR-PRN-5), gated by FR-PRN-6
+// ---------------------------------------------------------------------------
+
+/**
+ * The one place in this section that FR-PRN-6 governs, and the only gate in the
+ * app that is allowed to exist (FR-SPK-9: "Only discrimination may gate").
+ *
+ * Below the threshold the task is genuinely unavailable — not greyed out with the
+ * content visible anyway — because the reason for the gate is that a learner who
+ * cannot yet hear a contrast cannot self-judge it, and showing them the
+ * self-check questions is the whole of the task.
+ *
+ * Above it, nothing is scored and no verdict is ever produced about the learner's
+ * voice (FR-PRN-5). The self-check is the AUTHORED articulatory question — what
+ * did your mouth do — never "did it sound right?", which is unanswerable by
+ * exactly the person who needs the answer (PROGRESS.md §6.aa rule 2).
+ */
+function renderPronunciationProduce(pair) {
+    const host = document.getElementById('pronunciationProduce');
+    if (!host) return;
+    host.textContent = '';
+
+    const gate = pronGate(pair);
+
+    if (!gate.open) {
+        const lock = document.createElement('div');
+        lock.className = 'pron-locked';
+        lock.appendChild(pronParagraph(
+            'Speaking practice for this pair is not open yet.', 'pron-locked-head'
+        ));
+        lock.appendChild(pronParagraph(
+            'It opens once you are picking the right word at least ' +
+            Math.round(gate.minAccuracy * 100) + '% of the time on this pair, over at least ' +
+            gate.minAttempts + ' tries. ' +
+            (gate.attempts === 0
+                ? 'You have not tried this pair yet.'
+                : 'You are at ' + gate.correct + ' of ' + gate.attempts + ' (' +
+                  Math.round(gate.rate * 100) + '%).')
+        ));
+        lock.appendChild(pronParagraph(
+            'This is not a reward being withheld. Judging your own pronunciation means hearing the difference first — until then a self-check would only tell you what you already believe.'
+        ));
+        host.appendChild(lock);
+        return;
+    }
+
+    host.appendChild(pronParagraph(
+        'Say ' + (pair.phonemes || []).map(p => '*' + p.keyword + '*').join(' and then ') +
+        ' out loud, in front of a mirror if you can.', 'pron-task'
+    ));
+
+    // §6.aa rule 4: the model is offered at the same slow rate for both words, so
+    // the learner is not comparing a fast clip against their own slow attempt.
+    const row = document.createElement('div');
+    row.className = 'button-group';
+    (pair.phonemes || []).forEach(p => {
+        if (p.keyword) {
+            row.appendChild(pronPlayButton('▶ ' + p.keyword + ', slowly', p.keyword,
+                PRON_RATE_SLOW, 'Hear ' + p.keyword + ' slowly'));
+        }
+    });
+    const both = (pair.phonemes || []).map(p => p.keyword).filter(Boolean);
+    if (both.length === 2) {
+        row.appendChild(pronPlayButton('▶ Both, slowly', both, PRON_RATE_SLOW,
+            'Hear both words slowly, one after the other'));
+    }
+    host.appendChild(row);
+
+    host.appendChild(pronParagraph(pair.articulatoryCue, 'pron-cue-inline'));
+
+    // The self-check. ONE articulatory question, per §6.aa rule 2.
+    const question = (pair.feelChecks || [])[0];
+    if (question) {
+        const h = document.createElement('h4');
+        h.textContent = 'Check yourself';
+        host.appendChild(h);
+        host.appendChild(pronParagraph(question, 'pron-selfcheck-q'));
+
+        const status = document.createElement('div');
+        status.className = 'pron-feedback';
+        status.setAttribute('role', 'status');
+        status.setAttribute('aria-live', 'polite');
+
+        const buttons = document.createElement('div');
+        buttons.className = 'button-group';
+        buttons.setAttribute('role', 'group');
+        buttons.setAttribute('aria-label', 'Self-check');
+
+        const yes = document.createElement('button');
+        yes.type = 'button';
+        yes.className = 'btn-primary';
+        yes.textContent = 'Yes, I felt that';
+        yes.addEventListener('click', () => {
+            // Deliberately not sent to SRS. A learner marking their own speaking
+            // right is not evidence, and srs.js would ignore a self-reported
+            // success anyway (FR-SRS-5) — so pretending to record it would be
+            // theatre.
+            status.className = 'pron-feedback visible is-correct';
+            status.textContent = 'Good — that is the movement to keep. Nothing here is scored: this app never judges your voice.';
+        });
+
+        const notYet = document.createElement('button');
+        notYet.type = 'button';
+        notYet.className = 'btn-secondary';
+        notYet.textContent = 'Not yet / skip this';
+        notYet.addEventListener('click', () => {
+            // FR-SRS-5 / §6.aa rule 6: a self-report may bring an item back
+            // sooner and may never certify it.
+            if (window.SRS && typeof SRS.scheduleItem === 'function') {
+                SRS.scheduleItem('phon', pair.id, pair, false, { selfReported: true });
+                if (typeof updateDueCount === 'function') updateDueCount();
+            }
+            status.className = 'pron-feedback visible';
+            status.textContent = 'Fine — skipping costs you nothing, and this pair will come back sooner so you can try again.';
+        });
+
+        buttons.appendChild(yes);
+        buttons.appendChild(notYet);
+        host.appendChild(buttons);
+        host.appendChild(status);
+    }
+
+    if ((pair.feelChecks || []).length > 1) {
+        host.appendChild(pronDisclosure('More things you can feel', body => {
+            const ul = document.createElement('ul');
+            ul.className = 'pron-selfcheck';
+            pair.feelChecks.slice(1).forEach(q => {
+                const li = document.createElement('li');
+                pronText(li, q);
+                ul.appendChild(li);
+            });
+            body.appendChild(ul);
+        }));
+    }
+
+    // The honest limit, stated rather than implied. §6.aa rule 3 wants A→B→A —
+    // model, your own recording, model again — and this build cannot record you,
+    // so it does not pretend to have done the comparison.
+    host.appendChild(pronParagraph(
+        'This app does not record you, so nothing is played back and nothing is scored. What it can do is tell you what to feel — and when you want to know whether a stranger would understand you, the only honest test is to ask one.',
+        'pron-note'
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Section loader and navigation
+// ---------------------------------------------------------------------------
+
+/**
+ * The section loader, registered as `pronunciation` in Sections.registerRuntime().
+ *
+ * Renders exactly one pair: whichever `state.currentPronunciationIndex` points
+ * at, clamped to what is authored. Synchronous and content-only.
+ */
+function loadPronunciationPair() {
+    const pairs = pronunciationPairs();
+
+    const feedbackEl = document.getElementById('pronunciationFeedback');
+    if (feedbackEl) feedbackEl.className = 'feedback';
+
+    if (!pairs.length) {
+        const title = document.getElementById('pronunciationPairTitle');
+        if (title) title.textContent = 'No sound pairs yet';
+        ['pronunciationTeaching', 'pronunciationDrill', 'pronunciationProduce'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = '';
+        });
+        const host = document.getElementById('pronunciationTeaching');
+        if (host) {
+            host.appendChild(pronParagraph(
+                'The pronunciation content could not be loaded on this device. Everything else still works — try reloading the page.'
+            ));
+        }
+        pronunciationSession = null;
+        updatePronunciationNavigationState(0);
+        return;
+    }
+
+    // Clamp rather than wrap, same reasoning as the grammar section.
+    const index = Math.min(Math.max(0, state.currentPronunciationIndex || 0), pairs.length - 1);
+    state.currentPronunciationIndex = index;
+    const pair = pairs[index];
+
+    pronunciationSession = {
+        pairId: pair.id,
+        key: pronPairKey(pair),
+        level: resolveDifficulty(state.currentDifficulty, 'pronunciation'),
+        index: index,
+        total: pairs.length,
+        // The authored minimal pairs, in order, one per screen. Authored order is
+        // kept on purpose: the first entry of each set is the canonical pair the
+        // content teaches from (sheep/ship, bad/bed, cot/coat).
+        //
+        // ⚠️ NOT filtered by `audio.ttsHint`, and that is a known limitation, not
+        // an oversight. That field says in prose — "Never use *seat/sit* or
+        // *cheap/chip* as a TTS item" — which specific rows are unsafe on a
+        // synthesised voice, and prose is not something this loader can act on
+        // without hardcoding a copy of the content in app.js, which would drift
+        // the moment the pairs are edited. The mitigation today is the honest
+        // banner (pronAudioNotice) plus the one-click written exercise. The fix
+        // is a machine-readable flag on the row itself — `ttsSafe: false` on the
+        // minimalPairs entries — after which this line becomes a filter.
+        items: Array.isArray(pair.minimalPairs) ? pair.minimalPairs.slice() : [],
+        step: 0,
+        target: null,
+        graded: false,
+        wrongSeen: false,
+        scheduled: false,
+        // A device that cannot speak starts in the written exercise, rather than
+        // showing a listening drill with no listening in it.
+        mode: pronAudioUsable() ? 'audio' : 'text'
+    };
+
+    if (!pronunciationSession.items.length && pair.textOnlyFallback) {
+        pronunciationSession.mode = 'text';
+    }
+
+    renderPronunciationTeaching(pair);
+    renderPronunciationDrill(pair);
+    renderPronunciationProduce(pair);
+
+    // Paints #pronunciationStatus (created after the h2 on first use) and is the
+    // reason this section's h2 must stay a direct child.
+    updateNavigationButtons('pronunciation');
+    updatePronunciationNavigationState(pairs.length);
+}
+
+/** Disable the ends of the walk rather than letting Next look broken. */
+function updatePronunciationNavigationState(total) {
+    const prev = document.getElementById('prevPronunciation');
+    const next = document.getElementById('nextPronunciation');
+    const index = state.currentPronunciationIndex || 0;
+    if (prev) prev.disabled = total === 0 || index <= 0;
+    if (next) next.disabled = total === 0 || index >= total - 1;
+}
+
+function initializePronunciationButtons() {
+    const prev = document.getElementById('prevPronunciation');
+    const next = document.getElementById('nextPronunciation');
+
+    if (prev) {
+        prev.onclick = () => {
+            if ((state.currentPronunciationIndex || 0) > 0) {
+                state.currentPronunciationIndex--;
+                loadPronunciationPair();
+                saveProgress();
+            }
+        };
+    }
+
+    if (next) {
+        next.onclick = () => {
+            const total = pronunciationPairs().length;
+            if ((state.currentPronunciationIndex || 0) < total - 1) {
+                state.currentPronunciationIndex++;
+                loadPronunciationPair();
+                saveProgress();
+            }
+        };
+    }
+}
+
+// WHAT THIS SECTION DELIBERATELY DOES NOT BUILD, and what it would need.
+//
+// 1. data/pronunciation/consonants.js. The file exists on disk and is authored to
+//    the same `pairs[]` shape, and pronunciationPairs() above already reads it —
+//    but index.html does NOT load it and this commit does not add the tag,
+//    because that file belongs to another author and is not mine to ship. Wiring
+//    it is two lines and no code: a `<script src="data/pronunciation/consonants.js">`
+//    before app.js, and the same path in service-worker.js STATIC_ASSETS (which
+//    __tests__/unit/assets.test.js enforces). Its five pairs then appear as
+//    Pairs 4–8, after the three vowel pairs, and every existing learner's
+//    `pronunciation_foundation_0..2` ids keep meaning what they meant.
+//
+// 2. `PRONUNCIATION_VOWELS_STRESS.stress` (21 word-stress items, FR-PRN-3) and
+//    `.noticing` (15 rhythm / final-vowel / cluster items, FR-PRN-8) are authored
+//    and rendered nowhere. Neither is a small addition to this file:
+//
+//  - `stress[]` needs three drill modes ('choose-stress', 'choose-syllable-count',
+//    'choose-form'), a syllable renderer that marks primary/secondary/reduced from
+//    `stressNumbers` without parsing the display string, and — the part that is
+//    not UI — a per-word progress model. Every item schedules under the SINGLE key
+//    `phon:word-stress`, so 21 words share one SRS record and per-word accuracy is
+//    not an SRS fact at all. That needs its own counter, like
+//    state.pronunciationAccuracy but keyed by item id, or the section will
+//    remember only "word stress" as one lump.
+//  - `noticing[]` needs SEVEN modes ('count-beats', 'pick-beat-words',
+//    'pick-written-form', 'count-sounds', 'count-syllables', 'sort',
+//    'pick-syllable-count', plus 'match-beat-to-meaning' and
+//    'pick-which-word-you-said' which the file's own header does not list), two of
+//    them multi-select over `tokens` and three graded from `items[].answer` rather
+//    than a `correctIndex`. It also has no projector in srs.js at all:
+//    `phon:rhythm`, `phon:final-vowel` and `phon:cluster` would be scheduled with
+//    PROJECTORS.phon's vowel-pair field list, which matches none of their fields,
+//    so every review card would be empty.
+//
+// One drill that grades one thing honestly is worth more than three half-built
+// ones, so they are left authored and unwired rather than rendered badly.
+
+// ============================================
 // SECTION LOADER REGISTRATION
 // ============================================
 //
@@ -4657,6 +6043,7 @@ Sections.registerRuntime({
     reading: loadReadingPassage,
     listening: loadListeningExercise,
     grammar: loadGrammarPoint,
+    pronunciation: loadPronunciationPair,
     // Wrapped, not bare: puzzles reload whichever sub-puzzle is selected.
     puzzles: () => loadPuzzle(state.currentPuzzle)
 });
@@ -4699,7 +6086,27 @@ Sections.registerContent({
     },
     // The map that motivated all of this: `foundation` has one point, the other
     // three tiers are authored as empty arrays on purpose.
-    grammar: level => grammarLessonsFor(level).length
+    grammar: level => grammarLessonsFor(level).length,
+    // The odd one out: PRONUNCIATION_VOWELS_STRESS.pairs is NOT keyed by level at
+    // all — it is one set of contrasts authored from the Telugu-L1 interference
+    // table, which is why this section has no .diff-btn group.
+    //
+    // Reported at DEFAULT_LEVEL only, and that is a decision rather than an
+    // oversight. This probe is what exerciseLevel() consults to stamp an exercise
+    // id, so answering "yes, at every tier" would give one pair four ids —
+    // `pronunciation_foundation_0` … `pronunciation_fluent_0` — and let the same
+    // drill be completed, ✓-ed and counted once per level button, which is
+    // precisely the double-count US-152 fixed for grammar. Answering only at
+    // `foundation` makes resolveDifficulty(x, 'pronunciation') step down to
+    // `foundation` from anywhere, so every id is `pronunciation_foundation_N`
+    // whatever tier is selected, and the pair counts once.
+    //
+    // It also keeps the app-wide union honest: reporting content at `fluent`
+    // would mark that tier available in every OTHER section's level selector,
+    // because hasContentForLevel() with no section is a union over all probes.
+    pronunciation: level => (level === (typeof DEFAULT_LEVEL === 'string' ? DEFAULT_LEVEL : 'foundation'))
+        ? pronunciationPairs().length
+        : 0
 });
 
 /**
@@ -4956,6 +6363,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeReadingButtons();
     initializeListeningButtons();
     initializeGrammarButtons();
+    initializePronunciationButtons();
     initializePuzzleSelector();
     initializeWordSearchButton();
     initializeCrosswordButtons();
