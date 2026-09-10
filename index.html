@@ -169,6 +169,30 @@
                     <p class="stat-number" id="pronunciationCompleted" aria-live="polite" aria-atomic="true">0</p>
                 </div>
             </div>
+            <!-- What keeps coming back (US-181 / FR-SRS-3, CURRICULUM.md gap 12).
+                 js/core/mistakes.js has always COMPUTED this and nothing has ever
+                 shown it, which is the gap this shell closes.
+
+                 A shell only: renderMistakePanel() in app.js fills these hosts
+                 from Mistakes.topCategories(), and every policy decision — which
+                 number is honest, what counts as evidence, whether a trend can be
+                 named — belongs to that module and is read, never re-derived.
+                   #mistakeList        the ranked rows, with the RAW count
+                   #mistakeUnverified  entries the app will not call a diagnosis,
+                                       reported beside the list and never inside it
+                   #mistakeWindow      what window the figures cover
+
+                 Placed directly after the lifetime totals: this is persona P4's
+                 feature (a fluent speaker who wants a diagnosis, not lessons), and
+                 a diagnosis buried under three stat boxes is not offered. -->
+            <div class="daily-goal mistake-panel" id="mistakePanel" role="region" aria-labelledby="mistake-panel-title">
+                <h3 id="mistake-panel-title">🔍 What keeps coming back</h3>
+                <p>The error types you have actually made most often, from your own answers. Not a score, and nothing here is a mark against you — it is the shortlist worth spending your practice on.</p>
+                <div class="mistake-list" id="mistakeList" aria-live="polite"></div>
+                <p class="mistake-unverified" id="mistakeUnverified" aria-live="polite"></p>
+                <p class="mistake-window" id="mistakeWindow"></p>
+            </div>
+
             <div class="daily-goal" role="complementary" aria-labelledby="daily-goal-title">
                 <h3 id="daily-goal-title">Today's Goal</h3>
                 <p>Complete at least one activity from each category!</p>
@@ -233,14 +257,35 @@
                 <button class="diff-btn" data-level="confident" role="radio" aria-checked="false" aria-label="Confident level, CEFR B2">Confident</button>
                 <button class="diff-btn" data-level="fluent" role="radio" aria-checked="false" disabled aria-disabled="true" aria-label="Fluent level, CEFR C1 — not available yet">Fluent <span class="level-soon">(soon)</span></button>
             </div>
+            <!-- US-177. The review bar drives a TYPED queue now, not a vocabulary
+                 one: startReview() walks SRS.getDue(null), so a due grammar point
+                 or phoneme pair opens here too. Two consequences for this markup.
+
+                 #dueCount is no longer a word count, so the button's aria-label
+                 says "items"; the visible text is unchanged so a returning
+                 learner sees the same control.
+
+                 #reviewHeldBack is the honesty half. SRS may have due items whose
+                 SHAPE this build cannot draw (see REVIEW_RENDERERS in app.js);
+                 they are reported here rather than counted in the badge, because
+                 a badge that promises a longer session than the button opens is
+                 the same trust bug as a false "Perfect!". Empty in the normal
+                 case, which is why it carries no text of its own. -->
             <div class="srs-review-bar" role="region" aria-label="Spaced repetition review">
-                <button class="btn-primary" id="startReview" aria-label="Start reviewing words that are due">
+                <button class="btn-primary" id="startReview" aria-label="Start reviewing the items that are due">
                     🔁 Review Due (<span id="dueCount">0</span>)
                 </button>
                 <button class="btn-secondary" id="exitReview" style="display:none;" aria-label="Exit review mode">✕ Exit Review</button>
                 <span class="srs-status" id="reviewStatus" aria-live="polite"></span>
+                <p class="srs-held-back" id="reviewHeldBack" aria-live="polite"></p>
             </div>
-            <div class="vocab-container">
+            <!-- Typed review cards (grammar points, phoneme pairs, word stress,
+                 prosody noticing) are drawn HERE, and the vocabulary card below is
+                 hidden while one is on screen. A vocabulary review still uses the
+                 word card itself, exactly as it always has — that path is
+                 unchanged, and this host stays empty for it. -->
+            <div class="review-card" id="reviewCard" role="region" aria-label="Review card" hidden></div>
+            <div class="vocab-container" id="vocabContainer">
                 <div class="word-card" id="wordCard" role="article" aria-labelledby="currentWord">
                     <h3 class="word" id="currentWord" aria-live="polite">Loading...</h3>
                     <!-- id renamed from `pronunciation` to `wordPronunciation` in US-401:
@@ -602,6 +647,10 @@
          fails. -->
     <script src="data/grammar/be.js"></script>
     <script src="data/grammar/countability.js"></script>
+    <script src="data/grammar/present-simple-continuous.js"></script>
+    <!-- First `everyday`-tier content: until this, a learner above foundation got no
+         grammar step and no speaking step at all (US-178). -->
+    <script src="data/grammar/present-perfect.js"></script>
     <!-- Strand C pronunciation content. Declares `PRONUNCIATION_VOWELS_STRESS`
          (vowel minimal pairs, word stress, prosody noticing). The Pronunciation
          section (US-401) reads `.pairs` from it; `.stress` and `.noticing` are

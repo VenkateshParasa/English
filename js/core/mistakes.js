@@ -203,6 +203,97 @@
             drill: { strand: 'grammar', target: 'be' }
         },
         {
+            // US-182. A dropped SUBJECT — "Am in a meeting", "Is very good",
+            // "Very good at her job" — is a different error from T-G2 above, and
+            // it had nowhere to go: `gram.copula`'s label ('Dropped "am", "is"
+            // or "are"') is FALSE of a sentence in which the be word is present
+            // and the subject is the missing piece. A learner told "you dropped
+            // am / is / are — 6 times" about six sentences that all contained
+            // am/is/are can check that finding and find it wrong, which costs
+            // more than no finding at all. data/grammar/be.js's author found the
+            // gap, declined to invent an id for it, and documented it in that
+            // file's header instead. This is the row.
+            //
+            // A NEW ROW rather than widening `gram.copula`, which is how US-159
+            // handled `gram.uncountable-plural`. The two cases differ:
+            //  1. The remediation differs. Zero copula is fixed by adding a verb
+            //     English needs and Telugu does not have. A dropped subject is
+            //     fixed by keeping a word Telugu may leave out because its verb
+            //     already carries the person. Same lesson, two habits, two
+            //     different things to notice — where the three shapes of T-G4
+            //     all needed one and the same fix.
+            //  2. A label true of both would have to be vague enough ("a word
+            //     missing from the front of the sentence") to stop being a
+            //     diagnosis, which is the one thing this taxonomy is for.
+            //  3. Nothing moves. Every wrong answer be.js authors today has its
+            //     subject present, so no entry already stored as `gram.copula`
+            //     belongs here. This row adds a destination; it takes nothing
+            //     from the existing one, and hands the learner no half-count of
+            //     a habit that used to be whole.
+            //
+            // `gram.copula` therefore keeps its id AND its wording, untouched.
+            // Its id is in learner storage: record() writes it, and an entry
+            // whose category has left the taxonomy is kept but not ranked, so a
+            // rename would silently stop describing history rather than moving
+            // it.
+            //
+            // `code` is null on purpose. REQUIREMENTS.md §3.2 has no row for
+            // subject omission — T-G2 is copula dropping specifically, and its
+            // own example column is *"I doctor"* / *"He very good"*, both with
+            // the subject present. That is a gap in §3.2, not a code this file
+            // may mint; whoever owns that document should consider a T-G10, and
+            // this row can carry it on the day it exists.
+            //
+            // Priority S, not M, and for a stated reason: §3.2's priorities
+            // track intelligibility, and a dropped subject normally leaves the
+            // sentence understandable because the person is obvious from the
+            // conversation. What it costs is tone. The explanation says that
+            // rather than implying the sentence is broken.
+            //
+            // Finer grain, as elsewhere, belongs in the content's `errorKind`
+            // (`subject-dropped-with-be`, `subject-and-be-dropped`), which is
+            // authoring data and is never displayed.
+            id: 'gram.subject-dropped',
+            code: null,
+            strand: 'grammar',
+            l1: 'telugu',
+            priority: 'S',
+            label: 'A sentence that starts without its subject',
+            explanation: 'Telugu puts the person on the end of the verb, so the subject can be left out and nothing is missing. English keeps that information in the subject word itself, so the word has to be said. English does leave it out in short replies and in writing that is deliberately clipped — "Sounds good", "Can\'t complain", "Back in five" — so this is not always an error; inside a full sentence it usually makes you sound abrupt rather than wrong, and one short word at the front puts it back.',
+            example: '"Am in a meeting until five" → "I\'m in a meeting until five"; "Is very good at her job" → "She\'s very good at her job"',
+            // Target `be`, i.e. CURRICULUM.md §3 Strand B point 1, giving
+            // srsKey `gram:be`.
+            //
+            // Three candidates were considered. A whole-strand drill
+            // (`target: null`) would leave `srsKey` null and offer the learner
+            // the grammar strand rather than a lesson, when a lesson exists that
+            // is already about this exact sentence shape. A point of its own does
+            // not exist and cannot be invented here: `drillTarget()` builds
+            // `srsKey` as `'gram:' + target` with no check that the target is
+            // authored, so naming a slug nothing implements would produce a
+            // button that schedules a lesson the app cannot open — a worse
+            // failure than a slightly broad destination, and an invisible one.
+            //
+            // `be` is where this error is produced, diagnosed and fixed: its
+            // items are audits of what a sentence is missing ("count the verbs"),
+            // its `decide` steps already walk subject → be word → contraction,
+            // and its own header is where the gap was reported from. Two
+            // categories sharing one drill is established practice here, not a
+            // compromise — `gram.tense-agreement` and `gram.verb-form` both
+            // point at `past-simple`, and three rows point at
+            // `question-formation`. The consequence to be aware of: a lapse
+            // logged here resets `gram:be`, the same key `gram.copula` resets.
+            // That is correct while `be` is the only point that teaches the
+            // shape, and it is what makes the count worth keeping separate — one
+            // destination, two findings, because the learner has to be told
+            // which of the two words went missing.
+            //
+            // When a point that teaches subject pronouns or basic sentence
+            // skeleton is authored, this becomes its primary target with `be` as
+            // an `alsoTargets` entry; nothing else in the row changes.
+            drill: { strand: 'grammar', target: 'be' }
+        },
+        {
             id: 'gram.stative-progressive',
             code: 'T-G3',
             strand: 'grammar',

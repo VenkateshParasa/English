@@ -71,6 +71,17 @@ const state = {
     // Spaced-repetition review state
     reviewMode: false,
     reviewQueue: [],
+    /**
+     * Per-CARD state for the typed review (US-177), rebuilt on every draw so an
+     * outcome cannot carry from one card to the next:
+     *   key        the SRS key of the card on screen
+     *   graded     the first answer has been sent to the scheduler (write once)
+     *   wrongSeen  any first-answer miss on this card
+     *   solved     ids of sub-items answered right, for the multi-item cards
+     *   total      how many sub-items this card is asking
+     *   target     which member of a minimal pair was PLAYED, i.e. the answer
+     */
+    reviewCard: null,
     currentVocabWord: null,
     // Enhanced progress tracking
     completedExercises: freshCompletedExercises(),
@@ -99,6 +110,32 @@ const state = {
      * perception blind spot the gate exists to close (PROGRESS.md §6.aa).
      */
     pronunciationAccuracy: {},
+    /**
+     * Per-ITEM accuracy for the pronunciation items that are not pairs — US-177.
+     *
+     *     { 'stress-photograph': { attempts: 4, correct: 3 }, ... }
+     *
+     * Keyed by the CONTENT ITEM ID, not by an SRS key, and that is the whole
+     * reason it exists. All 21 `stress[]` items in
+     * data/pronunciation/vowels-stress.js schedule under the single key
+     * `phon:word-stress`, and the 15 `noticing[]` items share three keys between
+     * them, so one SRS record covers many words. srs.js's own projector note says
+     * so and says what follows: per-word accuracy is NOT an SRS fact and must not
+     * be derived from `reps`/`lapses` (TEACHING_METHODOLOGY.md principle 3 — never
+     * claim more accuracy than we have). `reps` resets to 0 on any lapse and
+     * `lapses` counts only failures, so "3 of 4 on *photograph*" is not
+     * recoverable from a record at all.
+     *
+     * Deliberately a SECOND map rather than more keys inside
+     * pronunciationAccuracy above. That map is the input to the FR-PRN-6
+     * production gate, and the gate reads `phon:<pairId>`; mixing item-level rows
+     * into it would put values a gate iterates beside values it does not, which is
+     * how a gate starts answering a question nobody asked it.
+     *
+     * Sanitised on load by the same sanitizePronunciationAccuracy(), which is
+     * generic over `{ attempts, correct }` and clamps both.
+     */
+    itemAccuracy: {},
     generatedExercises: {
         sentences: [],
         reading: [],
@@ -409,6 +446,12 @@ function loadProgress() {
             state.pronunciationAccuracy = sanitizePronunciationAccuracy(
                 loaded.pronunciationAccuracy
             );
+            // Per-item accuracy for word stress and prosody noticing (US-177).
+            // Same sanitiser, same reasoning, separate map — see the field's own
+            // comment in the `state` literal for why it is not folded into the one
+            // above. Absent on every save written before US-177, which reads as
+            // "nothing attempted yet".
+            state.itemAccuracy = sanitizePronunciationAccuracy(loaded.itemAccuracy);
             
             // Restore completed exercises sets
             if (loaded.completedExercises) {
@@ -2049,6 +2092,11 @@ function updateDashboard() {
     
     // Update statistics display
     updateStatisticsDisplay();
+
+    // The FR-SRS-3 diagnosis (US-181). Painted from the same call as everything
+    // else on this card, so a mistake logged mid-session shows up the next time
+    // the dashboard is drawn rather than only after a reload.
+    renderMistakePanel();
 }
 
 function updateStatisticsDisplay() {
@@ -2103,6 +2151,381 @@ function getComparisonBadge(current, average) {
         return `<span class="badge badge-warning">-${percent}% ⬇️</span>`;
     }
     return `<span class="badge badge-neutral">Average ➡️</span>`;
+}
+
+// ============================================
+// WHAT KEEPS COMING BACK  (US-181 / FR-SRS-3, CURRICULUM.md gap 12)
+// ============================================
+//
+// js/core/mistakes.js has always computed this and nothing has ever rendered it:
+// `Mistakes.record()` is called from the grammar practice, the pronunciation
+// drill, the read-aloud diff and now the typed review, and
+// `Mistakes.topCategories()` had no caller at all. FR-SRS-3's acceptance
+// criterion — "the learner can see their top 5 recurring error types over the
+// last 30 days, with a button to drill each one" — was therefore unmet while the
+// data sat there. This block is the missing half and NOTHING ELSE: every policy
+// question is answered by that module and read, never re-derived here.
+//
+// WHAT THAT MODULE ALREADY DECIDED, AND WHICH THIS HONOURS
+//
+//  1. THE NUMBER ON SCREEN IS `count`, THE RAW ONE. `score` is the
+//     recency-weighted figure the ranking is sorted by and is documented as
+//     "Ordering only. Not for display" — "article omission, 4.7 times" is not a
+//     sentence anyone should be handed. So `score` is never printed, and the ORDER
+//     is taken from the array as returned rather than re-sorted here.
+//  2. RECOGNISER- AND SELF-SOURCED ENTRIES ARE NOT A DIAGNOSIS. They are barred
+//     from the ranked count by evidence class (VERIFIED === 'graded') and, for
+//     `prn.recogniser-missed`, by `reportable: false` as well. They are reported
+//     BESIDE the list, in their own sentence, and never folded into a row's count.
+//     A microphone that could not hear you is not a mistake you made.
+//  3. 'unclear' MEANS UNCLEAR. Below MIN_TREND_EVIDENCE occurrences, or with no
+//     active day in one half of the window, `_trend()` returns 'unclear' — so this
+//     renders no arrow and no direction, and says what was actually compared
+//     (`trendBasis`) instead of asserting a cause.
+//  4. `drillTarget(id)` DECIDES WHETHER THERE IS A BUTTON. `drillable === false`
+//     means there is nothing honest to drill and the UI "must read that as 'do not
+//     offer a button', not as an error". This goes one step further, because a
+//     routable target is not the same as a target THIS BUILD can open: see
+//     mistakeDrillDestination().
+//
+// TONE. This is persona P4's feature — Anusha, C1, fluent for fifteen years,
+// nobody has ever told her what marks her out — and she came for a diagnosis, not
+// for lessons. TEACHING_METHODOLOGY.md §5: addressed as *you*, specific, framed
+// as normal and temporary, no blame and no gamification. There is no score here,
+// no streak, no "you need to work on", and the labels and explanations are the
+// author's own words from the taxonomy rather than anything written at this layer.
+
+/**
+ * Where "practise this" can actually go, per strand.
+ *
+ * A category is `drillable` when the taxonomy names a strand, which is a claim
+ * about the CURRICULUM, not about this build. Offering a button that lands
+ * somewhere unrelated — "practise your tag questions" opening the articles
+ * lesson because `question-formation` is not authored yet — is worse than no
+ * button, so each route may refuse, and a refusal is shown as a short honest
+ * line instead.
+ *
+ * ONE CATEGORY MAY HAVE MORE THAN ONE DESTINATION, which is why this returns a
+ * LIST. `drillTarget()` documents it: `prn.th` is a single error type (T-P6) that
+ * consonants.js authors as two pair sets, `θ-t` and `ð-d`, because the voiced and
+ * voiceless halves need different word lists — so `srsKeys` is two keys and a UI
+ * that reads only `srsKey` sends a learner whose /ð/ misses piled up to the /θ/
+ * drill. Every destination that resolves is offered, in the authored order.
+ *
+ * @returns {Array} [{ label, open }, ...]; empty when nothing here drills it.
+ */
+function mistakeDrillDestinations(drill) {
+    if (!drill || !drill.strand) return [];
+
+    if (drill.strand === 'grammar') {
+        // The target is a data/grammar.js lesson id. Only offered when that point
+        // is authored at the tier the grammar section would show.
+        const level = resolveDifficulty(state.currentDifficulty, 'grammar');
+        const lessons = grammarLessonsFor(level);
+        return (drill.targets || [drill.target])
+            .map(target => lessons.filter(l => l && l.id === target)[0])
+            .filter(Boolean)
+            .map(lesson => ({
+                label: 'Practise this — the point on "' + lesson.title + '"',
+                open: () => openGrammarPointById(lesson.id)
+            }));
+    }
+
+    if (drill.strand === 'pronunciation') {
+        // Two kinds of destination, and `srsKeys` is what distinguishes them. A
+        // pair id (`iː-ɪ`, `ð-d`) is the discrimination drill in the pronunciation
+        // section; `word-stress`, `rhythm`, `final-vowel` and `cluster` name
+        // content that has no section and IS drawn by the typed review cards, so
+        // they open a drill made of those cards.
+        const targets = (drill.targets && drill.targets.length) ? drill.targets : [drill.target];
+        const out = [];
+        targets.forEach(target => {
+            const pair = pronPairById(target);
+            if (pair) {
+                out.push({
+                    label: 'Practise this — the ' + (pair.pair || [pair.id]).join(' ~ ') + ' drill',
+                    open: () => openPronunciationPairById(pair.id)
+                });
+                return;
+            }
+            const key = 'phon:' + target;
+            if (drillReviewItems(key).length) {
+                out.push({
+                    label: 'Practise this — a short drill on ' + String(target).replace(/-/g, ' '),
+                    open: () => startDrillReview(key)
+                });
+            }
+        });
+        return out;
+    }
+
+    if (drill.strand === 'vocabulary') {
+        // The vocabulary rows declare `target: null`, which drillTarget()
+        // documents as "a whole strand, not one addressable item". The strand IS
+        // the destination, so this is the authored intent rather than a fudge.
+        return [{ label: 'Practise this — more vocabulary', open: () => switchSection('vocabulary') }];
+    }
+
+    // collocation  no content exists (data/collocations.js is not written).
+    // listening    FR-LSN-1: nothing in this build asks a comprehension question,
+    //              so neither `lsn.gist` nor `lsn.detail` has a destination.
+    // reading      the reading section has comprehension questions, but nothing
+    //              in it targets inference, so `rdw.inference` would land on an
+    //              unrelated passage.
+    return [];
+}
+
+/**
+ * The content items a `phon:` drill key covers, for the shapes the review cards
+ * draw — word stress and prosody noticing.
+ *
+ * Ordered WEAKEST FIRST from state.itemAccuracy, with never-tried items ahead of
+ * ones already answered right: the drill is a response to a recurring error, so
+ * the words the learner actually keeps missing are the ones worth the five slots.
+ * Untried items sort before a 100% one and after a 0% one, because "no data" and
+ * "always right" are different facts and only one of them is a reason to skip.
+ */
+function drillReviewItems(srsKey) {
+    const out = pronContentList('stress').concat(pronContentList('noticing'))
+        .filter(entry => entry && entry.srsKey === srsKey);
+    return out.slice().sort((a, b) => {
+        const ra = itemAccuracy(a.id).rate;
+        const rb = itemAccuracy(b.id).rate;
+        const va = ra === null ? 0.5 : ra;
+        const vb = rb === null ? 0.5 : rb;
+        return va - vb;
+    });
+}
+
+/** How many items one drill asks. Five is the review cap's quarter and about two
+ *  minutes; a 21-item drill is a lesson, and this is not one. */
+const DRILL_REVIEW_MAX = 5;
+
+/**
+ * Open a review made of content rather than of due records — the drill button's
+ * destination for word stress and prosody.
+ *
+ * WHY IT IS A SYNTHESISED QUEUE AND NOT A CALL TO getDue(). Nothing in the build
+ * schedules `phon:word-stress` / `phon:rhythm` / `phon:final-vowel` /
+ * `phon:cluster` yet, so there is no record to be due and the drill has to be
+ * able to create the first one. Each entry is shaped exactly like a getDue()
+ * entry so the SAME renderers draw it, with `shape` asked of SRS.shapeOf() rather
+ * than assumed, and the schedule context read from the real record when one
+ * exists. `data` is the FULL authored item here, which is a superset of what the
+ * projector would carry — so a card drawn this way shows at least what a card
+ * drawn from a record shows, never less.
+ *
+ * Answering writes through SRS.scheduleItem() exactly as any other review card
+ * does, so the item then becomes genuinely due and reviewable on its own.
+ */
+function startDrillReview(srsKey) {
+    const items = drillReviewItems(srsKey).slice(0, DRILL_REVIEW_MAX);
+    if (!items.length) return false;
+
+    const queue = [];
+    items.forEach(content => {
+        const shape = (window.SRS && typeof SRS.shapeOf === 'function')
+            ? SRS.shapeOf('phon', content)
+            : null;
+        const entry = {
+            type: 'phon',
+            shape: shape,
+            ref: content.srsRef || String(srsKey).split(':')[1],
+            key: srsKey,
+            data: content,
+            due: null,
+            interval: 0,
+            reps: 0,
+            lapses: 0,
+            selfReported: false
+        };
+        // Real schedule context when a record exists, so the card's "you have
+        // missed this twice" line is the record's own fact and not invented.
+        const rec = (window.SRS && typeof SRS.getRecord === 'function')
+            ? SRS.getRecord(srsKey) : null;
+        if (rec) {
+            entry.due = rec.due;
+            entry.interval = rec.interval;
+            entry.reps = rec.reps;
+            entry.lapses = rec.lapses || 0;
+            entry.selfReported = !!rec.selfReported;
+        }
+        if (reviewCanDraw(entry)) queue.push(entry);
+    });
+    if (!queue.length) return false;
+
+    // reviewMode BEFORE switchSection, not after: switchSection() runs the
+    // vocabulary loader, which fetches a word and paints it when the promise
+    // settles. That loader bails on `state.reviewMode`, so setting the flag first
+    // is what guarantees it cannot land on top of the card drawn below.
+    state.reviewMode = true;
+    state.reviewQueue = queue;
+    switchSection('vocabulary');
+    setReviewUI(true);
+    loadReviewCard();
+    return true;
+}
+
+/**
+ * Draw the FR-SRS-3 panel. Reads Mistakes and nothing else; safe to call on
+ * every dashboard paint, and a no-op when the module or the markup is absent.
+ */
+function renderMistakePanel() {
+    const host = document.getElementById('mistakeList');
+    if (!host) return;
+    const unverifiedEl = document.getElementById('mistakeUnverified');
+    const windowEl = document.getElementById('mistakeWindow');
+    host.textContent = '';
+    if (unverifiedEl) unverifiedEl.textContent = '';
+    if (windowEl) windowEl.textContent = '';
+
+    if (typeof Mistakes === 'undefined' || !Mistakes ||
+        typeof Mistakes.topCategories !== 'function') {
+        host.appendChild(reviewEl('p',
+            'The mistake log is not loaded on this device, so there is nothing to show here yet.',
+            'mistake-empty'));
+        return;
+    }
+
+    // Defaults are the module's: top 5, 30 days, graded evidence only,
+    // reportable categories only. Passed as nothing rather than restated, so
+    // FR-SRS-3's numbers live in one place.
+    const rows = Mistakes.topCategories();
+    const windowDays = rows.length ? rows[0].windowDays : Mistakes.WINDOW_DAYS;
+
+    if (!rows.length) {
+        host.appendChild(reviewEl('p',
+            'Nothing to show yet — this fills in as you answer things. It needs mistakes the app graded itself, so a few exercises in any section will start it off.',
+            'mistake-empty'));
+    } else {
+        rows.forEach((row, index) => host.appendChild(renderMistakeRow(row, index + 1)));
+    }
+
+    // The unverified figure, in its own sentence and never inside a row's count.
+    // Summed over the SAME window from countsByCategory(), which reports every
+    // category — including the two `reportable: false` ones the ranking excludes —
+    // so this number cannot silently disagree with the list above it.
+    if (unverifiedEl && typeof Mistakes.countsByCategory === 'function') {
+        const counts = Mistakes.countsByCategory({ windowDays: windowDays });
+        const unverified = Object.keys(counts)
+            .reduce((n, id) => n + (counts[id].unverifiedCount || 0), 0);
+        if (unverified > 0) {
+            unverifiedEl.textContent = 'Separately: ' + unverified + ' more thing' +
+                (unverified === 1 ? '' : 's') + ' ' + (unverified === 1 ? 'was' : 'were') +
+                ' logged in the same ' + windowDays + ' days from a speech recogniser, ' +
+                'or from you marking your own work. ' + (unverified === 1 ? 'It is' : 'They are') +
+                ' deliberately not counted above and not ranked: a recogniser that could not ' +
+                'match a word says as much about the microphone and the room as about you, ' +
+                'so it is a hint about where to look, not a finding.';
+        }
+    }
+
+    if (windowEl) {
+        windowEl.textContent = 'Counts are the last ' + windowDays +
+            ' days. The order puts what is happening NOW first, so something you have ' +
+            'stopped doing drops off this list on its own.';
+    }
+}
+
+/** One ranked row: the label, the raw count, the teaching, the trend, the button. */
+function renderMistakeRow(row, rank) {
+    const wrap = reviewEl('div', null, 'mistake-row');
+    wrap.setAttribute('role', 'group');
+
+    const head = reviewEl('p', null, 'mistake-row-head');
+    head.appendChild(reviewEl('span', rank + '.', 'mistake-rank'));
+    head.appendChild(document.createTextNode(' '));
+    head.appendChild(reviewEl('strong', row.label, 'mistake-label'));
+    wrap.appendChild(head);
+
+    // THE NUMBER. `row.count` verbatim — the raw count, per the module's note on
+    // HALF_LIFE_DAYS. `score` is not shown and not shown rounded either.
+    const count = reviewEl('p', null, 'mistake-count');
+    count.appendChild(reviewEl('strong', row.count + ' time' + (row.count === 1 ? '' : 's')));
+    count.appendChild(document.createTextNode(
+        ' in the last ' + row.windowDays + ' days' +
+        (row.daysSinceLast === 0 ? ', the most recent today' :
+         row.daysSinceLast === 1 ? ', the most recent yesterday' :
+         ', the most recent ' + row.daysSinceLast + ' days ago') + '.'));
+    wrap.appendChild(count);
+
+    // Per-row weaker evidence, still separate from the count above it.
+    if (row.unverifiedCount > 0) {
+        wrap.appendChild(reviewEl('p',
+            'Plus ' + row.unverifiedCount + ' the app could not verify, which ' +
+            (row.unverifiedCount === 1 ? 'is' : 'are') + ' not in that number.',
+            'mistake-row-unverified'));
+    }
+
+    if (row.explanation) wrap.appendChild(grammarParagraph(row.explanation, 'mistake-why'));
+    if (row.example) wrap.appendChild(grammarParagraph(row.example, 'mistake-example'));
+
+    wrap.appendChild(renderMistakeTrend(row));
+
+    // THE BUTTON(S) — FR-SRS-3's "with a button to drill each one". More than one
+    // when the category has more than one destination; see
+    // mistakeDrillDestinations().
+    const destinations = row.drillable ? mistakeDrillDestinations(row.drill) : [];
+    if (destinations.length) {
+        const group = reviewEl('div', null, 'button-group');
+        group.setAttribute('role', 'group');
+        group.setAttribute('aria-label', 'Practise ' + row.label);
+        destinations.forEach(destination => {
+            const btn = reviewEl('button', destination.label, 'btn-secondary mistake-drill');
+            btn.type = 'button';
+            btn.addEventListener('click', () => {
+                if (destination.open() === false && window.Toast) {
+                    Toast.info('That practice is not available on this device right now.');
+                }
+            });
+            group.appendChild(btn);
+        });
+        wrap.appendChild(group);
+    } else {
+        // Said plainly. A learner who can see the finding and no way to act on it
+        // is owed the reason, and it is a to-do list for the app, not for them.
+        wrap.appendChild(reviewEl('p',
+            row.drillable
+                ? 'There is no exercise in this version that drills exactly this yet. Knowing it is the pattern is most of the fix in the meantime.'
+                : 'This one has no drill of its own — it is here so you can see it, not to give you homework.',
+            'mistake-no-drill'));
+    }
+    return wrap;
+}
+
+/**
+ * The trend, and NOT an arrow when the module says 'unclear'.
+ *
+ * `_trend()` compares the two halves of the window per ACTIVE DAY and returns
+ * 'unclear' whenever there are fewer than MIN_TREND_EVIDENCE occurrences or a
+ * half with no activity in it. Rendering a confident ⬇️ over four data points
+ * would be the app claiming more than it knows (BR-3), so 'unclear' gets the
+ * comparison it could not make instead of a direction it cannot support.
+ *
+ * Even a named direction is hedged, because `trendBasis` is explicit that the log
+ * stores only mistakes and cannot know how many attempts they came from.
+ */
+function renderMistakeTrend(row) {
+    const basis = row.trendBasis || {};
+    const line = reviewEl('p', null, 'mistake-trend is-' + row.trend);
+    if (row.trend === 'unclear') {
+        line.textContent = 'Too early to say which way this is going — ' +
+            basis.earlierCount + ' in the first half of the window and ' +
+            basis.recentCount + ' in the second is not enough to call a direction.';
+        return line;
+    }
+    const words = {
+        improving: 'Happening less often lately',
+        worsening: 'Happening more often lately',
+        steady: 'About the same across the month'
+    };
+    line.textContent = (words[row.trend] || row.trend) + ' — ' +
+        basis.earlierCount + ' in the first half of the window, ' +
+        basis.recentCount + ' in the second, over ' + basis.earlierActiveDays +
+        ' and ' + basis.recentActiveDays + ' days you practised. ' +
+        'That compares mistakes per day you practised, not per answer, so it is a ' +
+        'rough direction rather than an accuracy rate.';
+    return line;
 }
 
 // ============================================
@@ -2250,7 +2673,7 @@ async function loadVocabularyWord() {
         // session's review step does exactly that: switchSection('vocabulary')
         // runs this loader, then startReview() paints the review card. Writing
         // here would replace the card the learner is answering with an unrelated
-        // word a second later. loadReviewWord() owns the card while review mode
+        // word a second later. loadReviewCard() owns the card while review mode
         // is on, so bail — `finally` below still hides the indicator.
         if (state.reviewMode) return;
 
@@ -2345,14 +2768,170 @@ function initializeVocabularyButtons() {
 }
 
 // ============================================
-// SPACED REPETITION REVIEW MODE
+// SPACED REPETITION REVIEW MODE  (US-171 / US-177)
 // ============================================
+//
+// WHAT CHANGED, AND WHY IT HAD TO CHANGE IN ONE COMMIT
+// ---------------------------------------------------------------------------
+// `startReview()` used to walk `SRS.getDueWords()`, which is vocabulary-only, so
+// a due `gram:` or `phon:` record was scheduled correctly and then never drawn.
+// js/core/srs.js's own report names the four-step switchover that has to land
+// together, or the badge promises a session the button cannot open:
+//
+//   1. startReview() walks SRS.getDue(null) and switches on (type, shape)  → here
+//   2. the badge stops being vocabulary-only                    → updateDueCount()
+//   3. Session SURFACES['srs.review'].types widens              → session.js +
+//                                                        registerSurfaces() below
+//   4. the badge assertion is updated                           → __tests__/unit/
+//
+// STEP 2 IS APPLIED AT THE CALL SITE, NOT IN srs.js. srs.js's comment asks for
+// `dueCount()`'s DEFAULT to become `arguments.length === 0 ? null : type`. That
+// file is outside this change's edit set, so the badge passes `null` explicitly
+// instead: `SRS.dueCount(null)` is the same figure the proposed default would
+// produce, and every existing 0-argument caller keeps the documented
+// vocabulary-only behaviour until srs.js's owner makes that one-line change. The
+// switchover is therefore complete in BEHAVIOUR — the badge counts every type
+// the button can open — without editing a file this commit does not own.
+//
+// THE BADGE IS THE QUEUE, BY CONSTRUCTION
+// `SRS.dueCount(null)` counts everything the SCHEDULER can render. This screen
+// can draw a subset of that: five of the six shapes in SRS.SHAPES (see
+// REVIEW_RENDERERS / REVIEW_UNRENDERABLE below). So the badge is the length of
+// the queue the button actually opens, and the difference between that and
+// `SRS.dueCount(null)` is printed in #reviewHeldBack rather than hidden. Those
+// two numbers are equal in this build — nothing schedules the one shape that is
+// missing — and when they stop being equal the learner is told, which is the
+// behaviour FR-SRS-4 and BR-3 both ask for.
+//
+// A CARD IS DRAWN FROM THE RECORD, SCHEDULED FROM THE CONTENT
+// `item.data` is the PROJECTED payload, so every card renders offline from
+// localStorage alone — that is the property the projector exists to buy. The
+// answer goes back through `SRS.scheduleItem(type, ref, <full content item>,
+// correct)`, with the full item looked up in data/ by `item.data.id`, because
+// that is what heals a record written under an older projector (srs.js's
+// RENDERABLE note) and what a projector-dropped field would otherwise cost.
+// When content cannot be found — a data file that failed to load — the payload
+// is scheduled instead: a review that grades is worth more than one that throws.
 
-// Refresh the "Review Due (N)" badge from the SRS scheduler.
+/** `'phon/stress'` — the (type, shape) pair a renderer is registered under. */
+function reviewShapeKey(item) {
+    if (!item || !item.type) return '';
+    return item.type + '/' + (item.shape || '');
+}
+
+/**
+ * The card kinds this screen can draw, keyed exactly as SRS.SHAPES describes
+ * them. `SRS.getDue()` never returns a null shape, so this table and that
+ * registry are the same six-entry space; anything absent here is declared
+ * below rather than left to fall through to a blank card.
+ */
+const REVIEW_RENDERERS = {
+    'vocab/vocab': renderVocabReviewCard,
+    'gram/gram': renderGramReviewCard,
+    'phon/pair': renderPhonPairReviewCard,
+    'phon/stress': renderPhonStressReviewCard,
+    'phon/noticing': renderPhonNoticingReviewCard
+};
+
+/**
+ * The shapes this build will NOT draw, and why — stated, not silently missing.
+ *
+ * srs.js's PROJECTORS note records that three projector bugs in a row shipped as
+ * "an empty review card offered as a real one". The defence against a fourth is
+ * that an undrawable shape is named here, kept out of the queue, and REPORTED in
+ * #reviewHeldBack. A learner is never handed a card with nothing on it.
+ */
+const REVIEW_UNRENDERABLE = {
+    // RENDERABLE.coll asks for a chunk plus a meaning or example and would
+    // happily admit a record. Nothing can produce one: data/collocations.js does
+    // not exist, no <script> loads it, PROJECTORS.coll is srs.js's own
+    // "still unverified" guess, and no call site in this file schedules `coll`.
+    // Drawing a card from an unverified projector against content nobody has read
+    // is exactly how the `gram`-dropped-`rule` defect happened twice, so the
+    // honest position is to draw nothing and say so.
+    'coll/coll': 'Collocation reviews are not built: there is no collocation content in this build and its payload shape has never been checked against any.'
+};
+
+/** Can this screen draw the item SRS just handed us? */
+function reviewCanDraw(item) {
+    return typeof REVIEW_RENDERERS[reviewShapeKey(item)] === 'function';
+}
+
+/**
+ * The SRS item TYPES this screen can draw at least one shape of — which is what
+ * Session.SURFACES['srs.review'].types has to say, and what stops
+ * Session.countsHeldBack() reporting grammar and pronunciation as held back when
+ * they are not any more. Derived from REVIEW_RENDERERS rather than restated, so
+ * the two cannot drift.
+ */
+function reviewDrawableTypes() {
+    const seen = [];
+    Object.keys(REVIEW_RENDERERS).forEach(key => {
+        const type = key.split('/')[0];
+        if (seen.indexOf(type) === -1) seen.push(type);
+    });
+    return seen;
+}
+
+/**
+ * Today's queue, split into what this screen can draw and what it cannot.
+ * `SRS.getDue(null)` already applies the FR-SRS-4 cap and the round-robin that
+ * keeps three strands represented; neither is re-derived here.
+ */
+function reviewQueueNow(limit) {
+    if (!window.SRS || typeof SRS.getDue !== 'function') {
+        return { queue: [], undrawable: [] };
+    }
+    const due = SRS.getDue(null, (typeof limit === 'number') ? { limit: limit } : undefined) || [];
+    const queue = [];
+    const undrawable = [];
+    due.forEach(item => (reviewCanDraw(item) ? queue : undrawable).push(item));
+    return { queue: queue, undrawable: undrawable };
+}
+
+/**
+ * Refresh the "Review Due (N)" badge, and the held-back line beside it.
+ *
+ * The badge is the length of the queue the button opens — see the block comment
+ * above. `SRS.dueCount(null)` is read as well, and only to compute the gap: it is
+ * the scheduler's own capped total across every type, i.e. step 2 of the
+ * switchover, applied here rather than in srs.js.
+ */
 function updateDueCount() {
     if (!window.SRS) return;
+    const q = reviewQueueNow();
     const el = document.getElementById('dueCount');
-    if (el) el.textContent = SRS.dueCount();
+    if (el) el.textContent = q.queue.length;
+
+    const note = document.getElementById('reviewHeldBack');
+    if (!note) return;
+
+    // `SRS.dueCount(null)` — step 2 of the switchover, applied at the call site
+    // because srs.js is outside this change's edit set. It is the scheduler's own
+    // capped figure across EVERY type, so comparing it with the queue is the whole
+    // honesty check: equal means the badge is the complete backlog, and any
+    // difference is a shape this screen cannot draw. Nothing is inferred from the
+    // queue alone, because then a renderer table that quietly lost an entry would
+    // shrink both numbers together and the gap would never appear.
+    const scheduled = SRS.dueCount(null);
+    if (scheduled === q.queue.length || !q.undrawable.length) {
+        note.textContent = '';
+        return;
+    }
+    // Grouped by shape so the reason can be the shape's own, and counted so the
+    // learner knows the work exists. Nothing is rescheduled or dropped.
+    const byShape = {};
+    q.undrawable.forEach(item => {
+        const key = reviewShapeKey(item);
+        byShape[key] = (byShape[key] || 0) + 1;
+    });
+    note.textContent = Object.keys(byShape).map(key => {
+        const n = byShape[key];
+        return n + ' due item' + (n === 1 ? '' : 's') + ' ' + (n === 1 ? 'is' : 'are') +
+            ' not in the count above. ' +
+            (REVIEW_UNRENDERABLE[key] || 'No card in this build draws a ' + key + ' item yet.') +
+            ' It is still scheduled and nothing has been lost.';
+    }).join(' ');
 }
 
 // Show/hide the parts of the vocab UI that don't apply during review.
@@ -2365,57 +2944,1269 @@ function setReviewUI(active) {
     if (exitBtn) exitBtn.style.display = active ? '' : 'none';
     if (nav) nav.style.display = active ? 'none' : '';
     if (status) status.textContent = '';
+    if (!active) reviewShowTypedHost(false);
+}
+
+/**
+ * Which of the two hosts the review is using.
+ *
+ * A vocabulary review still IS the vocabulary word card — that path is untouched,
+ * so the flow every existing learner knows renders identically. Everything else
+ * is drawn into #reviewCard, and the word card is hidden while it is, because a
+ * grammar point sitting under a stale word and its quiz is two cards at once.
+ */
+function reviewShowTypedHost(active) {
+    const host = document.getElementById('reviewCard');
+    const vocab = document.getElementById('vocabContainer');
+    if (host) {
+        host.hidden = !active;
+        if (!active) host.textContent = '';
+    }
+    if (vocab) vocab.style.display = active ? 'none' : '';
 }
 
 function startReview() {
     if (!window.SRS) return;
-    const queue = SRS.getDueWords();
-    if (queue.length === 0) {
-        if (window.Toast) Toast.info('Nothing to review right now — great job! Learn some new words to build your queue.');
+    const q = reviewQueueNow();
+    if (q.queue.length === 0) {
+        if (q.undrawable.length && window.Toast) {
+            // Not "nothing to review": the work exists, the screen does not. Saying
+            // the first would be false, and it is the sentence
+            // Session.countsHeldBack() was written to prevent.
+            Toast.info(q.undrawable.length + ' item(s) are due but no card in this build can draw them yet. Nothing has been lost — see the note under the button.');
+        } else if (window.Toast) {
+            Toast.info('Nothing to review right now — great job! Learn some new words to build your queue.');
+        }
+        updateDueCount();
         return;
     }
     state.reviewMode = true;
-    state.reviewQueue = queue;
+    state.reviewQueue = q.queue;
     setReviewUI(true);
-    loadReviewWord();
+    loadReviewCard();
 }
 
 function exitReview() {
     state.reviewMode = false;
     state.reviewQueue = [];
+    state.reviewCard = null;
     setReviewUI(false);
     updateDueCount();
     loadVocabularyWord();
 }
 
-// Render the word at the front of the review queue directly from SRS
-// data — no API call, so review works fully offline.
-function loadReviewWord() {
+/**
+ * Draw the item at the front of the queue, straight from its SRS payload — no
+ * API call and no content file needed, so a review works fully offline.
+ *
+ * Dispatches on `(item.type, item.shape)`. `type` alone is not enough: a due
+ * `phon:word-stress` record and a due `phon:iː-ɪ` record are different screens,
+ * and picking the wrong one is the empty-card bug srs.js documents.
+ */
+function loadReviewCard() {
     if (!state.reviewMode) return;
     if (!state.reviewQueue || state.reviewQueue.length === 0) {
         if (window.Toast) Toast.success('Review complete! 🎉');
         exitReview();
         return;
     }
-    const wordData = state.reviewQueue[0];
+
+    const item = state.reviewQueue[0];
+    const draw = REVIEW_RENDERERS[reviewShapeKey(item)];
+    if (!draw) {
+        // reviewQueueNow() filters these out, so this is a queue built some other
+        // way (a session plan, a drill). Drop it and say so rather than draw blank.
+        console.warn('Review: no card for shape "' + reviewShapeKey(item) + '" (' +
+                     (item && item.key) + '); skipping it rather than drawing an empty card.');
+        state.reviewQueue.shift();
+        loadReviewCard();
+        return;
+    }
+
+    // Per-card state, rebuilt on every draw so an outcome cannot carry across.
+    //   graded     the FIRST answer has been sent to the scheduler (write once)
+    //   wrongSeen  any first-answer miss on this card
+    //   solved     ids of sub-items answered correctly, for multi-item cards
+    state.reviewCard = {
+        key: item.key,
+        graded: false,
+        wrongSeen: false,
+        solved: [],
+        total: 1,
+        target: null
+    };
+
+    const status = document.getElementById('reviewStatus');
+    if (status) {
+        status.textContent = state.reviewQueue.length + ' item(s) left to review';
+    }
+    draw(item);
+}
+
+/**
+ * Kept as a NAME, not as behaviour: it is loadReviewCard() now, because the queue
+ * is typed and "word" stopped being true of it.
+ *
+ * REMOVED, deliberately. There is no caller: js/core/session.js's review step
+ * routes through SESSION_ROUTES['srs.review'], which calls loadReviewCard(), and
+ * nothing else in the repo named this function. An alias with no caller is a
+ * second name for one thing, which is the shape that lets two answers drift —
+ * exactly the argument that removed resolveGrammarLevel() in US-153.
+ */
+
+// After an answer in review mode: drop the item if correct, otherwise rotate it
+// to the back of the queue to try again later this session. The delay is what
+// leaves the vocabulary quiz's ✓/✗ on screen long enough to read.
+function onReviewAnswer(isCorrect) {
+    if (!state.reviewMode || !state.reviewQueue.length) return;
+    const item = state.reviewQueue.shift();
+    if (!isCorrect) state.reviewQueue.push(item);
+    setTimeout(loadReviewCard, 1100);
+}
+
+/** Move to the next card now. Wrong answers go to the back, never away. */
+function reviewAdvance(correct) {
+    if (!state.reviewMode || !state.reviewQueue.length) return;
+    const item = state.reviewQueue.shift();
+    if (!correct) state.reviewQueue.push(item);
+    loadReviewCard();
+}
+
+// ---------------------------------------------------------------------------
+// Shared card chrome
+// ---------------------------------------------------------------------------
+
+/** A plain element. Local, so no card depends on another section's helpers. */
+function reviewEl(tag, text, className) {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text !== undefined && text !== null) el.textContent = String(text);
+    return el;
+}
+
+/**
+ * Empty #reviewCard, hide the word card, and lay out the heading every typed
+ * card shares: which strand, what the item is, and the schedule context SRS
+ * already carries so a card can say "you have missed this thrice" without
+ * reaching into `records`.
+ *
+ * @returns {HTMLElement} the body to append the card's own content to.
+ */
+function reviewOpenCard(item, strandLabel, title, subtitle) {
+    reviewShowTypedHost(true);
+    const host = document.getElementById('reviewCard');
+    if (!host) return document.createElement('div');
+    host.textContent = '';
+
+    const head = reviewEl('div', null, 'review-head');
+    head.appendChild(reviewEl('p', strandLabel + ' · review', 'review-kind'));
+    head.appendChild(reviewEl('h3', title, 'review-title'));
+    if (subtitle) head.appendChild(reviewEl('p', subtitle, 'review-subtitle'));
+
+    const context = reviewContextLine(item);
+    if (context) head.appendChild(reviewEl('p', context, 'review-context'));
+    host.appendChild(head);
+
+    const body = reviewEl('div', null, 'review-body');
+    host.appendChild(body);
+    return body;
+}
+
+/**
+ * One line of honest schedule context, from the fields getDue() carries.
+ *
+ * `selfReported` is named rather than folded in, because FR-SRS-5 says a card
+ * must not present a self-judged outcome as verified. Nothing here is inferred:
+ * "not seen before" only when reps is 0, and the lapse count is the record's own.
+ */
+function reviewContextLine(item) {
+    const parts = [];
+    const lapses = (item && item.lapses) || 0;
+    const reps = (item && item.reps) || 0;
+    if (lapses > 0) {
+        parts.push('You have missed this ' + lapses + ' time' + (lapses === 1 ? '' : 's') + ' before');
+    } else if (reps > 0) {
+        parts.push('You have had this right ' + reps + ' time' + (reps === 1 ? '' : 's') + ' so far');
+    }
+    if (item && item.selfReported) {
+        parts.push('the last outcome was one you judged yourself, so it is not counted as evidence');
+    }
+    if (!parts.length) return '';
+    return parts.join(', ') + '.';
+}
+
+/**
+ * Send the FIRST answer on this card to the scheduler, once.
+ *
+ * First-answer-only, exactly as the grammar and pronunciation sections already
+ * do it: six wrong answers on one point are one point to review, not six, and a
+ * retry after a miss is for the learner, not for the number. A card the learner
+ * got wrong and then fixed must not buy a longer interval either, which is why
+ * reviewFinishCard() checks `wrongSeen` before recording a success.
+ *
+ * @param {Object} contentItem the FULL authored item from data/, so a field the
+ *        projector does not carry is restored on the record rather than lost.
+ */
+function reviewGrade(item, correct, contentItem) {
+    if (!state.reviewCard || state.reviewCard.graded) return false;
+    state.reviewCard.graded = true;
+    if (!correct) state.reviewCard.wrongSeen = true;
+    if (window.SRS && typeof SRS.scheduleItem === 'function') {
+        SRS.scheduleItem(item.type, item.ref, contentItem || item.data, correct);
+    }
+    updateDueCount();
+    return true;
+}
+
+/**
+ * The card is finished. A clean card (no first-answer miss anywhere on it)
+ * records the success; a card with a miss has already recorded the lapse, so
+ * this is a no-op for it. Then move on.
+ */
+function reviewFinishCard(item, contentItem) {
+    if (state.reviewCard && !state.reviewCard.graded && !state.reviewCard.wrongSeen) {
+        reviewGrade(item, true, contentItem);
+    }
+    const clean = !(state.reviewCard && state.reviewCard.wrongSeen);
+    reviewAdvance(clean);
+}
+
+/** "Next item →" / "Finish review". Advances, rotating a missed card to the back. */
+function reviewNextButton(item, contentItem, label) {
+    const btn = reviewEl('button', label || (state.reviewQueue.length > 1 ? 'Next item →' : 'Finish review'),
+                         'btn-primary review-next');
+    btn.type = 'button';
+    btn.addEventListener('click', () => reviewFinishCard(item, contentItem));
+    return btn;
+}
+
+// ---------------------------------------------------------------------------
+// Per-item accuracy, for the pronunciation items that are not pairs
+// ---------------------------------------------------------------------------
+
+/** `{ attempts, correct, rate }` for one content item id. `rate` is null with no
+ *  attempts: "no data" and "0%" are different facts. */
+function itemAccuracy(id) {
+    const rec = (state.itemAccuracy || {})[id];
+    const attempts = (rec && rec.attempts) || 0;
+    const correct = (rec && rec.correct) || 0;
+    return { attempts: attempts, correct: correct, rate: attempts > 0 ? correct / attempts : null };
+}
+
+/** Record one graded attempt against a content item id. First answers only —
+ *  see pronRecordAttempt(), which this mirrors deliberately. */
+function recordItemAttempt(id, correct) {
+    if (!id) return;
+    if (!state.itemAccuracy || typeof state.itemAccuracy !== 'object') state.itemAccuracy = {};
+    const rec = state.itemAccuracy[id] || { attempts: 0, correct: 0 };
+    rec.attempts += 1;
+    if (correct) rec.correct += 1;
+    state.itemAccuracy[id] = rec;
+    saveProgress();
+}
+
+/** "You have had this 3 of 4 times." / "You have not tried this word yet." */
+function itemAccuracyLine(id, noun) {
+    const acc = itemAccuracy(id);
+    if (acc.attempts === 0) return 'You have not tried this ' + noun + ' yet.';
+    return 'On this ' + noun + ' you have been right ' + acc.correct + ' of ' + acc.attempts +
+        ' times (' + Math.round(acc.rate * 100) + '%).';
+}
+
+// ---------------------------------------------------------------------------
+// Content lookups — the full authored item, by the id on the record
+// ---------------------------------------------------------------------------
+
+/** The authored grammar point with this id, from any tier. */
+function grammarLessonById(id) {
+    if (!id || typeof grammarLessons === 'undefined' || !grammarLessons) return null;
+    let found = null;
+    Object.keys(grammarLessons).forEach(level => {
+        const list = grammarLessons[level];
+        if (!Array.isArray(list)) return;
+        list.forEach(lesson => { if (!found && lesson && lesson.id === id) found = lesson; });
+    });
+    return found;
+}
+
+/** The authored phoneme pair set with this id. */
+function pronPairById(id) {
+    if (!id) return null;
+    return pronunciationPairs().filter(pair => pair && pair.id === id)[0] || null;
+}
+
+/** One authored array out of the vowels/stress content file, or []. */
+function pronContentList(name) {
+    if (typeof PRONUNCIATION_VOWELS_STRESS === 'undefined' || !PRONUNCIATION_VOWELS_STRESS) return [];
+    const list = PRONUNCIATION_VOWELS_STRESS[name];
+    return Array.isArray(list) ? list : [];
+}
+
+function stressItemById(id) {
+    if (!id) return null;
+    return pronContentList('stress').filter(x => x && x.id === id)[0] || null;
+}
+
+function noticingItemById(id) {
+    if (!id) return null;
+    return pronContentList('noticing').filter(x => x && x.id === id)[0] || null;
+}
+
+// ---------------------------------------------------------------------------
+// vocab / vocab — the existing word card, unchanged
+// ---------------------------------------------------------------------------
+
+/**
+ * A vocabulary review is the word card it has always been, drawn from the
+ * record's payload. displayVocabQuiz() already schedules the answer through
+ * SRS.schedule() and calls onReviewAnswer(), so this path is byte-for-byte the
+ * behaviour that shipped — the only difference is that the payload arrives
+ * inside a typed queue entry instead of being the entry itself.
+ */
+function renderVocabReviewCard(item) {
+    reviewShowTypedHost(false);
+    const wordData = item.data || {};
     document.getElementById('currentWord').textContent = wordData.word;
     setPronunciationDisplay(wordData.pronunciation);
     document.getElementById('definition').textContent = wordData.definition || '';
     document.getElementById('example').textContent = wordData.example || '';
     state.currentVocabWord = wordData;
     displayVocabQuiz(wordData.quiz);
-
-    const status = document.getElementById('reviewStatus');
-    if (status) status.textContent = `${state.reviewQueue.length} word(s) left to review`;
 }
 
-// After an answer in review mode: drop the word if correct, otherwise
-// rotate it to the back of the queue to try again later this session.
-function onReviewAnswer(isCorrect) {
-    if (!state.reviewMode || !state.reviewQueue.length) return;
-    const word = state.reviewQueue.shift();
-    if (!isCorrect) state.reviewQueue.push(word);
-    setTimeout(loadReviewWord, 1100);
+// ---------------------------------------------------------------------------
+// gram / gram — FR-GRM-3: a due point, reviewable without re-teaching it
+// ---------------------------------------------------------------------------
+
+/**
+ * The practice items this review actually asks, in `review.itemIds` order.
+ *
+ * `itemIds` is the author's own choice of which three of the six practice items
+ * are the ones worth re-asking, and it is the whole reason FR-GRM-3 is
+ * satisfiable: a grammar review that re-rendered `practice` would be the lesson
+ * again. Ids that do not resolve are dropped rather than guessed — RENDERABLE.gram
+ * already guarantees at least one resolves — and only `gap` items are kept,
+ * because that is the one practice mode this build renders (loadGrammarPoint()
+ * says the same thing about the section).
+ */
+function reviewGrammarItems(payload) {
+    const practice = Array.isArray(payload.practice) ? payload.practice : [];
+    const ids = (payload.review && Array.isArray(payload.review.itemIds))
+        ? payload.review.itemIds
+        : [];
+    const out = [];
+    ids.forEach(id => {
+        const found = practice.filter(p => p && p.id === id && p.mode === 'gap')[0];
+        if (found && out.indexOf(found) === -1) out.push(found);
+    });
+    return out;
+}
+
+/**
+ * A grammar review card.
+ *
+ * WHAT IT SHOWS, and what it deliberately does not. FR-GRM-3 asks for a due
+ * point to be reviewable "without re-teaching the whole lesson", so the card is:
+ *   - `review.rulePrompt` — the author's one line before you start
+ *   - the `review.itemIds` subset of `practice`, and nothing else
+ * It does NOT show `explain`, `notice`, `decide`, `whyItMatters`, `spokenNote`,
+ * `commonErrors` or `produce`. The first four are not even projected onto the
+ * record (srs.js lists them as deliberate omissions: "a review by definition is
+ * not the first teaching"), and the two that are projected are the lesson's
+ * material, not the review's. A "back to the full lesson" link is offered
+ * instead, so nothing is out of reach — it is one press away rather than in the
+ * way.
+ *
+ * A wrong answer gets reason → contrast → rule → retry, from the authored
+ * `feedback[]` on the item, which is TEACHING_METHODOLOGY.md §2's bar and the
+ * same composition renderGrammarWrong() uses in the section.
+ */
+function renderGramReviewCard(item) {
+    const payload = item.data || {};
+    const lesson = grammarLessonById(payload.id);
+    const forSrs = lesson || payload;
+    const items = reviewGrammarItems(payload);
+
+    const body = reviewOpenCard(
+        item, 'Grammar', payload.title || payload.id,
+        payload.cefr ? 'CEFR ' + payload.cefr : null
+    );
+
+    if (!items.length) {
+        // RENDERABLE.gram admitted the record (an id resolved) but no resolvable
+        // item is a `gap`, which is a practice mode this build cannot draw. Say
+        // so and move on rather than show a rule prompt with no question under it.
+        body.appendChild(grammarParagraph(
+            'This point is due, but the practice items the author chose for its review use an exercise type this version cannot show yet. Nothing has been lost — it stays scheduled.',
+            'grammar-unsupported'
+        ));
+        body.appendChild(reviewNextButton(item, forSrs, 'Skip this one →'));
+        return;
+    }
+
+    // 1. The rule prompt — the review card, per srs.js's projector note.
+    body.appendChild(grammarParagraph(payload.review.rulePrompt, 'review-rule-prompt'));
+
+    // 2. What this is, said plainly, so a learner expecting the lesson is not
+    //    left wondering where it went.
+    body.appendChild(reviewEl('p',
+        'A review, not the lesson: ' + items.length + ' of the ' +
+        (Array.isArray(payload.practice) ? payload.practice.length : items.length) +
+        ' practice sentences on this point, chosen by whoever wrote it. The teaching is one press away below if you want it.',
+        'review-scope'));
+
+    state.reviewCard.total = items.length;
+
+    const list = reviewEl('div', null, 'review-items');
+    items.forEach((practiceItem, i) => {
+        list.appendChild(renderGramReviewItem(item, payload, forSrs, practiceItem, i + 1, items.length));
+    });
+    body.appendChild(list);
+
+    // The lesson, on request. Not shown, not hidden.
+    const back = reviewEl('button', '📖 Open the full lesson on this point', 'btn-secondary');
+    back.type = 'button';
+    back.addEventListener('click', () => {
+        exitReview();
+        openGrammarPointById(payload.id);
+    });
+    body.appendChild(back);
+}
+
+/** One gap item on a grammar review card, with its own feedback area. */
+function renderGramReviewItem(item, payload, forSrs, practiceItem, number, total) {
+    const wrap = reviewEl('div', null, 'grammar-item');
+    wrap.setAttribute('role', 'group');
+
+    const prompt = grammarParagraph(practiceItem.prompt, 'grammar-prompt');
+    const label = reviewEl('span', number + ' of ' + total + '. ', 'grammar-item-number');
+    prompt.insertBefore(label, prompt.firstChild);
+    wrap.appendChild(prompt);
+
+    const options = reviewEl('div', null, 'grammar-options');
+    options.setAttribute('role', 'group');
+    options.setAttribute('aria-label', 'Answer options');
+
+    const feedback = reviewEl('div', null, 'grammar-feedback');
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+
+    (practiceItem.options || []).forEach(option => {
+        const btn = reviewEl('button', grammarAnswerLabel(practiceItem, option), 'grammar-option');
+        btn.type = 'button';
+        // The value lives in the closure, not in a data attribute: the
+        // zero-article answer IS the empty string.
+        btn.addEventListener('click', () => {
+            answerGramReviewItem(item, payload, forSrs, practiceItem, option, btn, options, feedback);
+        });
+        options.appendChild(btn);
+    });
+
+    wrap.appendChild(options);
+    wrap.appendChild(feedback);
+    return wrap;
+}
+
+/** Grade one gap answer on a review card, then teach. */
+function answerGramReviewItem(item, payload, forSrs, practiceItem, answer, button, optionsHost, feedbackHost) {
+    if (!state.reviewCard) return;
+    const correct = isAcceptedGrammarAnswer(practiceItem, answer);
+    const alreadySolved = state.reviewCard.solved.indexOf(practiceItem.id) !== -1;
+
+    optionsHost.querySelectorAll('.grammar-option').forEach(b => b.classList.remove('selected'));
+    button.classList.add('selected');
+    button.classList.toggle('correct', correct);
+    button.classList.toggle('incorrect', !correct);
+
+    feedbackHost.textContent = '';
+    feedbackHost.className = 'grammar-feedback visible ' + (correct ? 'is-correct' : 'is-wrong');
+
+    if (correct) {
+        const verdict = reviewEl('p', '✓ ', 'grammar-verdict');
+        verdict.appendChild(reviewEl('strong', grammarFilledPrompt(practiceItem, answer)));
+        feedbackHost.appendChild(verdict);
+        optionsHost.querySelectorAll('.grammar-option').forEach(b => { b.disabled = true; });
+        if (!alreadySolved) state.reviewCard.solved.push(practiceItem.id);
+        if (state.reviewCard.solved.length >= state.reviewCard.total) {
+            feedbackHost.appendChild(reviewEl('p',
+                state.reviewCard.wrongSeen
+                    ? 'That is the last one. This point will come back tomorrow, because one answer needed a second go.'
+                    : 'That is the last one, all right first time. This point comes back at a longer gap.',
+                'review-done'));
+            feedbackHost.appendChild(reviewNextButton(item, forSrs));
+        }
+        return;
+    }
+
+    // A wrong answer: reason → contrast → rule → retry, all authored, in the
+    // order TEACHING_METHODOLOGY.md §2 lists them. The option buttons stay live,
+    // so the retry is on the same screen as the ✗ (FR-A11Y-5).
+    const fb = grammarFeedbackFor(payload, practiceItem, answer);
+
+    const verdict = reviewEl('p', '✗ ', 'grammar-verdict');
+    verdict.appendChild(reviewEl('strong', grammarFilledPrompt(practiceItem, answer)));
+    feedbackHost.appendChild(verdict);
+
+    if (fb.grammaticalButDifferent) {
+        feedbackHost.appendChild(grammarParagraph(
+            'That is correct English — it just says something different here.',
+            'grammar-butdifferent'));
+    }
+
+    // 1. WHY.
+    feedbackHost.appendChild(grammarParagraph(fb.reason, 'grammar-reason'));
+
+    // 2. THE CONTRAST: a minimal pair, so the learner sees what their choice
+    //    would have meant instead of only what was wanted.
+    const pair = Array.isArray(fb.contrast) ? fb.contrast : [];
+    if (pair.length) {
+        const list = reviewEl('ul', null, 'grammar-contrast-pair');
+        pair.forEach(line => {
+            const li = document.createElement('li');
+            appendGrammarText(li, line);
+            list.appendChild(li);
+        });
+        feedbackHost.appendChild(list);
+    }
+
+    // 3. THE RULE, in one sentence.
+    const rule = grammarParagraph(payload.rule, 'grammar-rule-reminder');
+    rule.insertBefore(document.createTextNode('The rule: '), rule.firstChild);
+    feedbackHost.appendChild(rule);
+
+    // 4. THE RETRY, with the buttons above still live.
+    const retry = grammarParagraph(fb.retryCue, 'grammar-retry');
+    retry.insertBefore(document.createTextNode('Try again — '), retry.firstChild);
+    feedbackHost.appendChild(retry);
+
+    reviewGrade(item, false, forSrs);
+    recordGrammarMistake(payload, practiceItem, fb, answer, 'grammarReview');
+    // A missed card is never a dead end: the learner may retry in place, or move
+    // on and meet it again at the back of this queue.
+    feedbackHost.appendChild(reviewNextButton(item, forSrs, 'Come back to this later →'));
+}
+
+// ---------------------------------------------------------------------------
+// phon / pair — FR-PRN-1 discrimination, or the AS-3 written fallback
+// ---------------------------------------------------------------------------
+
+/**
+ * One discrimination item for a due phoneme pair.
+ *
+ * ONE item, not the section's nine: a review is a check, and the nine-item round
+ * is the lesson. WHICH one rotates with `reps`, so successive reviews of the same
+ * pair walk the authored list instead of asking sheep/ship forever — and it is
+ * derived, not random, so the same record always shows the same word until it is
+ * answered.
+ *
+ * On a device that cannot speak, the card is the pair's `textOnlyFallback`
+ * instead. That is gradable and needs no audio (AS-3), and it deliberately does
+ * NOT feed state.pronunciationAccuracy: it tests which vowel a word contains,
+ * not whether the learner can hear the contrast, and feeding it in would open
+ * the FR-PRN-6 gate for a learner who has never heard the difference.
+ */
+function renderPhonPairReviewCard(item) {
+    const payload = item.data || {};
+    const pair = pronPairById(payload.id);
+    const forSrs = pair || payload;
+    const label = payload.label || (Array.isArray(payload.pair) ? payload.pair.join(' ~ ') : payload.id);
+
+    const body = reviewOpenCard(item, 'Pronunciation', (payload.pair || [payload.id]).join(' ~ '), label);
+
+    const key = pronPairKey(payload);
+    const acc = pronAccuracy(key);
+    body.appendChild(reviewEl('p',
+        acc.attempts === 0
+            ? 'You have not tried this pair yet.'
+            : 'On this pair you have picked the right word ' + acc.correct + ' of ' +
+              acc.attempts + ' times (' + Math.round(acc.rate * 100) + '%).',
+        'pron-accuracy-own'));
+
+    const rows = Array.isArray(payload.minimalPairs) ? payload.minimalPairs : [];
+    const audio = pronAudioUsable() && rows.length > 0;
+
+    if (!audio) {
+        renderPhonPairReviewText(item, payload, forSrs, body);
+        return;
+    }
+
+    const row = rows[((item.reps || 0) % rows.length + rows.length) % rows.length];
+    state.reviewCard.target = Math.random() < 0.5 ? 'a' : 'b';
+    const heard = row[state.reviewCard.target];
+
+    body.appendChild(reviewEl('p', 'Play it, then choose the word you heard.', 'pron-prompt'));
+
+    const controls = reviewEl('div', null, 'button-group');
+    controls.appendChild(pronPlayButton('▶ Play', heard, PRON_RATE_NORMAL, 'Play the word'));
+    controls.appendChild(pronPlayButton('▶ Play slowly', heard, PRON_RATE_SLOW, 'Play the word slowly'));
+    body.appendChild(controls);
+
+    const options = reviewEl('div', null, 'pron-options');
+    options.setAttribute('role', 'group');
+    options.setAttribute('aria-label', 'Which word did you hear');
+    const feedback = reviewEl('div', null, 'pron-feedback');
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+
+    ['a', 'b'].forEach(side => {
+        const btn = reviewEl('button', row[side], 'pron-option');
+        btn.type = 'button';
+        btn.addEventListener('click', () => {
+            answerPhonPairReview(item, payload, forSrs, row, side, btn, options, feedback);
+        });
+        options.appendChild(btn);
+    });
+    body.appendChild(options);
+    body.appendChild(feedback);
+
+    // FR-A11Y-4 / AS-3: an escape hatch that is not recorded as a wrong answer,
+    // because it is not one.
+    if (payload.textOnlyFallback) {
+        const cannot = reviewEl('button',
+            'I cannot hear a difference — use the written question instead', 'btn-secondary pron-cannot');
+        cannot.type = 'button';
+        cannot.addEventListener('click', () => {
+            if (window.Toast) Toast.info('Nothing was recorded as wrong.');
+            const host = document.getElementById('reviewCard');
+            if (host) host.textContent = '';
+            const fresh = reviewOpenCard(item, 'Pronunciation',
+                (payload.pair || [payload.id]).join(' ~ '), label);
+            renderPhonPairReviewText(item, payload, forSrs, fresh);
+        });
+        body.appendChild(cannot);
+    }
+
+    pronSpeak(heard, PRON_RATE_NORMAL);
+}
+
+/** Grade one discrimination answer on a review card, then teach (FR-PRN-1). */
+function answerPhonPairReview(item, payload, forSrs, row, side, button, optionsHost, feedbackHost) {
+    if (!state.reviewCard) return;
+    const correct = side === state.reviewCard.target;
+    const heard = row[state.reviewCard.target];
+    const chosen = row[side];
+    const firstAnswer = !state.reviewCard.graded;
+
+    optionsHost.querySelectorAll('.pron-option').forEach(b => b.classList.remove('selected'));
+    button.classList.add('selected');
+    button.classList.toggle('correct', correct);
+    button.classList.toggle('incorrect', !correct);
+
+    feedbackHost.textContent = '';
+    feedbackHost.className = 'pron-feedback visible ' + (correct ? 'is-correct' : 'is-wrong');
+
+    if (firstAnswer) {
+        // FR-PRN-2, and the same first-answer-only rule as the section: this IS a
+        // graded audio discrimination attempt on this pair, so it belongs in the
+        // counter the FR-PRN-6 gate reads.
+        pronRecordAttempt(pronPairKey(payload), correct);
+        reviewGrade(item, correct, forSrs);
+        if (!correct) recordPronunciationMistake(payload, row, heard, chosen, 'pronunciationReview');
+    }
+
+    if (correct) {
+        const verdict = reviewEl('p', '✓ That was ', 'pron-verdict');
+        verdict.appendChild(reviewEl('strong', heard));
+        verdict.appendChild(document.createTextNode('. '));
+        verdict.appendChild(pronIpa(state.reviewCard.target === 'a' ? row.aIpa : row.bIpa));
+        feedbackHost.appendChild(verdict);
+        const phoneme = (payload.phonemes || [])[state.reviewCard.target === 'a' ? 0 : 1];
+        if (phoneme) feedbackHost.appendChild(grammarParagraph(phoneme.gloss, 'pron-gloss'));
+        feedbackHost.appendChild(reviewNextButton(item, forSrs));
+        return;
+    }
+
+    // The FR-PRN-1 wrong-answer path: both words replayed slowly at one matched
+    // rate, the differing FEATURE named, what to do with the mouth, the mirror
+    // check as the retry cue, and a retry in place.
+    const verdict = reviewEl('p', '✗ That was ', 'pron-verdict');
+    verdict.appendChild(reviewEl('strong', heard));
+    verdict.appendChild(document.createTextNode(', not '));
+    verdict.appendChild(reviewEl('em', chosen));
+    verdict.appendChild(document.createTextNode('.'));
+    feedbackHost.appendChild(verdict);
+
+    const played = pronSpeak([row.a, row.b], PRON_RATE_SLOW);
+    feedbackHost.appendChild(reviewEl('p', played
+        ? 'Playing both slowly, one after the other: ' + row.a + ', then ' + row.b + '.'
+        : 'This device could not replay them. Read on — the difference below is one you can feel without hearing anything.',
+        'pron-replay'));
+    const replayRow = reviewEl('div', null, 'button-group');
+    replayRow.appendChild(pronPlayButton('▶ Play both again, slowly', [row.a, row.b], PRON_RATE_SLOW,
+        'Play ' + row.a + ' and ' + row.b + ' slowly, one after the other'));
+    feedbackHost.appendChild(replayRow);
+
+    const feature = reviewEl('p', 'The difference is ', 'pron-feature');
+    feature.appendChild(reviewEl('strong', payload.contrastFeature));
+    feature.appendChild(document.createTextNode('.'));
+    feedbackHost.appendChild(feature);
+
+    const list = reviewEl('ul', null, 'pron-contrast-pair');
+    ['a', 'b'].forEach((s, i) => {
+        const phoneme = (payload.phonemes || [])[i];
+        const li = document.createElement('li');
+        li.appendChild(reviewEl('strong', row[s]));
+        li.appendChild(document.createTextNode(' '));
+        li.appendChild(pronIpa(s === 'a' ? row.aIpa : row.bIpa));
+        if (phoneme) {
+            li.appendChild(document.createTextNode(' — '));
+            appendGrammarText(li, phoneme.gloss);
+        }
+        list.appendChild(li);
+    });
+    feedbackHost.appendChild(list);
+
+    if (payload.articulatoryCue) {
+        feedbackHost.appendChild(grammarParagraph(payload.articulatoryCue, 'pron-cue-inline'));
+    }
+    if (payload.mirrorCheck) {
+        feedbackHost.appendChild(grammarParagraph(payload.mirrorCheck, 'pron-mirror'));
+    }
+    if (row.note) feedbackHost.appendChild(grammarParagraph(row.note, 'pron-note'));
+
+    const retryRow = reviewEl('div', null, 'button-group');
+    const retry = reviewEl('button', 'Play it again and try this word once more', 'btn-primary');
+    retry.type = 'button';
+    retry.addEventListener('click', () => {
+        optionsHost.querySelectorAll('.pron-option').forEach(b => {
+            b.classList.remove('selected', 'correct', 'incorrect');
+        });
+        pronSpeak(heard, PRON_RATE_NORMAL);
+    });
+    retryRow.appendChild(retry);
+    retryRow.appendChild(reviewNextButton(item, forSrs, 'Come back to this later →'));
+    feedbackHost.appendChild(retryRow);
+}
+
+/** The AS-3 written question for a pair review: one word, which sound is in it. */
+function renderPhonPairReviewText(item, payload, forSrs, body) {
+    const fallback = payload.textOnlyFallback;
+    const rows = (fallback && Array.isArray(fallback.items)) ? fallback.items : [];
+    if (!rows.length) {
+        body.appendChild(grammarParagraph(
+            'This pair is due, but this device cannot play audio and no written question is written for it, so there is nothing here that can be answered honestly. It stays scheduled.',
+            'pron-note'));
+        body.appendChild(reviewNextButton(item, forSrs, 'Skip this one →'));
+        return;
+    }
+
+    const row = rows[((item.reps || 0) % rows.length + rows.length) % rows.length];
+    body.appendChild(grammarParagraph(fallback.prompt, 'pron-prompt'));
+    body.appendChild(grammarParagraph(
+        'This is graded, and it is deliberately kept out of your listening accuracy: it tests which sound a word has, not whether you can hear the two apart.',
+        'pron-note'));
+
+    const count = reviewEl('p', null, 'pron-prompt');
+    count.appendChild(reviewEl('strong', row.word));
+    body.appendChild(count);
+
+    const options = reviewEl('div', null, 'pron-options');
+    options.setAttribute('role', 'group');
+    options.setAttribute('aria-label', 'Which sound does this word have');
+    const feedback = reviewEl('div', null, 'pron-feedback');
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+
+    pronFallbackOptions(payload).forEach(answer => {
+        const btn = reviewEl('button', pronFallbackLabel(payload, answer), 'pron-option');
+        btn.type = 'button';
+        btn.addEventListener('click', () => {
+            const correct = answer === row.answer;
+            options.querySelectorAll('.pron-option').forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+            btn.classList.toggle('correct', correct);
+            btn.classList.toggle('incorrect', !correct);
+            feedback.textContent = '';
+            feedback.className = 'pron-feedback visible ' + (correct ? 'is-correct' : 'is-wrong');
+
+            const verdict = reviewEl('p', (correct ? '✓ ' : '✗ ') + row.word + ' ', 'pron-verdict');
+            verdict.appendChild(pronIpa(row.ipa));
+            feedback.appendChild(verdict);
+            feedback.appendChild(grammarParagraph(pronFallbackLabel(payload, row.answer), 'pron-gloss'));
+            if (row.hint) feedback.appendChild(grammarParagraph(row.hint, 'pron-note'));
+            // Graded, so it schedules — it just does not touch the FR-PRN-6 gate.
+            reviewGrade(item, correct, forSrs);
+            feedback.appendChild(reviewNextButton(item, forSrs,
+                correct ? undefined : 'Come back to this later →'));
+        });
+        options.appendChild(btn);
+    });
+    body.appendChild(options);
+    body.appendChild(feedback);
+}
+
+// ---------------------------------------------------------------------------
+// phon / stress — FR-PRN-3 word stress
+// ---------------------------------------------------------------------------
+
+/**
+ * `PHO-to-graph` built from `stressNumbers`, never by parsing `display`.
+ *
+ * 1 = the main beat, 2 = a secondary one, 0 = unstressed, and an index in
+ * `reducedSyllables` is squashed almost flat. The content carries all three so a
+ * renderer can mark them without reading the display string, which is exactly
+ * why srs.js projects `syllables`, `stressNumbers` and `stressIndex` together.
+ */
+function renderStressWord(payload) {
+    const syllables = Array.isArray(payload.syllables) ? payload.syllables : [];
+    const numbers = Array.isArray(payload.stressNumbers) ? payload.stressNumbers : [];
+    const reduced = Array.isArray(payload.reducedSyllables) ? payload.reducedSyllables : [];
+    const host = reviewEl('p', null, 'stress-word');
+    if (!syllables.length) {
+        host.textContent = payload.display || payload.word || '';
+        return host;
+    }
+    syllables.forEach((syllable, i) => {
+        if (i > 0) host.appendChild(document.createTextNode('-'));
+        const level = numbers[i];
+        const span = reviewEl('span', level === 1 ? String(syllable).toUpperCase() : syllable,
+            'stress-syl' + (level === 1 ? ' is-primary' : level === 2 ? ' is-secondary' : '') +
+            (reduced.indexOf(i) !== -1 ? ' is-reduced' : ''));
+        if (level === 1) span.setAttribute('aria-label', syllable + ', the main beat');
+        host.appendChild(span);
+    });
+    return host;
+}
+
+/**
+ * A word-stress review card.
+ *
+ * ONE WORD, AND WHY THE COUNTER EXISTS. All 21 authored stress items schedule
+ * under the single key `phon:word-stress`, so the record holds whichever item was
+ * last answered and its payload IS the card — there is no per-word schedule to
+ * choose from, and inventing one would be claiming accuracy we do not have
+ * (methodology principle 3). Per-word accuracy therefore comes from
+ * state.itemAccuracy, keyed by content id, and the card says out loud that one
+ * record covers the whole set so the learner is not misled about what "due" meant.
+ *
+ * No audio and no imitation. The drill is `answerableFromText`, marking the beat
+ * is a noticing task, and asking a learner to copy a synthesised voice's stress
+ * would be the FR-PRN-8 violation the noticing card below refuses by name.
+ */
+function renderPhonStressReviewCard(item) {
+    const payload = item.data || {};
+    const full = stressItemById(payload.id);
+    const forSrs = full || payload;
+    const drill = payload.drill || {};
+
+    const body = reviewOpenCard(item, 'Pronunciation · word stress', payload.word || payload.id,
+        payload.pos ? String(payload.pos) : null);
+
+    if (payload.ipa) {
+        const ipaLine = reviewEl('p', null, 'stress-ipa');
+        ipaLine.appendChild(pronIpa(payload.ipa));
+        body.appendChild(ipaLine);
+    }
+
+    body.appendChild(reviewEl('p', itemAccuracyLine(payload.id, 'word'), 'pron-accuracy-own'));
+    body.appendChild(reviewEl('p',
+        'Word stress is scheduled as one item covering every word in the set, so "due" means the beat pattern, not this word alone. Your record for this word is the line above.',
+        'review-scope'));
+
+    if (!Array.isArray(drill.options) || typeof drill.correctIndex !== 'number') {
+        body.appendChild(grammarParagraph(
+            'This word is due but its drill is not answerable in this version. It stays scheduled.', 'pron-note'));
+        body.appendChild(reviewNextButton(item, forSrs, 'Skip this one →'));
+        return;
+    }
+
+    body.appendChild(grammarParagraph(drill.prompt, 'pron-prompt'));
+
+    const options = reviewEl('div', null, 'pron-options');
+    options.setAttribute('role', 'group');
+    options.setAttribute('aria-label', 'Which syllable carries the beat');
+    const feedback = reviewEl('div', null, 'pron-feedback');
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+
+    drill.options.forEach((option, index) => {
+        const btn = reviewEl('button', option, 'pron-option');
+        btn.type = 'button';
+        btn.addEventListener('click', () => {
+            answerPhonStressReview(item, payload, forSrs, index, btn, options, feedback);
+        });
+        options.appendChild(btn);
+    });
+    body.appendChild(options);
+    body.appendChild(feedback);
+}
+
+function answerPhonStressReview(item, payload, forSrs, index, button, optionsHost, feedbackHost) {
+    if (!state.reviewCard) return;
+    const drill = payload.drill || {};
+    const correct = index === drill.correctIndex;
+    const firstAnswer = !state.reviewCard.graded;
+
+    optionsHost.querySelectorAll('.pron-option').forEach(b => b.classList.remove('selected'));
+    button.classList.add('selected');
+    button.classList.toggle('correct', correct);
+    button.classList.toggle('incorrect', !correct);
+
+    feedbackHost.textContent = '';
+    feedbackHost.className = 'pron-feedback visible ' + (correct ? 'is-correct' : 'is-wrong');
+
+    if (firstAnswer) {
+        recordItemAttempt(payload.id, correct);
+        reviewGrade(item, correct, forSrs);
+        if (!correct && payload.mistakeCategory && typeof Mistakes !== 'undefined' && Mistakes &&
+            typeof Mistakes.record === 'function') {
+            Mistakes.record(payload.mistakeCategory, {
+                item: payload.id,
+                given: drill.options[index],
+                expected: drill.options[drill.correctIndex],
+                source: 'stressReview'
+            });
+        }
+    }
+
+    const verdict = reviewEl('p', correct ? '✓ ' : '✗ ', 'pron-verdict');
+    feedbackHost.appendChild(verdict);
+    // The beat pattern itself, marked from stressNumbers — the contrast between
+    // what they picked and what the word does.
+    feedbackHost.appendChild(renderStressWord(payload));
+
+    if (!correct) {
+        // Reason first, from the author's own `whyWrong`.
+        if (drill.whyWrong) feedbackHost.appendChild(grammarParagraph(drill.whyWrong, 'pron-reason'));
+        if (payload.reductionNote) {
+            feedbackHost.appendChild(grammarParagraph(payload.reductionNote, 'pron-note'));
+        }
+        if (payload.familyRule) {
+            feedbackHost.appendChild(grammarParagraph(payload.familyRule, 'pron-note'));
+        }
+        // Retry, in place, buttons still live (FR-A11Y-5).
+        feedbackHost.appendChild(grammarParagraph(
+            'Try again — say the word twice, once with the beat where you put it and once where it is marked above, and listen for which one sounds like the word you know.',
+            'pron-retry'));
+        const row = reviewEl('div', null, 'button-group');
+        const retry = reviewEl('button', 'Try this word again', 'btn-primary');
+        retry.type = 'button';
+        retry.addEventListener('click', () => {
+            optionsHost.querySelectorAll('.pron-option').forEach(b => {
+                b.classList.remove('selected', 'correct', 'incorrect');
+            });
+        });
+        row.appendChild(retry);
+        row.appendChild(reviewNextButton(item, forSrs, 'Come back to this later →'));
+        feedbackHost.appendChild(row);
+        return;
+    }
+
+    if (payload.exampleSentence) {
+        feedbackHost.appendChild(grammarParagraph(payload.exampleSentence, 'pron-note'));
+    }
+    feedbackHost.appendChild(reviewNextButton(item, forSrs));
+}
+
+// ---------------------------------------------------------------------------
+// phon / noticing — FR-PRN-8 prosody, by noticing and never by imitation
+// ---------------------------------------------------------------------------
+
+/**
+ * How a noticing item is graded. THREE shapes, checked in this order, which is
+ * the same order RENDERABLE.phon's `noticing` predicate accepts them in:
+ *
+ *   'choice'  `options` + a numeric `correctIndex` — one answer of several
+ *   'tokens'  `tokens` + `correct` (an array of indices) — tap every word that…
+ *   'rows'    `items[]`, each with its own `answer` — sort, count, or match
+ *
+ * `options` is present-but-null-`correctIndex` on the two `sort` items, which is
+ * exactly why the numeric test comes before the array test rather than after it.
+ */
+function noticingGrading(payload) {
+    if (Array.isArray(payload.options) && payload.options.length &&
+        typeof payload.correctIndex === 'number') return 'choice';
+    if (Array.isArray(payload.tokens) && payload.tokens.length &&
+        Array.isArray(payload.correct)) return 'tokens';
+    if (Array.isArray(payload.items) && payload.items.length) return 'rows';
+    return null;
+}
+
+/**
+ * The answer space for a `rows` item: the distinct `items[].answer` values, in
+ * the order they first appear.
+ *
+ * Derived from the answers rather than taken from `options`, deliberately. The
+ * two `sort` items carry `options` as prose labels ("ends in a vowel sound")
+ * while their answers are keys ("vowel"), and pairing the two by POSITION would
+ * be an assumption that, if it were ever wrong, would teach the learner the
+ * opposite of the truth. noticingRowLabel() below matches label to answer by
+ * looking for the answer inside the label, which is checkable; when it cannot,
+ * the raw answer is shown.
+ */
+function noticingRowAnswers(payload) {
+    const out = [];
+    (payload.items || []).forEach(row => {
+        if (!row || row.answer === undefined || row.answer === null) return;
+        const value = String(row.answer);
+        if (out.indexOf(value) === -1) out.push(value);
+    });
+    // Numeric answers read best in numeric order (1, 2, 3), not first-seen order.
+    if (out.length && out.every(v => /^\d+$/.test(v))) out.sort((a, b) => Number(a) - Number(b));
+    return out;
+}
+
+/** The authored label for one `rows` answer, when one can be matched to it. */
+function noticingRowLabel(payload, answer) {
+    const options = Array.isArray(payload.options) ? payload.options : [];
+    const needle = String(answer).toLowerCase();
+    const matches = options.filter(o => String(o).toLowerCase().indexOf(needle) !== -1);
+    return matches.length === 1 ? matches[0] : String(answer);
+}
+
+/**
+ * A prosody noticing review card — rhythm, final-vowel epenthesis, cluster
+ * breaking (T-P1 / T-P2 / T-P3).
+ *
+ * FR-PRN-8 IS ENFORCED HERE, NOT ASSUMED. Every authored noticing item declares
+ * `requiresImitation: false`, and this card REFUSES to draw one that says
+ * otherwise rather than trusting that no such item will ever be written. That is
+ * the point of projecting the flag: srs.js's note calls these fields POLICY, and
+ * a card that ignored `requiresImitation` would break FR-PRN-8 and AS-3 at once.
+ * So there is no "say it after me" control on this card at any time, and no audio
+ * either: every item is `answerableFrom: 'text'` with `requiresAudio: false`, and
+ * `audioOptional: true` means a card that offers none is compliant — which is the
+ * right call for prosody on an unverified synthesised voice (AS-3).
+ *
+ * The `teach` paragraph is behind a <details>, closed. It is the teaching, and a
+ * review is not the first teaching; it is one press away for a learner who wants
+ * it rather than the first thing between them and the question.
+ */
+function renderPhonNoticingReviewCard(item) {
+    const payload = item.data || {};
+    const full = noticingItemById(payload.id);
+    const forSrs = full || payload;
+
+    const body = reviewOpenCard(item, 'Pronunciation · noticing',
+        payload.target ? String(payload.target).replace(/-/g, ' ') : payload.id,
+        payload.code || null);
+
+    if (payload.requiresImitation) {
+        // Not reachable with today's content, and that is why it is a guard and
+        // not a comment: FR-PRN-8 forbids an imitation task for prosody, so the
+        // honest response to content that asks for one is to draw nothing.
+        body.appendChild(grammarParagraph(
+            'This item asks the learner to imitate a model, and FR-PRN-8 does not allow an imitation task for rhythm and stress — a synthesised voice is not a model worth copying. Nothing is drawn for it and it stays scheduled.',
+            'pron-note'));
+        body.appendChild(reviewNextButton(item, forSrs, 'Skip this one →'));
+        return;
+    }
+
+    const mode = noticingGrading(payload);
+    if (!mode) {
+        body.appendChild(grammarParagraph(
+            'This item is due but this version cannot grade its answer shape. It stays scheduled.', 'pron-note'));
+        body.appendChild(reviewNextButton(item, forSrs, 'Skip this one →'));
+        return;
+    }
+
+    body.appendChild(reviewEl('p', itemAccuracyLine(payload.id, 'question'), 'pron-accuracy-own'));
+    body.appendChild(grammarParagraph(payload.prompt, 'pron-prompt'));
+    if (payload.text && mode !== 'tokens') {
+        body.appendChild(grammarParagraph(payload.text, 'notice-text'));
+    }
+
+    const feedback = reviewEl('div', null, 'pron-feedback');
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+
+    if (mode === 'choice') renderNoticingChoice(item, payload, forSrs, body, feedback);
+    if (mode === 'tokens') renderNoticingTokens(item, payload, forSrs, body, feedback);
+    if (mode === 'rows') renderNoticingRows(item, payload, forSrs, body, feedback);
+
+    body.appendChild(feedback);
+
+    if (payload.teach) {
+        body.appendChild(grammarDisclosure('Remind me why this matters', host => {
+            host.appendChild(grammarParagraph(payload.teach));
+        }));
+    }
+}
+
+/** One answer of several. */
+function renderNoticingChoice(item, payload, forSrs, body, feedback) {
+    const options = reviewEl('div', null, 'pron-options notice-options');
+    options.setAttribute('role', 'group');
+    options.setAttribute('aria-label', 'Answer options');
+    payload.options.forEach((option, index) => {
+        const btn = reviewEl('button', option, 'pron-option');
+        btn.type = 'button';
+        btn.addEventListener('click', () => {
+            const correct = index === payload.correctIndex;
+            options.querySelectorAll('.pron-option').forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+            btn.classList.toggle('correct', correct);
+            btn.classList.toggle('incorrect', !correct);
+            noticingOutcome(item, payload, forSrs, correct, feedback, options);
+        });
+        options.appendChild(btn);
+    });
+    body.appendChild(options);
+}
+
+/** "Tap every word that…" — multi-select over `tokens`, graded as a set. */
+function renderNoticingTokens(item, payload, forSrs, body, feedback) {
+    const chosen = [];
+    const host = reviewEl('div', null, 'notice-tokens');
+    host.setAttribute('role', 'group');
+    host.setAttribute('aria-label', 'Tap the words');
+    payload.tokens.forEach((token, index) => {
+        const btn = reviewEl('button', token, 'notice-token');
+        btn.type = 'button';
+        btn.setAttribute('aria-pressed', 'false');
+        btn.addEventListener('click', () => {
+            const at = chosen.indexOf(index);
+            if (at === -1) chosen.push(index); else chosen.splice(at, 1);
+            const on = chosen.indexOf(index) !== -1;
+            btn.classList.toggle('selected', on);
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        host.appendChild(btn);
+    });
+    body.appendChild(host);
+
+    const check = reviewEl('button', 'Check my answer', 'btn-primary');
+    check.type = 'button';
+    check.addEventListener('click', () => {
+        const want = payload.correct.slice().sort((a, b) => a - b).join(',');
+        const got = chosen.slice().sort((a, b) => a - b).join(',');
+        const correct = want === got;
+        // Mark the authored answer on the tokens themselves, so the contrast is
+        // the sentence rather than a list of numbers.
+        Array.from(host.children).forEach((btn, index) => {
+            const shouldBe = payload.correct.indexOf(index) !== -1;
+            const picked = chosen.indexOf(index) !== -1;
+            btn.classList.toggle('correct', shouldBe);
+            btn.classList.toggle('incorrect', picked && !shouldBe);
+        });
+        noticingOutcome(item, payload, forSrs, correct, feedback, host);
+    });
+    body.appendChild(check);
+}
+
+/** A row per authored sub-item, each answered from the item's own answer space. */
+function renderNoticingRows(item, payload, forSrs, body, feedback) {
+    const answers = noticingRowAnswers(payload);
+    const rows = payload.items;
+    const solved = [];
+    let missed = false;
+
+    const host = reviewEl('div', null, 'notice-rows');
+    rows.forEach((row, index) => {
+        const wrap = reviewEl('div', null, 'notice-row');
+        wrap.setAttribute('role', 'group');
+        // Whatever this row shows itself as: a word, a written form, or the word
+        // the learner meant. Read from the row, never guessed from the mode.
+        const shown = row.word || row.form || row.intended || row.text || ('Item ' + (index + 1));
+        const label = reviewEl('p', null, 'notice-row-label');
+        label.appendChild(reviewEl('strong', shown));
+        if (row.intendedIpa) {
+            label.appendChild(document.createTextNode(' '));
+            label.appendChild(pronIpa(row.intendedIpa));
+        } else if (row.ipa) {
+            label.appendChild(document.createTextNode(' '));
+            label.appendChild(pronIpa(row.ipa));
+        }
+        wrap.appendChild(label);
+
+        const options = reviewEl('div', null, 'pron-options notice-options');
+        options.setAttribute('role', 'group');
+        options.setAttribute('aria-label', 'Answer for ' + shown);
+        const rowFeedback = reviewEl('div', null, 'notice-row-feedback');
+        rowFeedback.setAttribute('role', 'status');
+        rowFeedback.setAttribute('aria-live', 'polite');
+
+        answers.forEach(answer => {
+            const btn = reviewEl('button', noticingRowLabel(payload, answer), 'pron-option');
+            btn.type = 'button';
+            btn.addEventListener('click', () => {
+                const correct = answer === String(row.answer);
+                options.querySelectorAll('.pron-option').forEach(b => b.classList.remove('selected'));
+                btn.classList.add('selected');
+                btn.classList.toggle('correct', correct);
+                btn.classList.toggle('incorrect', !correct);
+
+                rowFeedback.textContent = '';
+                rowFeedback.appendChild(reviewEl('span',
+                    (correct ? '✓ ' : '✗ ') + noticingRowLabel(payload, row.answer),
+                    'notice-row-verdict'));
+                if (row.note) rowFeedback.appendChild(grammarParagraph(row.note, 'pron-note'));
+                if (row.heard) {
+                    rowFeedback.appendChild(grammarParagraph(
+                        'Say it with the extra sound and a listener hears *' + row.heard + '*.', 'pron-note'));
+                }
+
+                if (!correct) missed = true;
+                if (correct && solved.indexOf(index) === -1) solved.push(index);
+                // The whole item is graded ONCE, on the first decisive event: the
+                // first miss, or the last row if there was none. Right only if no
+                // row was missed. Same first-answer rule as everywhere else here,
+                // and it also stops a later correct row rewriting the card-level
+                // verdict for an item the learner has already missed.
+                if (!state.reviewCard.graded && (missed || solved.length >= rows.length)) {
+                    noticingOutcome(item, payload, forSrs, !missed, feedback, host);
+                }
+            });
+            options.appendChild(btn);
+        });
+        wrap.appendChild(options);
+        wrap.appendChild(rowFeedback);
+        host.appendChild(wrap);
+    });
+    body.appendChild(host);
+}
+
+/**
+ * The one place a noticing answer is recorded and explained: reason (`why`),
+ * contrast (the authored `answer` line), the feel check, the L1 note, and a retry
+ * with the controls still live.
+ */
+function noticingOutcome(item, payload, forSrs, correct, feedback, controlsHost) {
+    if (!state.reviewCard) return;
+    const firstAnswer = !state.reviewCard.graded;
+    if (firstAnswer) {
+        recordItemAttempt(payload.id, correct);
+        reviewGrade(item, correct, forSrs);
+        if (!correct && payload.mistakeCategory && typeof Mistakes !== 'undefined' && Mistakes &&
+            typeof Mistakes.record === 'function') {
+            Mistakes.record(payload.mistakeCategory, {
+                item: payload.id,
+                expected: payload.answer,
+                source: 'noticingReview'
+            });
+        }
+    }
+
+    feedback.textContent = '';
+    feedback.className = 'pron-feedback visible ' + (correct ? 'is-correct' : 'is-wrong');
+    feedback.appendChild(reviewEl('p', correct ? '✓' : '✗', 'pron-verdict'));
+
+    // The contrast: what the answer actually is, in the author's words.
+    if (payload.answer) feedback.appendChild(grammarParagraph(payload.answer, 'notice-answer'));
+
+    if (!correct) {
+        if (payload.why) feedback.appendChild(grammarParagraph(payload.why, 'pron-reason'));
+        if (payload.feelCheck) feedback.appendChild(grammarParagraph(payload.feelCheck, 'pron-feel'));
+        if (payload.l1) feedback.appendChild(grammarParagraph(payload.l1, 'pron-l1'));
+        feedback.appendChild(grammarParagraph('Try again — the controls above are still live.', 'pron-retry'));
+        const row = reviewEl('div', null, 'button-group');
+        const retry = reviewEl('button', 'Clear and try again', 'btn-primary');
+        retry.type = 'button';
+        retry.addEventListener('click', () => {
+            if (controlsHost) {
+                controlsHost.querySelectorAll('.pron-option, .notice-token').forEach(b => {
+                    b.classList.remove('selected', 'correct', 'incorrect');
+                    if (b.hasAttribute('aria-pressed')) b.setAttribute('aria-pressed', 'false');
+                });
+            }
+        });
+        row.appendChild(retry);
+        row.appendChild(reviewNextButton(item, forSrs, 'Come back to this later →'));
+        feedback.appendChild(row);
+        return;
+    }
+    if (payload.feelCheck) feedback.appendChild(grammarParagraph(payload.feelCheck, 'pron-feel'));
+    feedback.appendChild(reviewNextButton(item, forSrs));
 }
 
 // ============================================
@@ -4046,8 +5837,15 @@ function scheduleGrammarSuccess(lesson) {
     }
 }
 
-/** Log a wrong answer by type, so it can be resurfaced (FR-SRS-3, principle 4). */
-function recordGrammarMistake(lesson, item, feedback, given) {
+/**
+ * Log a wrong answer by type, so it can be resurfaced (FR-SRS-3, principle 4).
+ *
+ * `source` names which screen logged it, so the mistake log can tell a lesson
+ * answer from a review answer — the same wrong choice means the same thing about
+ * the learner either way, but not about the app. Defaults to the lesson, so every
+ * existing call site is unchanged.
+ */
+function recordGrammarMistake(lesson, item, feedback, given, source) {
     if (typeof Mistakes === 'undefined' || !Mistakes || typeof Mistakes.record !== 'function') return;
     const category = (feedback && feedback.logAs) || lesson.mistakeCategory;
     if (!category) return;
@@ -4056,7 +5854,7 @@ function recordGrammarMistake(lesson, item, feedback, given) {
         item: item.id,
         given: grammarAnswerLabel(item, given),
         expected: expected,
-        source: 'grammarPractice'
+        source: source || 'grammarPractice'
     });
 }
 
@@ -4686,6 +6484,41 @@ function updateGrammarNavigationState(total) {
     if (next) next.disabled = total === 0 || index >= total - 1;
 }
 
+/**
+ * Open the grammar section on the point with this id — the FR-SRS-3 drill route
+ * and the "open the full lesson" link on a grammar review card.
+ *
+ * Returns false without navigating when the point is not authored at the tier
+ * this section would show. That is the honest answer: sending the learner to the
+ * grammar section on an unrelated point, having just told them it was about
+ * articles, is worse than saying nothing is written for it yet — and it is what
+ * lets renderMistakePanel() decide whether to offer a button at all.
+ */
+function openGrammarPointById(id) {
+    const level = resolveDifficulty(state.currentDifficulty, 'grammar');
+    const lessons = grammarLessonsFor(level);
+    let index = -1;
+    lessons.forEach((lesson, i) => { if (index === -1 && lesson && lesson.id === id) index = i; });
+    if (index === -1) return false;
+    state.currentGrammarIndex = index;
+    switchSection('grammar');
+    saveProgress();
+    return true;
+}
+
+/** Open the pronunciation section on the pair with this id, or refuse. Same
+ *  contract and same reasoning as openGrammarPointById(). */
+function openPronunciationPairById(id) {
+    const pairs = pronunciationPairs();
+    let index = -1;
+    pairs.forEach((pair, i) => { if (index === -1 && pair && pair.id === id) index = i; });
+    if (index === -1) return false;
+    state.currentPronunciationIndex = index;
+    switchSection('pronunciation');
+    saveProgress();
+    return true;
+}
+
 function initializeGrammarButtons() {
     const prev = document.getElementById('prevGrammar');
     const next = document.getElementById('nextGrammar');
@@ -5042,15 +6875,22 @@ function schedulePronunciationSuccess(pair) {
     }
 }
 
-/** Log the miss by type so it can be resurfaced (FR-SRS-3, principle 4). */
-function recordPronunciationMistake(pair, item, heard, chosen) {
+/**
+ * Log the miss by type so it can be resurfaced (FR-SRS-3, principle 4).
+ *
+ * `source` names which screen logged it — the drill or a review — for the same
+ * reason recordGrammarMistake() takes one: the same wrong choice means the same
+ * thing about the learner from either screen, but not about the app. Defaults to
+ * the drill, so every existing call site is unchanged.
+ */
+function recordPronunciationMistake(pair, item, heard, chosen, source) {
     if (typeof Mistakes === 'undefined' || !Mistakes || typeof Mistakes.record !== 'function') return;
     if (!pair.mistakeCategory) return;
     Mistakes.record(pair.mistakeCategory, {
         item: item.a + '/' + item.b,
         given: chosen,
         expected: heard,
-        source: 'pronunciationDiscrimination'
+        source: source || 'pronunciationDiscrimination'
     });
 }
 
@@ -6025,29 +7865,35 @@ function initializePronunciationButtons() {
 //    `pronunciation_foundation_0..2` ids keep meaning what they meant.
 //
 // 2. `PRONUNCIATION_VOWELS_STRESS.stress` (21 word-stress items, FR-PRN-3) and
-//    `.noticing` (15 rhythm / final-vowel / cluster items, FR-PRN-8) are authored
-//    and rendered nowhere. Neither is a small addition to this file:
+//    `.noticing` (15 rhythm / final-vowel / cluster items, FR-PRN-8) still have no
+//    SECTION of their own, and this file still does not give them one. What US-177
+//    changed is that both are now REVIEWABLE: the typed review surface
+//    (renderPhonStressReviewCard / renderPhonNoticingReviewCard, near
+//    loadReviewCard above) draws one item at a time, srs.js gained a projector
+//    variant for each shape, and the mistake panel's drill button is what seeds
+//    the first record. So the content is reachable; a walk-the-whole-set section
+//    with Prev/Next, a progress model per item and the third stress mode
+//    ('choose-form', which no authored item uses yet) is not built.
 //
-//  - `stress[]` needs three drill modes ('choose-stress', 'choose-syllable-count',
-//    'choose-form'), a syllable renderer that marks primary/secondary/reduced from
-//    `stressNumbers` without parsing the display string, and — the part that is
-//    not UI — a per-word progress model. Every item schedules under the SINGLE key
-//    `phon:word-stress`, so 21 words share one SRS record and per-word accuracy is
-//    not an SRS fact at all. That needs its own counter, like
-//    state.pronunciationAccuracy but keyed by item id, or the section will
-//    remember only "word stress" as one lump.
-//  - `noticing[]` needs SEVEN modes ('count-beats', 'pick-beat-words',
-//    'pick-written-form', 'count-sounds', 'count-syllables', 'sort',
-//    'pick-syllable-count', plus 'match-beat-to-meaning' and
-//    'pick-which-word-you-said' which the file's own header does not list), two of
-//    them multi-select over `tokens` and three graded from `items[].answer` rather
-//    than a `correctIndex`. It also has no projector in srs.js at all:
-//    `phon:rhythm`, `phon:final-vowel` and `phon:cluster` would be scheduled with
-//    PROJECTORS.phon's vowel-pair field list, which matches none of their fields,
-//    so every review card would be empty.
+//    The two hard parts named here previously are both addressed rather than
+//    dodged, and it is worth saying where:
+//  - the per-word progress model is `state.itemAccuracy`, keyed by content item
+//    id. All 21 stress items share the SINGLE key `phon:word-stress`, so per-word
+//    accuracy is not an SRS fact and must not be derived from `reps`/`lapses`
+//    (methodology principle 3). The counter is the answer, exactly as
+//    state.pronunciationAccuracy is for pairs — and it is a SEPARATE map, because
+//    that one is what the FR-PRN-6 gate iterates.
+//  - the noticing modes are not nine renderers but THREE grading shapes
+//    (noticingGrading(): `options`+`correctIndex`, `tokens`+`correct`,
+//    `items[].answer`), which is what the nine authored `mode` strings actually
+//    reduce to. A card reads the shape, never the mode string, so a tenth mode
+//    that grades one of those three ways needs no code here.
+//    `requiresImitation` is enforced by a guard and not by trust: FR-PRN-8 forbids
+//    an imitation task for prosody, so an item declaring one is refused by name.
 //
-// One drill that grades one thing honestly is worth more than three half-built
-// ones, so they are left authored and unwired rather than rendered badly.
+// A syllable renderer that marks primary/secondary/reduced from `stressNumbers`
+// without parsing `display` does now exist — renderStressWord() — and a section
+// would reuse it rather than write a second one.
 
 // ============================================
 // SECTION LOADER REGISTRATION
@@ -6204,16 +8050,20 @@ function contentCountAt(map, level) {
 // from here what the module already assumed.
 if (typeof Session !== 'undefined' && Session && typeof Session.registerSurfaces === 'function') {
     Session.registerSurfaces({
-        // startReview() -> SRS.getDueWords() -> the vocabulary word card. Vocab
-        // ONLY, and that restriction is the point of the `types` field: due
-        // `gram:` and `phon:` records exist and are correctly scheduled, and no
-        // screen in this build draws them, so the review step must not count
-        // them. Session.countsHeldBack() reports the gap and the step carries it
-        // on `step.heldBack`.
+        // startReview() -> SRS.getDue(null) -> a card per (type, shape). Step 3 of
+        // the four-step switchover in js/core/srs.js: the review screen can now
+        // draw vocabulary words, grammar points, phoneme pairs, word stress and
+        // prosody noticing, so those types stop being reported as held back.
+        //
+        // `types` is DERIVED from REVIEW_RENDERERS, not restated: a shape added or
+        // removed there moves this answer with it, which is the only way this map
+        // stays the truthful thing the planner depends on. `coll` is absent
+        // because REVIEW_UNRENDERABLE says why — no collocation content exists —
+        // and Session.countsHeldBack() reports any due `coll:` record instead.
         'srs.review': {
             available: true,
-            types: ['vocab'],
-            note: 'Review mode (app.js startReview) walks SRS.getDueWords(), which is vocabulary only, and renders it in the vocabulary word card.'
+            types: reviewDrawableTypes(),
+            note: 'Review mode (app.js startReview) walks SRS.getDue(null) and draws a card per (type, shape): the vocabulary word card, a grammar point\'s review.itemIds subset, a minimal-pair discrimination item, a word-stress drill and a prosody noticing question.'
         },
 
         // renderGrammarTeaching(): the rule, the "how to decide" steps and the
@@ -6409,20 +8259,32 @@ function sessionExhaustedSections(level) {
  * in the live queue (already reviewed) simply drop out; if none survive, the
  * live queue is used, because the honest fallback is "here is what is due now",
  * not an empty screen.
+ *
+ * Matched on the SRS KEY (`type:ref`), not on a word. US-177 made the queue typed
+ * — an entry is `{ type, shape, ref, key, data, … }` — and `step.items` carries
+ * exactly `{ type, ref, key }` for that reason. Matching on `ref` alone would
+ * collide the moment a vocabulary word and a grammar point shared a ref, and
+ * matching on `word` stopped being possible at all.
  */
 function sessionReviewQueue(step, queue) {
     const cap = (typeof step.count === 'number' && step.count > 0) ? step.count : queue.length;
     const items = Array.isArray(step.items) ? step.items : [];
     if (!items.length) return queue.slice(0, cap);
 
-    // Object.create(null): the keys here are normalised WORDS, and a learner
-    // reviewing "constructor" or "toString" must not match an inherited property.
-    const byRef = Object.create(null);
-    queue.forEach(word => { byRef[sessionRef(word && word.word)] = word; });
+    // Object.create(null): these keys come from content, and a learner reviewing
+    // "constructor" or "toString" must not match an inherited property.
+    const byKey = Object.create(null);
+    queue.forEach(entry => {
+        const key = (entry && entry.key) ||
+            ((entry && entry.type ? entry.type : 'vocab') + ':' + sessionRef(entry && entry.ref));
+        byKey[key] = entry;
+    });
     const ordered = [];
     items.forEach(item => {
-        const word = byRef[sessionRef(item && item.ref)];
-        if (word && ordered.indexOf(word) === -1) ordered.push(word);
+        const key = (item && item.key) ||
+            ((item && item.type ? item.type : 'vocab') + ':' + sessionRef(item && item.ref));
+        const entry = byKey[key];
+        if (entry && ordered.indexOf(entry) === -1) ordered.push(entry);
     });
     return (ordered.length ? ordered : queue).slice(0, cap);
 }
@@ -6526,7 +8388,7 @@ const SESSION_ROUTES = {
             return 'Nothing is due any more, so there is nothing to review. Press Done and carry on.';
         }
         state.reviewQueue = sessionReviewQueue(step, state.reviewQueue);
-        loadReviewWord();
+        loadReviewCard();
         return state.reviewQueue.length + ' card(s) from your review queue, oldest first.';
     },
     'grammar.teach': function (step) { return sessionOpenGrammar(step, 'teach'); },

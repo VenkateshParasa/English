@@ -16,16 +16,20 @@
  *      unranked, not dropped (US-159);
  *   6. one habit is one finding with one count and one drill (US-165), and one
  *      finding may still have more than one drill destination where the same
- *      error is fixed by two items (US-164, /θ/ and /ð/ under T-P6).
+ *      error is fixed by two items (US-164, /θ/ and /ð/ under T-P6);
+ *   7. a row's LABEL has to be true of the errors routed to it, which is why a
+ *      dropped subject could not be filed under `gram.copula` and got its own
+ *      row instead (US-182) — the mirror image of decision 5, where widening the
+ *      wording was the right answer because the remediation was the same.
  *
  * Where a test pins a *policy number* rather than a behaviour it reads the
  * constant off the module, so retuning the policy does not look like a
  * regression. Where the number itself is the contract (30 days, top 5, from
  * FR-SRS-3) it is written out literally.
  *
- * The US-165 block requires the two grammar content files, so this suite is the
- * one place where the taxonomy and the content that references it are checked
- * against each other rather than against a transcription of each other.
+ * The US-165 and US-182 blocks require the grammar content files, so this suite
+ * is the one place where the taxonomy and the content that references it are
+ * checked against each other rather than against a transcription of each other.
  */
 
 const Mistakes = require('../../js/core/mistakes.js');
@@ -379,6 +383,218 @@ describe('US-165 — the split routing converges, driven by the content itself',
         // the id that list was missing.
         expect(Mistakes.categoryIds({ strand: 'grammar' })).toContain('gram.register-indian');
         expect(grammar.MISTAKE_CATEGORIES).toBeUndefined();
+    });
+});
+
+describe('US-182 — a dropped SUBJECT is its own row, and gram.copula keeps its id', () => {
+    // data/grammar/be.js's header reported the gap: there was no id for "Am in a
+    // meeting", "Is very good", "Very good at her job". The nearest row,
+    // `gram.copula`, is labelled 'Dropped "am", "is" or "are"' — which is FALSE of
+    // a sentence where the be word is present and the SUBJECT is missing, so
+    // routing these there would hand the learner a finding they can check and
+    // find wrong. These tests pin the new row, its wording, its destination, and
+    // that nothing that already exists moved.
+    //
+    // The content half is read OFF data/grammar/be.js rather than restated, in
+    // the style of the US-165 block above.
+    const be = require('../../data/grammar/be.js').GRAMMAR_BE;
+
+    /** Every mistake id be.js declares — `mistakeCategory` plus every `logAs`. */
+    const beDeclaredIds = () => {
+        const out = [be.mistakeCategory];
+        (be.practice || []).forEach(item => (item.feedback || []).forEach(f => {
+            if (f && f.logAs) out.push(f.logAs);
+        }));
+        return out.filter(Boolean);
+    };
+
+    /** What the CONTENT says to log when the learner picks `answer` on `itemId`. */
+    const routeOf = (itemId, answer) => {
+        const item = (be.practice || []).find(i => i.id === itemId);
+        expect(item).toBeDefined();
+        const fb = (item.feedback || []).find(f => f.forAnswer === answer);
+        expect(fb).toBeDefined();
+        return fb.logAs || be.mistakeCategory;
+    };
+
+    it('registers the row, and gram.copula is untouched', () => {
+        expect(Mistakes.isKnownCategory('gram.subject-dropped')).toBe(true);
+        // The id is learner storage: gram.copula could not be renamed or
+        // repurposed, so the new error needed a new id beside it.
+        const copula = Mistakes.getCategory('gram.copula');
+        expect(copula.label).toBe('Dropped "am", "is" or "are"');
+        expect(copula.code).toBe('T-G2');
+        expect(Mistakes.drillTarget('gram.copula').srsKey).toBe('gram:be');
+        // Nothing else was renamed or dropped either: 34 shipped rows + 1.
+        expect(Mistakes.categoryIds()).toHaveLength(35);
+        ['gram.articles', 'gram.copula', 'gram.stative-progressive',
+            'gram.uncountable-plural', 'gram.tag-question', 'gram.present-perfect',
+            'gram.preposition-transfer', 'gram.embedded-question-order',
+            'gram.register-indian', 'gram.tense-agreement', 'gram.subject-verb-agreement',
+            'gram.verb-form', 'gram.word-order', 'prn.rhythm', 'prn.final-vowel',
+            'prn.cluster', 'prn.word-stress', 'prn.v-w', 'prn.th', 'prn.i-length',
+            'prn.ae-e', 'prn.o-ou', 'prn.z', 'prn.f-p', 'prn.retroflex',
+            'prn.recogniser-missed', 'vocab.meaning', 'vocab.recall', 'vocab.collocation',
+            'vocab.spelling', 'lsn.gist', 'lsn.detail', 'rdw.inference',
+            'general.uncategorised'
+        ].forEach(id => expect(Mistakes.isKnownCategory(id)).toBe(true));
+    });
+
+    it('has a label that is TRUE of the error routed to it', () => {
+        const cat = Mistakes.getCategory('gram.subject-dropped');
+        // The defect being fixed: the label must not say a be word was dropped,
+        // because in every one of these sentences the be word is present.
+        expect(cat.label).not.toMatch(/\bam\b|\bis\b|\bare\b/i);
+        expect(cat.label).toMatch(/subject/i);
+        // ...and the example has to show the shape the learner actually produced.
+        expect(cat.example).toMatch(/Am in a meeting/);
+        expect(cat.example).toMatch(/Is very good/);
+    });
+
+    it('is honest that English drops subjects too (§5, "never claim more than we have")', () => {
+        const cat = Mistakes.getCategory('gram.subject-dropped');
+        // "Sounds good" and "Can't complain" are ordinary English. A row that
+        // told the learner a missing subject is always an error would be wrong,
+        // and being told something wrong about your own language costs trust.
+        expect(cat.explanation).toMatch(/not always an error/);
+        expect(cat.explanation).toMatch(/Sounds good/);
+        // The cost is tone, not grammar, and the row says so instead of
+        // implying the sentence is broken.
+        expect(cat.explanation).toMatch(/abrupt rather than wrong/);
+    });
+
+    it('follows §5 tone: second person, no blame, no exclamation marks', () => {
+        const cat = Mistakes.getCategory('gram.subject-dropped');
+        expect(cat.explanation).toMatch(/\byou\b/);
+        expect(cat.label + cat.explanation + cat.example).not.toMatch(/!/);
+        expect(cat.explanation).not.toMatch(/careless|lazy|wrong of you|bad/i);
+        // Every reportable row owes the learner a reason, not just a name.
+        expect(cat.explanation.length).toBeGreaterThan(20);
+        expect(cat.reportable).toBe(true);
+    });
+
+    it('carries no T- code, because REQUIREMENTS.md §3.2 has no row for it', () => {
+        // T-G2 is copula dropping specifically — its own example column is
+        // "I doctor" / "He very good", both with the subject present. Minting a
+        // T-G10 here would put a code in the data that the requirement does not
+        // have; when §3.2 grows the row, this row can carry it.
+        expect(Mistakes.getCategory('gram.subject-dropped').code).toBeNull();
+        expect(Mistakes.categories().map(c => c.code)).not.toContain('T-G10');
+        // Still a Telugu-transfer row, so an L1 filter finds it.
+        expect(Mistakes.categories({ l1: 'telugu' }).map(c => c.id))
+            .toContain('gram.subject-dropped');
+    });
+
+    it('points at a drill that exists, and shares it with gram.copula on purpose', () => {
+        const t = Mistakes.drillTarget('gram.subject-dropped');
+        expect(t).toMatchObject({
+            strand: 'grammar', target: 'be', srsKey: 'gram:be',
+            targets: ['be'], srsKeys: ['gram:be']
+        });
+        // drillTarget() builds `gram:<target>` without checking that anything
+        // implements the target, so a slug nothing authors would schedule a
+        // lesson the app cannot open. Read the target back off the content.
+        expect(be.id).toBe('be');
+        expect(be.srsKey).toBe('gram:be');
+        expect(t.srsKey).toBe(be.srsKey);
+        // One destination, two findings — the learner has to be told WHICH word
+        // went missing, which is the whole reason the count is kept separate.
+        expect(Mistakes.drillTarget('gram.copula').srsKey).toBe(t.srsKey);
+    });
+
+    it('ranks as its own finding, with a routable drill button', () => {
+        seed('gram.subject-dropped', [1, 2, 3, 5],
+            { item: 'be-p2', given: 'Am', expected: "I'm / I am", source: 'grammarPractice' });
+        seed('gram.copula', [4]);
+
+        const top = Mistakes.topCategories();
+        expect(top[0].id).toBe('gram.subject-dropped');
+        expect(top[0].label).toBe('A sentence that starts without its subject');
+        expect(top[0].count).toBe(4);                    // the honest raw count
+        expect(top[0].drillable).toBe(true);
+        expect(top[0].drill.srsKey).toBe('gram:be');
+        // Two findings, not one merged one, and not two halves of one habit.
+        expect(top.map(r => r.id)).toEqual(['gram.subject-dropped', 'gram.copula']);
+        expect(top[1].count).toBe(1);
+    });
+
+    it('is barred from the ranking on recogniser evidence, like every other row', () => {
+        // BR-3 / FR-PRN-5. A new row must not become a back door into the
+        // diagnosis for the weakest evidence the app has.
+        seed('gram.subject-dropped', [1, 2, 3, 4, 5, 6], { evidence: Mistakes.EVIDENCE.RECOGNISER });
+        expect(Mistakes.topCategories()).toEqual([]);
+        const shown = Mistakes.topCategories({ countUnverified: true })[0];
+        expect(shown.id).toBe('gram.subject-dropped');
+        expect(shown.unverifiedCount).toBe(6);
+        // Self-report may schedule but never certify (FR-SRS-5).
+        Mistakes.entryList = [];
+        seed('gram.subject-dropped', [1, 2], { evidence: Mistakes.EVIDENCE.SELF });
+        expect(Mistakes.topCategories()).toEqual([]);
+    });
+
+    it('survives the taxonomy being reloaded, and its entries survive it not being there', () => {
+        // The old-id path, exercised with the NEW id: a row that leaves the
+        // taxonomy must leave its entries in storage, unranked rather than lost.
+        seed('gram.subject-dropped', [1, 2]);
+        expect(Mistakes.topCategories()[0].id).toBe('gram.subject-dropped');
+
+        // Simulate the id having gone (a swapped L1 profile, a retired routing).
+        Mistakes.categoryList = Mistakes.categoryList.filter(c => c.id !== 'gram.subject-dropped');
+        Mistakes._reindex();
+        expect(Mistakes.isKnownCategory('gram.subject-dropped')).toBe(false);
+        expect(() => Mistakes.topCategories()).not.toThrow();
+        expect(Mistakes.topCategories()).toEqual([]);          // unranked...
+        expect(Mistakes.entryList).toHaveLength(2);            // ...but kept
+        expect(Mistakes.countsByCategory()['gram.subject-dropped'].count).toBe(2);
+        expect(Mistakes.history('gram.subject-dropped')).toHaveLength(2);
+        expect(Mistakes.load().filter(e => e.category === 'gram.subject-dropped'))
+            .toHaveLength(2);                                  // and reload-safe
+
+        // resetCategories() brings the built-in row back, and the history with it.
+        Mistakes.resetCategories();
+        expect(Mistakes.isKnownCategory('gram.subject-dropped')).toBe(true);
+        expect(Mistakes.topCategories()[0].count).toBe(2);
+    });
+
+    it('declares nothing be.js cannot log, and nothing be.js already logs has moved', () => {
+        // The typo guard, pointed at the content that reported the gap.
+        expect(Mistakes.unknownCategories(beDeclaredIds())).toEqual([]);
+        expect(be.mistakeCategory).toBe('gram.copula');
+        // Every wrong answer be.js authors today has its subject PRESENT, so
+        // none of these three routings belongs on the new row and none moved.
+        expect(routeOf('be-p1', 'my sister')).toBe('gram.copula');          // zero copula
+        expect(routeOf('be-p2', 'i')).toBe('gram.copula');                 // zero copula
+        expect(routeOf('be-p4', '')).toBe('gram.copula');                  // zero copula
+        expect(routeOf('be-p6', 'she')).toBe('gram.copula');               // zero copula
+        expect(routeOf('be-p2', 'i is')).toBe('gram.subject-verb-agreement');
+        expect(routeOf('be-p6', 'she are')).toBe('gram.subject-verb-agreement');
+    });
+
+    it('will only ever be emitted for an answer that really has no subject', () => {
+        // NOTHING emits this id yet — be.js is owned elsewhere and this file
+        // cannot wire it. The one-line edit that file needs is on item `be-p2`
+        // ("Sorry, ___ in a meeting until five."), whose options are currently
+        // ["i'm", "i am", "i", "i is"]: add the bare be form `"am"`, so the
+        // learner can choose the sentence they would actually say — "Am in a
+        // meeting until five." — and give that option a feedback entry carrying
+        //     logAs: "gram.subject-dropped"
+        // (an option with no authored entry falls through to `fallbackFeedback`,
+        // which has no `logAs`, so it would be logged as the point's default
+        // `gram.copula` — the false label this row exists to avoid).
+        //
+        // This assertion is written so that it holds both before and after that
+        // edit: it checks the HONESTY of any routing to the new row rather than
+        // its presence, so wiring be.js does not break it.
+        const subjectless = /^(am|is|are|was|were|'m|'s|'re)?$/;
+        (be.practice || []).forEach(item => (item.feedback || []).forEach(f => {
+            if (f && f.logAs === 'gram.subject-dropped') {
+                // The chosen answer must be a bare be form or nothing at all —
+                // if it contains a subject, the error is not a dropped subject.
+                expect(String(f.forAnswer).trim().toLowerCase()).toMatch(subjectless);
+            }
+        }));
+        // And whatever be.js declares must stay loggable.
+        expect(Mistakes.unknownCategories(beDeclaredIds())).toEqual([]);
     });
 });
 

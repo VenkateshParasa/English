@@ -659,13 +659,18 @@ describe('dueCount vs stats().due', () => {
     });
 
     it('keeps the badge equal to the session review mode actually walks', () => {
-        // dueCount() defaults to vocab because startReview() walks getDueWords(),
-        // which is vocab-only. Counting grammar here would promise a longer
-        // session than the button opens.
+        // US-177 switched the badge over. app.js's updateDueCount() now reads
+        // `SRS.dueCount(null)` — every type, not just vocabulary — because
+        // startReview() walks getDue(null) and switches on (type, shape). So the
+        // figure the badge is built from is the SECOND assertion below, and the
+        // vocabulary-only default is only still here because srs.js's own
+        // `dueCount()` default has not been changed (see the note on that method:
+        // the call site passes `null` explicitly instead).
         for (let i = 0; i < 25; i++) SRS.schedule(word({ word: 'w' + i }), false);
         SRS.scheduleItem('gram', 'g1', { id: 'g1' }, false);
         expect(SRS.dueCount()).toBe(SRS.getDueWords().length);
         expect(SRS.dueCount()).toBe(SRS.DAILY_REVIEW_CAP);
+        // THE BADGE'S OWN INVARIANT: what it counts is what the button opens.
         expect(SRS.dueCount(null)).toBe(SRS.getDue(null).length);
     });
 });
@@ -1378,7 +1383,17 @@ describe('RENDERABLE — a queue entry is a promise the card can be drawn', () =
 });
 
 // ---------------------------------------------------------------------------
-// The badge. Deliberately still vocabulary-only — see SRS.dueCount().
+// The badge. `SRS.dueCount()`'s DEFAULT is still vocabulary-only; the BADGE is
+// not, and since US-177 the two are different things.
+//
+// app.js's updateDueCount() calls `SRS.dueCount(null)` explicitly, which is the
+// figure this method's own note proposes making the default. The switchover it
+// describes has therefore landed in behaviour — startReview() walks getDue(null),
+// SURFACES['srs.review'].types is ['vocab','gram','phon'], and the badge counts
+// every type the review screen can draw — while this file is unchanged, because
+// srs.js was outside that commit's edit set. Changing the default here is now
+// SAFE and is the one line still outstanding; these tests describe the module as
+// it stands, and the assertions below say which figure the badge is built from.
 // ---------------------------------------------------------------------------
 describe('dueCount — the badge does not promise a session app.js cannot open', () => {
     beforeEach(() => { SRS.records = {}; });
@@ -1389,17 +1404,17 @@ describe('dueCount — the badge does not promise a session app.js cannot open',
         practice: [{ id: ref + '-p1' }]
     });
 
-    it('still defaults to vocab, even though getDue() can now serve typed items', () => {
-        // The scheduler half of US-171 landed; the app.js half (startReview
-        // walking getDue) has not. Counting grammar in the badge before the
-        // button can show it is the same trust bug as a false "Perfect!".
+    it('still defaults to vocab, while the badge reads dueCount(null)', () => {
+        // The default is untouched, so every existing 0-argument caller keeps its
+        // behaviour. app.js does NOT rely on the default any more.
         SRS.schedule(word(), false);
         SRS.scheduleItem('gram', 'g1', gram('g1'), false);
         SRS.scheduleItem('gram', 'g2', gram('g2'), false);
         expect(SRS.dueCount()).toBe(1);
         expect(SRS.dueCount()).toBe(SRS.getDueWords().length);
-        // The typed work is not hidden, it is reported.
+        // What the badge shows, and what the button opens.
         expect(SRS.dueCount(null)).toBe(3);
+        expect(SRS.dueCount(null)).toBe(SRS.getDue(null).length);
         expect(SRS.totalDueCount('gram')).toBe(2);
         expect(SRS.countDue(null)).toBe(3);
     });

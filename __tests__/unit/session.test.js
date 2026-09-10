@@ -242,14 +242,28 @@ describe('(b) a backlog of 40 due items', () => {
         expect(review.count).toBe(12);
     });
 
-    it('only queues item types the review screen can actually draw', () => {
+    it('queues every item type the review screen can draw, and only those', () => {
+        // US-177 widened SURFACES['srs.review'].types from ['vocab'] to
+        // ['vocab', 'gram', 'phon'], because app.js startReview() now walks
+        // SRS.getDue(null) and switches on (type, shape). The interesting
+        // assertion is no longer "vocabulary only" — it is that the queue is
+        // exactly the declared set, so a type the screen cannot draw could still
+        // never reach a step. `coll` is the one still outside it.
         const review = stepById(build(), 'review');
-        expect(review.items.every(i => i.type === 'vocab')).toBe(true);
+        const types = review.items.map(i => i.type);
+        expect(new Set(types)).toEqual(new Set(['vocab', 'gram', 'phon']));
+        expect(types.every(t => Session.surface('srs.review').types.indexOf(t) !== -1)).toBe(true);
     });
 
     it('reports the due items it cannot show rather than calling them done', () => {
-        const review = stepById(build(), 'review');
-        const held = review.heldBack;
+        // Nothing is held back in this build any more: the three types this stub
+        // seeds are all drawable. The mechanism is what is under test, so it is
+        // exercised by NARROWING the surface — which is also what a build that
+        // loses a renderer would look like.
+        expect(stepById(build(), 'review').heldBack).toEqual([]);
+
+        Session.registerSurfaces({ 'srs.review': { available: true, types: ['vocab'] } });
+        const held = stepById(build(), 'review').heldBack;
         expect(held.map(h => h.type).sort()).toEqual(['gram', 'phon']);
         expect(held.reduce((n, h) => n + h.count, 0)).toBe(12);
         expect(held[0].reason).toMatch(/no screen renders/);
@@ -421,14 +435,21 @@ describe('the surface registry', () => {
         expect(productionStep(build()).production.surface).toBe('speak.free');
     });
 
-    it('lets the review screen widen to all four item types', () => {
+    it('lets the review screen narrow again if a renderer is lost', () => {
+        // The baseline is ['vocab', 'gram', 'phon'] since US-177, so widening is
+        // no longer the interesting direction — narrowing is. A build that could
+        // only draw vocabulary must plan a vocabulary-only review step and report
+        // the rest as held back, which is what keeps the planner honest either way.
         SRSstub._seed('vocab', 6);
         SRSstub._seed('gram', 4);
         SRSstub._seed('phon', 2);
-        Session.registerSurfaces({ 'srs.review': { available: true, types: ['vocab', 'gram', 'phon'] } });
-        const review = stepById(build(), 'review');
-        expect(review.strands.sort()).toEqual(['A', 'B', 'C']);
-        expect(review.heldBack).toEqual([]);
+        expect(stepById(build(), 'review').strands.sort()).toEqual(['A', 'B', 'C']);
+        expect(stepById(build(), 'review').heldBack).toEqual([]);
+
+        Session.registerSurfaces({ 'srs.review': { available: true, types: ['vocab'] } });
+        const narrowed = stepById(build({ fresh: true }), 'review');
+        expect(narrowed.strands).toEqual(['A']);
+        expect(narrowed.heldBack.map(h => h.type).sort()).toEqual(['gram', 'phon']);
     });
 
     it('accepts a predicate, for FR-PRN-6\'s per-pair gate', () => {

@@ -2987,3 +2987,222 @@ header h1 {
         align-items: stretch;
     }
 }
+
+/* ============================================
+   TYPED REVIEW CARDS  (US-177)
+   ============================================
+   The vocabulary review still IS the word card, so nothing here restyles it.
+   These rules dress #reviewCard, which is where a grammar point, a phoneme pair,
+   a word-stress drill or a prosody noticing question is drawn instead.
+
+   Deliberately thin: every card reuses the `.grammar-*` and `.pron-*` classes the
+   two sections already define, so a review looks like the thing it is reviewing
+   and there is one place to change how feedback reads. Only the chrome the
+   sections have no equivalent of is new. */
+.review-card {
+    margin: var(--space-4, 1rem) 0;
+    padding: var(--space-4, 1rem) var(--space-5, 1.25rem);
+    background: var(--background-card, #fff);
+    border-radius: var(--radius-md, 0.5rem);
+    box-shadow: var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.1));
+}
+
+.review-card[hidden] {
+    display: none;
+}
+
+.review-head {
+    border-bottom: 1px solid var(--border-color, #e5e7eb);
+    padding-bottom: var(--space-3, 0.75rem);
+    margin-bottom: var(--space-4, 1rem);
+}
+
+.review-kind {
+    font-size: var(--text-sm, 0.875rem);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary, #555);
+    margin: 0;
+}
+
+.review-title {
+    margin: var(--space-1, 0.25rem) 0;
+}
+
+.review-subtitle,
+.review-context {
+    font-size: var(--text-sm, 0.875rem);
+    color: var(--text-secondary, #555);
+    margin: 0;
+}
+
+/* "A review, not the lesson" — the line that says what has deliberately been
+   left out, so a learner expecting the teaching knows where it went. */
+.review-scope {
+    font-size: var(--text-sm, 0.875rem);
+    color: var(--text-secondary, #555);
+    font-style: italic;
+}
+
+.review-rule-prompt {
+    padding: var(--space-3, 0.75rem);
+    border-left: 4px solid var(--primary-color, #4f46e5);
+    background: var(--background-alt, #f8f9fb);
+    border-radius: var(--radius-sm, 0.25rem);
+}
+
+.review-items > .grammar-item + .grammar-item {
+    margin-top: var(--space-4, 1rem);
+}
+
+.review-next {
+    margin-top: var(--space-3, 0.75rem);
+}
+
+.review-done {
+    font-weight: 600;
+}
+
+/* Word stress. The beat is marked from `stressNumbers`, never by parsing the
+   authored `display` string, so the emphasis here has to work for the primary,
+   the secondary and the reduced syllable independently. `is-reduced` is
+   deliberately lighter AND smaller: the point of the card is that an unstressed
+   English syllable is squashed, and a size difference says that without needing
+   colour (which would fail at any contrast setting on its own). */
+.stress-word {
+    font-size: var(--text-2xl, 1.5rem);
+    letter-spacing: 0.02em;
+}
+
+.stress-syl.is-primary {
+    font-weight: 800;
+}
+
+.stress-syl.is-secondary {
+    font-weight: 600;
+}
+
+.stress-syl.is-reduced {
+    opacity: 0.65;
+    font-size: 0.85em;
+}
+
+.stress-ipa {
+    margin: 0 0 var(--space-2, 0.5rem);
+}
+
+/* Prosody noticing: the tappable words of a "tap every word that carries a beat"
+   item, and the per-row answer blocks. */
+.notice-tokens {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2, 0.5rem);
+    margin: var(--space-3, 0.75rem) 0;
+}
+
+.notice-token {
+    padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
+    border: 2px solid var(--border-color, #e5e7eb);
+    border-radius: var(--radius-sm, 0.25rem);
+    background: var(--background-card, #fff);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.notice-token.selected {
+    border-color: var(--primary-color, #4f46e5);
+    font-weight: 700;
+}
+
+.notice-token.correct {
+    border-color: var(--success-color, #16a34a);
+}
+
+.notice-token.incorrect {
+    border-color: var(--error-color, #dc2626);
+    text-decoration: line-through;
+}
+
+.notice-row {
+    padding: var(--space-3, 0.75rem) 0;
+    border-bottom: 1px solid var(--border-color, #e5e7eb);
+}
+
+.notice-row:last-child {
+    border-bottom: none;
+}
+
+.notice-row-label {
+    margin: 0 0 var(--space-2, 0.5rem);
+}
+
+.notice-row-verdict {
+    font-weight: 600;
+}
+
+.notice-text {
+    font-size: var(--text-lg, 1.125rem);
+}
+
+.notice-answer {
+    font-weight: 600;
+}
+
+/* ============================================
+   WHAT KEEPS COMING BACK  (US-181 / FR-SRS-3)
+   ============================================
+   No colour carries meaning on its own here, and there is no bar, meter or badge.
+   That is a decision, not a gap: this panel is a diagnosis for persona P4, and a
+   red bar labelled "articles" reads as a mark against the learner rather than as
+   the shortlist it is (TEACHING_METHODOLOGY.md §5 — no blame, no gamification).
+   The count is a number in a sentence, and the trend is words. */
+.mistake-row {
+    padding: var(--space-4, 1rem) 0;
+    border-bottom: 1px solid var(--border-color, #e5e7eb);
+}
+
+.mistake-row:last-child {
+    border-bottom: none;
+}
+
+.mistake-row-head {
+    margin: 0 0 var(--space-2, 0.5rem);
+    font-size: var(--text-lg, 1.125rem);
+}
+
+.mistake-rank {
+    color: var(--text-secondary, #555);
+}
+
+.mistake-count {
+    margin: 0 0 var(--space-2, 0.5rem);
+}
+
+.mistake-why,
+.mistake-example,
+.mistake-row-unverified,
+.mistake-no-drill {
+    font-size: var(--text-sm, 0.875rem);
+    color: var(--text-secondary, #555);
+    margin: 0 0 var(--space-2, 0.5rem);
+}
+
+/* The trend line. `is-unclear` is styled the same as every other direction on
+   purpose: giving it its own colour would be a visual claim about a value whose
+   whole meaning is that no claim can be made. */
+.mistake-trend {
+    font-size: var(--text-sm, 0.875rem);
+    color: var(--text-secondary, #555);
+    margin: 0 0 var(--space-2, 0.5rem);
+}
+
+.mistake-unverified,
+.mistake-window {
+    font-size: var(--text-sm, 0.875rem);
+    color: var(--text-secondary, #555);
+}
+
+.mistake-empty {
+    color: var(--text-secondary, #555);
+}

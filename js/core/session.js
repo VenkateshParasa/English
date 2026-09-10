@@ -190,14 +190,22 @@
     //              promising a grammar review the review screen cannot render.
     //   note       learner-facing-ish reason, copied onto plan.omitted
     const SURFACES = {
-        // app.js startReview() walks SRS.getDueWords(), which is vocab-only —
-        // see the comment on SRS.dueCount(). A due `gram:` or `phon:` record
-        // exists and is correctly scheduled, but no screen draws it yet, so the
-        // review step must not count it. countsHeldBack() reports the gap.
+        // US-177: app.js startReview() walks SRS.getDue(null) and switches on
+        // (item.type, item.shape), so five of the six shapes in SRS.SHAPES are
+        // drawable and three of the four types are represented here. `coll` is
+        // still absent on purpose — there is no collocation content in the build
+        // and PROJECTORS.coll has never been checked against any, so a card drawn
+        // from it would be the empty-card defect srs.js documents. A due `coll:`
+        // record is therefore reported by countsHeldBack() rather than promised.
+        //
+        // app.js overrides this at parse time with the list DERIVED from its own
+        // renderer table (registerSurfaces -> reviewDrawableTypes()), so this
+        // literal is the documented baseline for a caller that loads session.js
+        // alone, not a second source of truth.
         'srs.review': {
             available: true,
-            types: ['vocab'],
-            note: 'Review mode renders vocabulary cards only (app.js startReview walks SRS.getDueWords).'
+            types: ['vocab', 'gram', 'phon'],
+            note: 'Review mode draws vocabulary, grammar and pronunciation cards (app.js startReview walks SRS.getDue(null)); collocation reviews are not built.'
         },
         // renderGrammarLesson / notice / decide / contrast all exist.
         'grammar.teach': { available: true, note: 'Grammar lesson view exists.' },
