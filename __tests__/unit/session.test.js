@@ -680,7 +680,7 @@ describe('degradation is honest, not silent', () => {
         expect(listen.reduced.join(' ')).toMatch(/comprehension question/);
         expect(listen.reduced.join(' ')).toMatch(/Shadowing/);
         const parts = build().omitted.filter(o => o.partial && o.stepId === 'listen');
-        expect(parts.map(p => p.requirement).sort()).toEqual(['FR-LST-1', 'FR-SPK-8']);
+        expect(parts.map(p => p.requirement).sort()).toEqual(['FR-LSN-1', 'FR-SPK-8']);
     });
 
     it('does not throw on a tier with no content anywhere', () => {
@@ -715,7 +715,7 @@ describe('availability(), for the pre-session UI', () => {
             .steps.find(s => s.id === 'listen');
         const comprehend = listen.parts.find(p => p.id === 'comprehend');
         expect(comprehend.ok).toBe(false);
-        expect(comprehend.requirement).toBe('FR-LST-1');
+        expect(comprehend.requirement).toBe('FR-LSN-1');
     });
 });
 

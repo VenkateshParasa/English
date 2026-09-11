@@ -1275,16 +1275,21 @@ describe('module globals under CommonJS (US-134)', () => {
         // exercising a branch that was structurally unreachable.
         const logged = [];
         const previous = global.AppErrorHandler;
-        const realSetItem = localStorage.setItem;
+        // NOTE: the patch goes on Storage.prototype, not on the localStorage
+        // instance. In jsdom an assignment to `localStorage.setItem` does not
+        // shadow the prototype method the module's call resolves to, so an
+        // instance patch never throws and this test passed while asserting
+        // nothing. __tests__/unit/portability.test.js hit the same thing.
+        const realSetItem = Storage.prototype.setItem;
         global.AppErrorHandler = { logError: (e, ctx) => logged.push(ctx) };
         try {
             Mistakes.entryList = [];
             Mistakes.record('gram.articles');
-            localStorage.setItem = () => { throw new Error('QuotaExceededError'); };
+            Storage.prototype.setItem = () => { throw new Error('QuotaExceededError'); };
             expect(Mistakes.save()).toBe(false);
             expect(logged).toContain('Mistakes save');
         } finally {
-            localStorage.setItem = realSetItem;
+            Storage.prototype.setItem = realSetItem;
             if (previous === undefined) delete global.AppErrorHandler;
             else global.AppErrorHandler = previous;
         }
@@ -1294,16 +1299,16 @@ describe('module globals under CommonJS (US-134)', () => {
         // The same path, checked for its data promise rather than its logging:
         // the trimmed quarter goes back, because the entries are not why the
         // write failed.
-        const realSetItem = localStorage.setItem;
+        const realSetItem = Storage.prototype.setItem;   // prototype, not instance — see above
         try {
             Mistakes.entryList = [];
             seed('gram.articles', [1, 2, 3, 4]);
             const before = Mistakes.entryList.length;
-            localStorage.setItem = () => { throw new Error('nope'); };
+            Storage.prototype.setItem = () => { throw new Error('nope'); };
             expect(Mistakes.save()).toBe(false);
             expect(Mistakes.entryList.length).toBe(before);
         } finally {
-            localStorage.setItem = realSetItem;
+            Storage.prototype.setItem = realSetItem;
         }
     });
 

@@ -397,6 +397,29 @@
         return d.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (day < 10 ? '0' : '') + day;
     }
 
+    /**
+     * The clock, as one seam — same idea as srs.js's `_now()`.
+     *
+     * build() has always honoured an injected `opts.now`, but the walk functions
+     * (plan / current / advance) read raw Date.now(). So a caller who injected a
+     * clock got a plan stamped with THEIR date and a rollover guard comparing it
+     * against the WALL date: plan() returned null the moment the two differed,
+     * and current() with it.
+     *
+     * That made the session suite pass only on the day it was written — green for
+     * its author, fifteen failures the next morning, with nothing in the code
+     * having changed. Production never passes `opts.now`, so this is a
+     * testability defect rather than a learner-facing one, but a suite that
+     * expires silently is worse than no suite.
+     *
+     * build() latches an explicitly injected clock here; reset() clears it.
+     */
+    let _clock = null;
+
+    function _now() {
+        return _isFiniteNumber(_clock) ? _clock : Date.now();
+    }
+
     function _budget(minutes) {
         if (!_isFiniteNumber(minutes) || minutes <= 0) return TARGET_MINUTES;
         return Math.min(MAX_MINUTES, Math.max(5, minutes));
@@ -873,7 +896,10 @@
      */
     function build(opts) {
         const o = opts || {};
-        const now = _isFiniteNumber(o.now) ? o.now : Date.now();
+        // Latch an explicitly injected clock so the walk functions below agree
+        // with the date this plan is stamped with. See _now().
+        if (_isFiniteNumber(o.now)) _clock = o.now;
+        const now = _isFiniteNumber(o.now) ? o.now : _now();
 
         if (o.fresh !== true) {
             const stored = load(now);
@@ -1145,9 +1171,9 @@
      * in memory so previous() still works; build() is what starts today.
      */
     function plan() {
-        if (!_state) load(Date.now());
+        if (!_state) load(_now());
         if (!_state || !_state.plan) return null;
-        if (_state.date !== _dateKey(Date.now())) return null;
+        if (_state.date !== _dateKey(_now())) return null;
         return _state.plan;
     }
 
@@ -1157,7 +1183,7 @@
         if (_state.index < 0 || _state.index >= p.steps.length) return null;
         const step = p.steps[_state.index];
         if (step.startedAt === null) {
-            step.startedAt = Date.now();
+            step.startedAt = _now();
             save();
         }
         return step;
@@ -1197,11 +1223,11 @@
         step.outcome = value;
         step.status = value === 'skipped' ? 'skipped' : 'done';
         step.note = note;
-        step.endedAt = Date.now();
+        step.endedAt = _now();
         if (_state.startedAt === null) _state.startedAt = step.startedAt || step.endedAt;
 
         _state.index += 1;
-        _state.updatedAt = Date.now();
+        _state.updatedAt = _now();
 
         if (_state.index >= p.steps.length) {
             _state.previous = _summary();
@@ -1442,6 +1468,9 @@
 
     function reset() {
         _state = null;
+        // Release any latched test clock, so one suite's fixed `now` cannot leak
+        // into the next and freeze time for it. See _now().
+        _clock = null;
         try {
             localStorage.removeItem(STORAGE_KEY);
         } catch (e) { /* ignore */ }

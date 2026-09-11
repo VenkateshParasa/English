@@ -19,7 +19,12 @@ module.exports = {
     // kept only as documentation of intended behaviour. See __tests__/README.md.
     testPathIgnorePatterns: [
         '/node_modules/',
-        '/__tests__/legacy/'
+        '/__tests__/legacy/',
+        // setup.js is a setupFilesAfterEach module, not a suite. Jest's default
+        // testMatch picks up everything under __tests__/, so without this it is
+        // collected as a test file and fails with "must contain at least one
+        // test" — one red suite that says nothing about the code.
+        '/__tests__/setup\\.js$'
     ],
 
     // Coverage is scoped to what is actually testable. Reporting on app.js
