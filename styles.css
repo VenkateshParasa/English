@@ -3150,6 +3150,89 @@ header h1 {
 }
 
 /* ============================================
+   PRONUNCIATION GROUP SWITCHER  (US-179)
+   ============================================
+   Picks WHICH CONTENT — sound pairs, word stress, rhythm — not which level. It
+   deliberately does not reuse `.diff-btn`: those buttons set an app-wide tier and
+   __tests__/unit/sections.test.js asserts none exists inside this section, so
+   borrowing the class would make a content switch look like a level switch to
+   both the learner and the test. Same pill shape so it still reads as "choose
+   one of these", a different accent so it does not read as the same control. */
+.pron-groups {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2, 0.5rem);
+    margin-bottom: var(--space-4, 1rem);
+}
+
+.pron-group-btn {
+    /* 44px minimum target (FR-A11Y-3), and text that never truncates: these are
+       the only way to reach two thirds of the authored content. */
+    min-height: 44px;
+    padding: var(--space-2, 0.5rem) var(--space-4, 1rem);
+    border: 2px solid var(--border-color, #e5e7eb);
+    border-radius: var(--radius-full, 999px);
+    background: var(--background-card, #fff);
+    color: inherit;
+    font: inherit;
+    font-weight: var(--font-weight-medium, 500);
+    cursor: pointer;
+    transition: background var(--transition-base, 0.2s), border-color var(--transition-base, 0.2s);
+}
+
+.pron-group-btn:hover:not(.active) {
+    border-color: var(--primary-400, #818cf8);
+}
+
+/* The active group carries THREE differences — weight, border and background —
+   because colour alone is not a cue at any contrast setting, and `aria-pressed`
+   carries it for a screen reader (app.js pronPaintGroupButtons). */
+.pron-group-btn.active {
+    border-color: var(--primary-500, #4f46e5);
+    background: var(--panel-neutral, #f1f5f9);
+    font-weight: 700;
+}
+
+/* The word-stress / noticing card. `.pron-teach` is the authored `teach`
+   paragraph, shown OPEN here and behind a <details> on a review card: this
+   surface is the first teaching and a review is not. */
+.pron-browse-title {
+    margin: 0 0 var(--space-2, 0.5rem);
+    font-size: var(--text-xl, 1.25rem);
+}
+
+.pron-browse-pos {
+    font-size: var(--text-sm, 0.875rem);
+    font-weight: 400;
+    color: var(--text-secondary, #555);
+}
+
+.pron-teach {
+    padding: var(--space-3, 0.75rem);
+    border-left: 4px solid var(--primary-color, #4f46e5);
+    background: var(--background-alt, #f8f9fb);
+    border-radius: var(--radius-sm, 0.25rem);
+    line-height: 1.7;
+}
+
+.pron-browse-status {
+    margin-bottom: var(--space-3, 0.75rem);
+}
+
+@media (max-width: 480px) {
+    /* Stacked rather than shrunk. Three labels on one line at 320px would either
+       truncate or drop below the 44px target, and one of them is the only route
+       to the highest-impact content in the app (T-P1). */
+    .pron-groups {
+        flex-direction: column;
+    }
+
+    .pron-group-btn {
+        width: 100%;
+    }
+}
+
+/* ============================================
    WHAT KEEPS COMING BACK  (US-181 / FR-SRS-3)
    ============================================
    No colour carries meaning on its own here, and there is no bar, meter or badge.

@@ -565,39 +565,72 @@
             </div>
         </section>
 
-        <!-- Pronunciation Section (US-401 / FR-PRN-1, FR-PRN-2, FR-PRN-6, FR-PRN-9).
-             A shell only: loadPronunciationPair() in app.js renders one vowel
-             minimal-pair set from data/pronunciation/vowels-stress.js into
-             #pronunciationTeaching, #pronunciationDrill and #pronunciationProduce.
+        <!-- Pronunciation Section (US-401 / US-179 — FR-PRN-1, FR-PRN-2, FR-PRN-3,
+             FR-PRN-6, FR-PRN-8, FR-PRN-9).
 
-             There is deliberately NO .diff-btn group here: the pair sets are
-             authored once from the Telugu-L1 interference table, not per tier,
-             and js/core/sections.js records that as `hasDifficulty: false`.
+             A shell only: loadPronunciationSection() in app.js dispatches on the
+             group switcher below and renders one item of one group.
+
+               Sound pairs           -> #pronunciationTeaching / #pronunciationDrill
+                                        / #pronunciationProduce, from
+                                        `PRONUNCIATION_VOWELS_STRESS.pairs`
+               Word stress           -> #pronunciationBrowse, from `.stress`
+                                        (21 items, T-P4 / FR-PRN-3)
+               Rhythm and syllables  -> #pronunciationBrowse, from `.noticing`
+                                        (15 items, T-P1/T-P2/T-P3 / FR-PRN-8)
+
+             The switcher buttons are `.pron-group-btn` and NOT `.diff-btn`. That
+             is load-bearing: js/core/sections.js records this section as
+             `hasDifficulty: false` and __tests__/unit/sections.test.js asserts no
+             .diff-btn exists inside it, because the content is authored once from
+             the Telugu-L1 interference table and not per tier. These buttons pick
+             WHICH CONTENT, not which level.
+
+             One Prev/Next pair walks whichever group is on screen; each group
+             keeps its own cursor in `state` (see `currentPronunciationGroup`).
 
              #pronunciationStatus is created at runtime by
              updateCompletionIndicator(), which inserts it after the h2 below —
-             so that h2 must stay a DIRECT child of this section. -->
+             so that h2 must stay a DIRECT child of this section. It speaks for the
+             PAIR cursor only, so loadPronunciationSection() hides it while a
+             browse group is on screen and that group draws its own ✓ row. -->
         <section id="pronunciation" class="section" role="region" aria-labelledby="pronunciation-title">
             <h2 id="pronunciation-title">🗣️ Pronunciation</h2>
             <div class="pron-container">
-                <div class="exercise-card pron-lesson" role="article" aria-labelledby="pronunciationPairTitle">
+                <div class="pron-groups" id="pronunciationGroups" role="group" aria-label="What to practise">
+                    <button type="button" class="pron-group-btn active" data-pron-group="pairs" aria-pressed="true">Sound pairs</button>
+                    <button type="button" class="pron-group-btn" data-pron-group="stress" aria-pressed="false">Word stress</button>
+                    <button type="button" class="pron-group-btn" data-pron-group="noticing" aria-pressed="false">Rhythm and syllables</button>
+                </div>
+
+                <div class="exercise-card pron-lesson" id="pronLessonCard" role="article" aria-labelledby="pronunciationPairTitle">
                     <h3 id="pronunciationPairTitle">Loading...</h3>
                     <div id="pronunciationTeaching" aria-label="The two sounds, and how to feel the difference"></div>
                 </div>
 
-                <div class="exercise-card pron-drill" role="form" aria-labelledby="pronunciation-drill-title">
+                <div class="exercise-card pron-drill" id="pronDrillCard" role="form" aria-labelledby="pronunciation-drill-title">
                     <h3 id="pronunciation-drill-title">Which word did you hear?</h3>
                     <p class="instruction">Press play, then pick the word. A wrong answer replays both words slowly and names the difference — and you can try again straight away.</p>
                     <div id="pronunciationDrill" aria-label="Discrimination drill"></div>
                 </div>
 
-                <div class="exercise-card pron-produce" role="group" aria-labelledby="pronunciation-produce-title">
+                <div class="exercise-card pron-produce" id="pronProduceCard" role="group" aria-labelledby="pronunciation-produce-title">
                     <h3 id="pronunciation-produce-title">Now say it yourself</h3>
                     <div id="pronunciationProduce" aria-label="Speaking task"></div>
                 </div>
 
+                <!-- Word stress and prosody noticing. One card, because both are
+                     the same kind of task: mark or choose something on written
+                     text, with no audio at all. Hidden until the switcher above
+                     selects one of those two groups. -->
+                <div class="exercise-card pron-browse" id="pronBrowseCard" role="group" aria-labelledby="pronunciation-browse-title" hidden>
+                    <h3 id="pronunciation-browse-title">Where is the beat?</h3>
+                    <p class="instruction">Nothing here needs sound. A wrong answer shows you why, in words, and the buttons stay live so you can try again.</p>
+                    <div id="pronunciationBrowse" aria-label="Word stress and rhythm exercises"></div>
+                </div>
+
                 <div class="exercise-card">
-                    <div class="navigation-buttons" role="navigation" aria-label="Pronunciation pair navigation">
+                    <div class="navigation-buttons" role="navigation" aria-label="Pronunciation navigation">
                         <button class="btn-secondary" id="prevPronunciation" aria-label="Previous sound pair">← Previous</button>
                         <button class="btn-primary" id="nextPronunciation" aria-label="Next sound pair">Next →</button>
                     </div>
@@ -652,9 +685,9 @@
          grammar step and no speaking step at all (US-178). -->
     <script src="data/grammar/present-perfect.js"></script>
     <!-- Strand C pronunciation content. Declares `PRONUNCIATION_VOWELS_STRESS`
-         (vowel minimal pairs, word stress, prosody noticing). The Pronunciation
-         section (US-401) reads `.pairs` from it; `.stress` and `.noticing` are
-         authored and not yet surfaced. -->
+         (vowel minimal pairs, word stress, prosody noticing). All three arrays are
+         surfaced: `.pairs` by the discrimination drill, `.stress` and `.noticing`
+         by the two browsable groups of the same section (US-179). -->
     <script src="data/pronunciation/vowels-stress.js"></script>
     <!-- Consonant pair sets (T-P5 /v/-/w/, T-P6 /θ/-/t/ and /ð/-/d/, T-P10 /z/,
          T-P11 /f/-/p/). Same schema as vowels-stress.js; pronunciationPairs()

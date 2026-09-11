@@ -311,6 +311,127 @@ describe('index.html markup matches the registry', () => {
 });
 
 /**
+ * The Pronunciation section's three content groups (US-179).
+ *
+ * The section walks `pairs[]`, `stress[]` (21 items) and `noticing[]` (15 items)
+ * behind ONE nav id, one Prev/Next pair and one `indexKey`. That is a deliberate
+ * departure from "one row per walkable thing", and the failure it can produce is
+ * specific: a switcher button whose card is not in the markup renders a control
+ * that hides the pair cards and shows nothing, which is the blank-screen twin of
+ * the counting bug this file exists for. So every button's group must be one this
+ * markup can actually draw, and the host it draws into must exist.
+ *
+ * Structural only, like the rest of this file — app.js exports nothing and cannot
+ * be required (see __tests__/README.md), so the app source is read as text.
+ */
+describe('pronunciation content groups (US-179)', () => {
+    const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+    const section = () => doc.getElementById('pronunciation');
+    const GROUPS = ['pairs', 'stress', 'noticing'];
+
+    it('has one switcher button per group, inside the section', () => {
+        const buttons = Array.from(
+            section().querySelectorAll('#pronunciationGroups .pron-group-btn'));
+        expect(buttons.map(b => b.getAttribute('data-pron-group'))).toEqual(GROUPS);
+        buttons.forEach(b => {
+            expect(b.tagName).toBe('BUTTON');
+            // FR-A11Y-1: toggle buttons, so a reader says "pressed", and the
+            // markup must not start with all three unpressed or all three pressed.
+            expect(['true', 'false']).toContain(b.getAttribute('aria-pressed'));
+        });
+        expect(buttons.filter(b => b.getAttribute('aria-pressed') === 'true')).toHaveLength(1);
+        expect(buttons.filter(b => b.classList.contains('active'))).toHaveLength(1);
+    });
+
+    it('never uses .diff-btn for the switcher', () => {
+        // The registry says `hasDifficulty: false` and the it.each() above asserts
+        // no .diff-btn is in this section. Restated here as intent rather than as
+        // a side effect: these buttons pick WHICH CONTENT, not which tier, and a
+        // learner must not read them as the app-wide level control.
+        expect(section().querySelectorAll('.diff-btn')).toHaveLength(0);
+        expect(Sections.get('pronunciation').hasDifficulty).toBe(false);
+    });
+
+    it('has a host card for every group a button can select', () => {
+        // pairs -> the three original cards; stress and noticing -> the browse card.
+        ['pronLessonCard', 'pronDrillCard', 'pronProduceCard', 'pronBrowseCard']
+            .forEach(id => {
+                const el = doc.getElementById(id);
+                expect(el).not.toBeNull();
+                expect(el.closest('#pronunciation')).not.toBeNull();
+            });
+        // The element loadPronunciationBrowseItem() empties and fills.
+        const browse = doc.getElementById('pronunciationBrowse');
+        expect(browse).not.toBeNull();
+        expect(browse.closest('#pronBrowseCard')).not.toBeNull();
+        // ...and its heading, which the loader rewrites per group.
+        expect(doc.getElementById('pronunciation-browse-title')).not.toBeNull();
+    });
+
+    it('starts with the browse card hidden and the pair cards shown', () => {
+        // No JS has run yet. The section has always opened on a pair, and a
+        // markup default of "both visible" would flash two questions at once.
+        expect(doc.getElementById('pronBrowseCard').hasAttribute('hidden')).toBe(true);
+        ['pronLessonCard', 'pronDrillCard', 'pronProduceCard'].forEach(id => {
+            expect(doc.getElementById(id).hasAttribute('hidden')).toBe(false);
+        });
+    });
+
+    it('registers the dispatcher as the section loader, not the pair renderer', () => {
+        // loadPronunciationPair() draws one minimal-pair set and knows nothing
+        // about the other two groups, so registering it would make switchSection()
+        // and retakeCurrentExercise() reopen the section on the wrong group.
+        expect(appSource).toMatch(/pronunciation: loadPronunciationSection/);
+        expect(appSource).toMatch(/function loadPronunciationSection\(/);
+    });
+
+    it('gives each group its own cursor in state', () => {
+        // One `indexKey` per section is all the registry holds, and it means "which
+        // minimal-pair set" — it also stamps `pronunciation_foundation_N`. Folding
+        // 36 more items into that counter would renumber every pair a learner has
+        // already completed.
+        expect(Sections.get('pronunciation').indexKey).toBe('currentPronunciationIndex');
+        ['currentPronunciationGroup', 'currentStressIndex', 'currentNoticingIndex']
+            .forEach(key => expect(appSource).toContain(key));
+        expect(Sections.indexKeys()).not.toContain('currentStressIndex');
+        expect(Sections.indexKeys()).not.toContain('currentNoticingIndex');
+    });
+
+    it('draws no audio control on either browsable group (FR-PRN-8 / AS-3)', () => {
+        // Every stress drill is `answerableFromText` and every noticing item is
+        // `requiresAudio: false`, so a learner whose device cannot speak completes
+        // all 36 with nothing missing. That only stays true if these two renderers
+        // never reach for the speech API.
+        const from = appSource.indexOf('function renderPronStressItem(');
+        const to = appSource.indexOf('function pronBrowseAfterAnswer(');
+        expect(from).toBeGreaterThan(-1);
+        expect(to).toBeGreaterThan(from);
+        const block = appSource.slice(from, to);
+        expect(block).not.toMatch(/pronSpeak|pronPlayButton|speechAPI|SpeechRecognition|speechSynthesis/);
+    });
+
+    it('refuses a requiresImitation item rather than trusting the data', () => {
+        // FR-PRN-8 is binding: prosody is noticing and discrimination, never
+        // imitation. The guard covers stress items too, where today's content does
+        // not carry the flag — a guard over only the array that has the field is a
+        // guard against nothing.
+        expect(appSource).toMatch(/function pronBrowseRefusesImitation\(/);
+        const guard = appSource.slice(appSource.indexOf('function pronBrowseRefusesImitation('),
+                                      appSource.indexOf('let pronBrowseSession'));
+        expect(guard).toMatch(/item\.requiresImitation/);
+        expect(guard).toMatch(/FR-PRN-8/);
+        // Called by BOTH renderers, before anything else is drawn.
+        ['function renderPronStressItem(', 'function renderPronNoticingItem(']
+            .forEach(name => {
+                const at = appSource.indexOf(name);
+                expect(at).toBeGreaterThan(-1);
+                expect(appSource.slice(at, at + 1200))
+                    .toMatch(/if \(pronBrowseRefusesImitation\(item, host\)\) return;/);
+            });
+    });
+});
+
+/**
  * The "Start today's session" chrome (US-170 / FR-SES-1).
  *
  * Structural only, in the same spirit as the section contract above: app.js's

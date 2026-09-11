@@ -54,6 +54,24 @@ const state = {
     currentListeningIndex: 0,
     currentGrammarIndex: 0,
     currentPronunciationIndex: 0,
+    /**
+     * Which of the Pronunciation section's three content GROUPS is on screen —
+     * US-179. 'pairs' | 'stress' | 'noticing', validated by pronGroup().
+     *
+     * WHY THREE POSITIONS AND NOT ONE. `currentPronunciationIndex` is the
+     * registry's `indexKey` for this section and it means "which minimal-pair set
+     * am I on". It also stamps the exercise id `pronunciation_foundation_N`, which
+     * every comment in the pronunciation block protects because those ids are
+     * positional: folding 21 word-stress items and 15 noticing items into the same
+     * counter would renumber every pair a learner has already completed. So each
+     * group keeps its own cursor, and the two new groups stamp their ids from the
+     * CONTENT ID instead of a number ('pronunciation_foundation_stress-photograph'),
+     * which cannot collide with a pair index and does not move when a pair file is
+     * added or removed.
+     */
+    currentPronunciationGroup: 'pairs',
+    currentStressIndex: 0,
+    currentNoticingIndex: 0,
     currentPuzzle: 'wordsearch',
     vocabProgress: 0,
     // Legacy counters kept for backwards-compatible loading of old saves only.
@@ -436,6 +454,16 @@ function loadProgress() {
             Sections.indexKeys().forEach(key => {
                 state[key] = loaded[key] || 0;
             });
+            // The two Pronunciation positions the registry does NOT know about,
+            // and cannot: `indexKeys()` is one cursor per section, and this
+            // section walks three separate content groups (US-179). Restored here
+            // rather than by adding registry rows, because a row is a nav target
+            // with its own markup, counters and Alt+N slot — these are three views
+            // of one section, not three sections. Absent on every save written
+            // before US-179, which reads as "start of the walk".
+            state.currentPronunciationGroup = pronGroup(loaded.currentPronunciationGroup);
+            state.currentStressIndex = Math.max(0, Math.floor(Number(loaded.currentStressIndex) || 0));
+            state.currentNoticingIndex = Math.max(0, Math.floor(Number(loaded.currentNoticingIndex) || 0));
             state.exerciseHistory = loaded.exerciseHistory || [];
 
             // Per-pair discrimination accuracy (FR-PRN-2). Sanitised rather than
@@ -3769,6 +3797,109 @@ function renderStressWord(payload) {
 }
 
 /**
+ * A `.pron-options` group of single-choice buttons, with the select / correct /
+ * incorrect marking every pronunciation surface in this file uses.
+ *
+ * Extracted from the three places that had written it out (the stress review
+ * card, the noticing choice card and the noticing per-row card) so the browsable
+ * section added in US-179 reuses them rather than growing a fourth copy. Split
+ * into `grade` and `after` on purpose: the marking has to happen BEFORE the
+ * outcome is drawn — the outcome may append a retry that clears these classes —
+ * and a single callback could not express that ordering without the caller
+ * reaching back into the host.
+ *
+ * `after` is called on EVERY press, including a retry after a miss. Deciding what
+ * a second press means is the caller's business: the SRS and the accuracy counter
+ * take first answers only (recordItemAttempt, reviewGrade), and burying that rule
+ * in here would put it out of reach of the two surfaces that need it.
+ *
+ * @param {Array}    options    button labels, in authored order
+ * @param {string}   ariaLabel  what the group is asking
+ * @param {Function} grade      (index) -> boolean, is this the right answer
+ * @param {Function} after      (correct, index, host) -> void
+ */
+function pronChoiceGroup(options, ariaLabel, grade, after) {
+    const host = reviewEl('div', null, 'pron-options');
+    host.setAttribute('role', 'group');
+    host.setAttribute('aria-label', ariaLabel);
+    options.forEach((option, index) => {
+        const btn = reviewEl('button', option, 'pron-option');
+        btn.type = 'button';
+        btn.addEventListener('click', () => {
+            const correct = !!grade(index);
+            host.querySelectorAll('.pron-option').forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+            btn.classList.toggle('correct', correct);
+            btn.classList.toggle('incorrect', !correct);
+            after(correct, index, host);
+        });
+        host.appendChild(btn);
+    });
+    return host;
+}
+
+/**
+ * Everything a word-stress answer SHOWS, with nothing about how it is recorded or
+ * what happens next — those differ between the review queue and the browsable
+ * section (US-179) and are the caller's to decide.
+ *
+ * A miss gets a reason and a retry, never a bare verdict (TEACHING_METHODOLOGY.md
+ * §5: "never a red ✗ without the fix on the same screen"). The reason is the
+ * author's own `drill.whyWrong`, then `reductionNote` and `familyRule` — which is
+ * why none of the three is shown before the answer: `familyRule` on *photograph*
+ * reads "the plain noun keeps the beat on the first syllable", i.e. the answer.
+ *
+ * The beat itself is drawn by renderStressWord() from `stressNumbers`, never by
+ * parsing `display`.
+ *
+ * @returns {HTMLElement|null} on a miss, the `.button-group` row holding the
+ *          retry button, so the caller can append its own "move on" control
+ *          beside it; null when the answer was right, in which case the caller
+ *          appends to `feedbackHost` directly.
+ */
+function stressExplainBody(payload, correct, feedbackHost, controlsHost) {
+    feedbackHost.textContent = '';
+    feedbackHost.className = 'pron-feedback visible ' + (correct ? 'is-correct' : 'is-wrong');
+    feedbackHost.appendChild(reviewEl('p', correct ? '✓ ' : '✗ ', 'pron-verdict'));
+    // The beat pattern itself, marked from stressNumbers — the contrast between
+    // what they picked and what the word does.
+    feedbackHost.appendChild(renderStressWord(payload));
+
+    if (!correct) {
+        // Reason first, from the author's own `whyWrong`.
+        const drill = payload.drill || {};
+        if (drill.whyWrong) feedbackHost.appendChild(grammarParagraph(drill.whyWrong, 'pron-reason'));
+        if (payload.reductionNote) {
+            feedbackHost.appendChild(grammarParagraph(payload.reductionNote, 'pron-note'));
+        }
+        if (payload.familyRule) {
+            feedbackHost.appendChild(grammarParagraph(payload.familyRule, 'pron-note'));
+        }
+        // Retry, in place, buttons still live (FR-A11Y-5).
+        feedbackHost.appendChild(grammarParagraph(
+            'Try again — say the word twice, once with the beat where you put it and once where it is marked above, and listen for which one sounds like the word you know.',
+            'pron-retry'));
+        const row = reviewEl('div', null, 'button-group');
+        const retry = reviewEl('button', 'Try this word again', 'btn-primary');
+        retry.type = 'button';
+        retry.addEventListener('click', () => {
+            if (!controlsHost) return;
+            controlsHost.querySelectorAll('.pron-option').forEach(b => {
+                b.classList.remove('selected', 'correct', 'incorrect');
+            });
+        });
+        row.appendChild(retry);
+        feedbackHost.appendChild(row);
+        return row;
+    }
+
+    if (payload.exampleSentence) {
+        feedbackHost.appendChild(grammarParagraph(payload.exampleSentence, 'pron-note'));
+    }
+    return null;
+}
+
+/**
  * A word-stress review card.
  *
  * ONE WORD, AND WHY THE COUNTER EXISTS. All 21 authored stress items schedule
@@ -3812,38 +3943,23 @@ function renderPhonStressReviewCard(item) {
 
     body.appendChild(grammarParagraph(drill.prompt, 'pron-prompt'));
 
-    const options = reviewEl('div', null, 'pron-options');
-    options.setAttribute('role', 'group');
-    options.setAttribute('aria-label', 'Which syllable carries the beat');
     const feedback = reviewEl('div', null, 'pron-feedback');
     feedback.setAttribute('role', 'status');
     feedback.setAttribute('aria-live', 'polite');
 
-    drill.options.forEach((option, index) => {
-        const btn = reviewEl('button', option, 'pron-option');
-        btn.type = 'button';
-        btn.addEventListener('click', () => {
-            answerPhonStressReview(item, payload, forSrs, index, btn, options, feedback);
+    const options = pronChoiceGroup(drill.options, 'Which syllable carries the beat',
+        index => index === drill.correctIndex,
+        (correct, index, host) => {
+            answerPhonStressReview(item, payload, forSrs, index, correct, host, feedback);
         });
-        options.appendChild(btn);
-    });
     body.appendChild(options);
     body.appendChild(feedback);
 }
 
-function answerPhonStressReview(item, payload, forSrs, index, button, optionsHost, feedbackHost) {
+function answerPhonStressReview(item, payload, forSrs, index, correct, optionsHost, feedbackHost) {
     if (!state.reviewCard) return;
     const drill = payload.drill || {};
-    const correct = index === drill.correctIndex;
     const firstAnswer = !state.reviewCard.graded;
-
-    optionsHost.querySelectorAll('.pron-option').forEach(b => b.classList.remove('selected'));
-    button.classList.add('selected');
-    button.classList.toggle('correct', correct);
-    button.classList.toggle('incorrect', !correct);
-
-    feedbackHost.textContent = '';
-    feedbackHost.className = 'pron-feedback visible ' + (correct ? 'is-correct' : 'is-wrong');
 
     if (firstAnswer) {
         recordItemAttempt(payload.id, correct);
@@ -3859,41 +3975,10 @@ function answerPhonStressReview(item, payload, forSrs, index, button, optionsHos
         }
     }
 
-    const verdict = reviewEl('p', correct ? '✓ ' : '✗ ', 'pron-verdict');
-    feedbackHost.appendChild(verdict);
-    // The beat pattern itself, marked from stressNumbers — the contrast between
-    // what they picked and what the word does.
-    feedbackHost.appendChild(renderStressWord(payload));
-
-    if (!correct) {
-        // Reason first, from the author's own `whyWrong`.
-        if (drill.whyWrong) feedbackHost.appendChild(grammarParagraph(drill.whyWrong, 'pron-reason'));
-        if (payload.reductionNote) {
-            feedbackHost.appendChild(grammarParagraph(payload.reductionNote, 'pron-note'));
-        }
-        if (payload.familyRule) {
-            feedbackHost.appendChild(grammarParagraph(payload.familyRule, 'pron-note'));
-        }
-        // Retry, in place, buttons still live (FR-A11Y-5).
-        feedbackHost.appendChild(grammarParagraph(
-            'Try again — say the word twice, once with the beat where you put it and once where it is marked above, and listen for which one sounds like the word you know.',
-            'pron-retry'));
-        const row = reviewEl('div', null, 'button-group');
-        const retry = reviewEl('button', 'Try this word again', 'btn-primary');
-        retry.type = 'button';
-        retry.addEventListener('click', () => {
-            optionsHost.querySelectorAll('.pron-option').forEach(b => {
-                b.classList.remove('selected', 'correct', 'incorrect');
-            });
-        });
-        row.appendChild(retry);
+    const row = stressExplainBody(payload, correct, feedbackHost, optionsHost);
+    if (row) {
         row.appendChild(reviewNextButton(item, forSrs, 'Come back to this later →'));
-        feedbackHost.appendChild(row);
         return;
-    }
-
-    if (payload.exampleSentence) {
-        feedbackHost.appendChild(grammarParagraph(payload.exampleSentence, 'pron-note'));
     }
     feedbackHost.appendChild(reviewNextButton(item, forSrs));
 }
@@ -3955,6 +4040,16 @@ function noticingRowLabel(payload, answer) {
 }
 
 /**
+ * The one sentence both prosody surfaces print instead of an imitation task.
+ *
+ * Shared so the browsable section (US-179) refuses on exactly the same grounds
+ * and in exactly the same words as the review card, rather than paraphrasing
+ * FR-PRN-8 twice and letting the two drift.
+ */
+const NOTICING_IMITATION_REFUSAL =
+    'This item asks the learner to imitate a model, and FR-PRN-8 does not allow an imitation task for rhythm and stress — a synthesised voice is not a model worth copying. Nothing is drawn for it.';
+
+/**
  * A prosody noticing review card — rhythm, final-vowel epenthesis, cluster
  * breaking (T-P1 / T-P2 / T-P3).
  *
@@ -3970,7 +4065,8 @@ function noticingRowLabel(payload, answer) {
  *
  * The `teach` paragraph is behind a <details>, closed. It is the teaching, and a
  * review is not the first teaching; it is one press away for a learner who wants
- * it rather than the first thing between them and the question.
+ * it rather than the first thing between them and the question. The browsable
+ * section shows the same paragraph OPEN, for the same reason inverted.
  */
 function renderPhonNoticingReviewCard(item) {
     const payload = item.data || {};
@@ -3986,8 +4082,7 @@ function renderPhonNoticingReviewCard(item) {
         // not a comment: FR-PRN-8 forbids an imitation task for prosody, so the
         // honest response to content that asks for one is to draw nothing.
         body.appendChild(grammarParagraph(
-            'This item asks the learner to imitate a model, and FR-PRN-8 does not allow an imitation task for rhythm and stress — a synthesised voice is not a model worth copying. Nothing is drawn for it and it stays scheduled.',
-            'pron-note'));
+            NOTICING_IMITATION_REFUSAL + ' It stays scheduled.', 'pron-note'));
         body.appendChild(reviewNextButton(item, forSrs, 'Skip this one →'));
         return;
     }
@@ -4010,9 +4105,15 @@ function renderPhonNoticingReviewCard(item) {
     feedback.setAttribute('role', 'status');
     feedback.setAttribute('aria-live', 'polite');
 
-    if (mode === 'choice') renderNoticingChoice(item, payload, forSrs, body, feedback);
-    if (mode === 'tokens') renderNoticingTokens(item, payload, forSrs, body, feedback);
-    if (mode === 'rows') renderNoticingRows(item, payload, forSrs, body, feedback);
+    // The grading sink. The three control builders below know how to ask a
+    // question and nothing about what an answer is worth, which is what lets the
+    // browsable section hand them a different sink and reuse them unchanged.
+    const outcome = (correct, controlsHost) =>
+        noticingOutcome(item, payload, forSrs, correct, feedback, controlsHost);
+
+    if (mode === 'choice') renderNoticingChoice(payload, body, outcome);
+    if (mode === 'tokens') renderNoticingTokens(payload, body, outcome);
+    if (mode === 'rows') renderNoticingRows(payload, body, outcome);
 
     body.appendChild(feedback);
 
@@ -4023,43 +4124,49 @@ function renderPhonNoticingReviewCard(item) {
     }
 }
 
-/** One answer of several. */
-function renderNoticingChoice(item, payload, forSrs, body, feedback) {
-    const options = reviewEl('div', null, 'pron-options notice-options');
-    options.setAttribute('role', 'group');
-    options.setAttribute('aria-label', 'Answer options');
-    payload.options.forEach((option, index) => {
-        const btn = reviewEl('button', option, 'pron-option');
-        btn.type = 'button';
-        btn.addEventListener('click', () => {
-            const correct = index === payload.correctIndex;
-            options.querySelectorAll('.pron-option').forEach(b => b.classList.remove('selected'));
-            btn.classList.add('selected');
-            btn.classList.toggle('correct', correct);
-            btn.classList.toggle('incorrect', !correct);
-            noticingOutcome(item, payload, forSrs, correct, feedback, options);
-        });
-        options.appendChild(btn);
-    });
+/**
+ * One answer of several.
+ *
+ * The three builders below take an `outcome(correct, controlsHost)` sink instead
+ * of a review item, which is what makes them shared between the review queue and
+ * the browsable section (US-179): they know how to ASK a question and nothing
+ * about what an answer is worth.
+ */
+function renderNoticingChoice(payload, body, outcome) {
+    const options = pronChoiceGroup(payload.options, 'Answer options',
+        index => index === payload.correctIndex,
+        (correct, index, host) => outcome(correct, host));
+    options.classList.add('notice-options');
     body.appendChild(options);
 }
 
-/** "Tap every word that…" — multi-select over `tokens`, graded as a set. */
-function renderNoticingTokens(item, payload, forSrs, body, feedback) {
-    const chosen = [];
+/**
+ * "Tap every word that…" — multi-select over `tokens`, graded as a set.
+ *
+ * THE SELECTION LIVES IN THE DOM, not in a parallel array, and that is a fix
+ * rather than a style: `aria-pressed` is what a screen reader reads and what the
+ * shared retry clears, so it has to be the same fact the grader reads. With a
+ * closure array beside it, "Clear and try again" cleared the highlighting and the
+ * aria state and left the array holding the learner's wrong pick — so on this one
+ * shape the retry could never succeed, however carefully they answered. One place
+ * to store one fact.
+ */
+function renderNoticingTokens(payload, body, outcome) {
     const host = reviewEl('div', null, 'notice-tokens');
     host.setAttribute('role', 'group');
     host.setAttribute('aria-label', 'Tap the words');
+    const chosenNow = () => Array.from(host.children)
+        .map((btn, index) => (btn.getAttribute('aria-pressed') === 'true' ? index : -1))
+        .filter(index => index !== -1);
+
     payload.tokens.forEach((token, index) => {
         const btn = reviewEl('button', token, 'notice-token');
         btn.type = 'button';
         btn.setAttribute('aria-pressed', 'false');
         btn.addEventListener('click', () => {
-            const at = chosen.indexOf(index);
-            if (at === -1) chosen.push(index); else chosen.splice(at, 1);
-            const on = chosen.indexOf(index) !== -1;
-            btn.classList.toggle('selected', on);
+            const on = btn.getAttribute('aria-pressed') !== 'true';
             btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+            btn.classList.toggle('selected', on);
         });
         host.appendChild(btn);
     });
@@ -4068,6 +4175,7 @@ function renderNoticingTokens(item, payload, forSrs, body, feedback) {
     const check = reviewEl('button', 'Check my answer', 'btn-primary');
     check.type = 'button';
     check.addEventListener('click', () => {
+        const chosen = chosenNow();
         const want = payload.correct.slice().sort((a, b) => a - b).join(',');
         const got = chosen.slice().sort((a, b) => a - b).join(',');
         const correct = want === got;
@@ -4079,17 +4187,21 @@ function renderNoticingTokens(item, payload, forSrs, body, feedback) {
             btn.classList.toggle('correct', shouldBe);
             btn.classList.toggle('incorrect', picked && !shouldBe);
         });
-        noticingOutcome(item, payload, forSrs, correct, feedback, host);
+        outcome(correct, host);
     });
     body.appendChild(check);
 }
 
 /** A row per authored sub-item, each answered from the item's own answer space. */
-function renderNoticingRows(item, payload, forSrs, body, feedback) {
+function renderNoticingRows(payload, body, outcome) {
     const answers = noticingRowAnswers(payload);
     const rows = payload.items;
     const solved = [];
     let missed = false;
+    // Was `!state.reviewCard.graded`. A local flag says the same thing — "the
+    // item-level outcome has already fired for this pass" — without the builder
+    // having to know which surface it is drawing on.
+    let settled = false;
 
     const host = reviewEl('div', null, 'notice-rows');
     rows.forEach((row, index) => {
@@ -4109,22 +4221,29 @@ function renderNoticingRows(item, payload, forSrs, body, feedback) {
         }
         wrap.appendChild(label);
 
-        const options = reviewEl('div', null, 'pron-options notice-options');
-        options.setAttribute('role', 'group');
-        options.setAttribute('aria-label', 'Answer for ' + shown);
         const rowFeedback = reviewEl('div', null, 'notice-row-feedback');
         rowFeedback.setAttribute('role', 'status');
         rowFeedback.setAttribute('aria-live', 'polite');
 
-        answers.forEach(answer => {
-            const btn = reviewEl('button', noticingRowLabel(payload, answer), 'pron-option');
-            btn.type = 'button';
-            btn.addEventListener('click', () => {
-                const correct = answer === String(row.answer);
-                options.querySelectorAll('.pron-option').forEach(b => b.classList.remove('selected'));
-                btn.classList.add('selected');
-                btn.classList.toggle('correct', correct);
-                btn.classList.toggle('incorrect', !correct);
+        const options = pronChoiceGroup(answers.map(a => noticingRowLabel(payload, a)),
+            'Answer for ' + shown,
+            at => answers[at] === String(row.answer),
+            correct => {
+                // A NEW PASS. Once the item-level outcome has fired, the next row
+                // the learner touches starts the count again from nothing.
+                //
+                // Without this a retry was impossible on this shape: `settled`
+                // would stay true, so re-answering all eight rows correctly would
+                // never fire a second outcome and the learner could never finish an
+                // item they had missed one row of. The retry button clears the
+                // marking and says "try again", so it has to be able to end in
+                // success. `solved` is emptied with it, which is what makes the
+                // second pass mean "every row right", not "the ones I redid".
+                if (settled) {
+                    settled = false;
+                    missed = false;
+                    solved.length = 0;
+                }
 
                 rowFeedback.textContent = '';
                 rowFeedback.appendChild(reviewEl('span',
@@ -4143,12 +4262,12 @@ function renderNoticingRows(item, payload, forSrs, body, feedback) {
                 // row was missed. Same first-answer rule as everywhere else here,
                 // and it also stops a later correct row rewriting the card-level
                 // verdict for an item the learner has already missed.
-                if (!state.reviewCard.graded && (missed || solved.length >= rows.length)) {
-                    noticingOutcome(item, payload, forSrs, !missed, feedback, host);
+                if (!settled && (missed || solved.length >= rows.length)) {
+                    settled = true;
+                    outcome(!missed, host);
                 }
             });
-            options.appendChild(btn);
-        });
+        options.classList.add('notice-options');
         wrap.appendChild(options);
         wrap.appendChild(rowFeedback);
         host.appendChild(wrap);
@@ -4157,26 +4276,21 @@ function renderNoticingRows(item, payload, forSrs, body, feedback) {
 }
 
 /**
- * The one place a noticing answer is recorded and explained: reason (`why`),
- * contrast (the authored `answer` line), the feel check, the L1 note, and a retry
- * with the controls still live.
+ * Everything a noticing answer SHOWS: the contrast (the authored `answer` line),
+ * the reason (`why`), the feel check, the L1 note, and a retry with the controls
+ * still live. Nothing about how it is recorded or what comes next — see
+ * stressExplainBody() for why that split exists.
+ *
+ * A miss never gets a bare verdict: `why` is the reason in the learner's own
+ * terms and is what makes the item noticing rather than trivia, `feelCheck` is
+ * the one thing to try in their own mouth, and `l1` names the Telugu pattern the
+ * item is aimed at (TEACHING_METHODOLOGY.md §5 — errors are normal and temporary,
+ * and never a ✗ without the fix on the same screen).
+ *
+ * @returns {HTMLElement|null} the `.button-group` row holding the retry button on
+ *          a miss, for the caller's own "move on" control; null when right.
  */
-function noticingOutcome(item, payload, forSrs, correct, feedback, controlsHost) {
-    if (!state.reviewCard) return;
-    const firstAnswer = !state.reviewCard.graded;
-    if (firstAnswer) {
-        recordItemAttempt(payload.id, correct);
-        reviewGrade(item, correct, forSrs);
-        if (!correct && payload.mistakeCategory && typeof Mistakes !== 'undefined' && Mistakes &&
-            typeof Mistakes.record === 'function') {
-            Mistakes.record(payload.mistakeCategory, {
-                item: payload.id,
-                expected: payload.answer,
-                source: 'noticingReview'
-            });
-        }
-    }
-
+function noticingExplainBody(payload, correct, feedback, controlsHost) {
     feedback.textContent = '';
     feedback.className = 'pron-feedback visible ' + (correct ? 'is-correct' : 'is-wrong');
     feedback.appendChild(reviewEl('p', correct ? '✓' : '✗', 'pron-verdict'));
@@ -4201,11 +4315,37 @@ function noticingOutcome(item, payload, forSrs, correct, feedback, controlsHost)
             }
         });
         row.appendChild(retry);
-        row.appendChild(reviewNextButton(item, forSrs, 'Come back to this later →'));
         feedback.appendChild(row);
-        return;
+        return row;
     }
     if (payload.feelCheck) feedback.appendChild(grammarParagraph(payload.feelCheck, 'pron-feel'));
+    return null;
+}
+
+/**
+ * The one place a noticing answer is recorded, on the review surface.
+ */
+function noticingOutcome(item, payload, forSrs, correct, feedback, controlsHost) {
+    if (!state.reviewCard) return;
+    const firstAnswer = !state.reviewCard.graded;
+    if (firstAnswer) {
+        recordItemAttempt(payload.id, correct);
+        reviewGrade(item, correct, forSrs);
+        if (!correct && payload.mistakeCategory && typeof Mistakes !== 'undefined' && Mistakes &&
+            typeof Mistakes.record === 'function') {
+            Mistakes.record(payload.mistakeCategory, {
+                item: payload.id,
+                expected: payload.answer,
+                source: 'noticingReview'
+            });
+        }
+    }
+
+    const row = noticingExplainBody(payload, correct, feedback, controlsHost);
+    if (row) {
+        row.appendChild(reviewNextButton(item, forSrs, 'Come back to this later →'));
+        return;
+    }
     feedback.appendChild(reviewNextButton(item, forSrs));
 }
 
@@ -7735,11 +7875,709 @@ function renderPronunciationProduce(pair) {
 }
 
 // ---------------------------------------------------------------------------
+// The section's three content groups  (US-179 / FR-PRN-3, FR-PRN-8)
+// ---------------------------------------------------------------------------
+//
+// WHY A GROUP SWITCH AND NOT ONE LONG WALK.
+// data/pronunciation/vowels-stress.js authors three separate things and only the
+// first of them was reachable: 8 minimal-pair sets, 21 word-stress items (T-P4,
+// FR-PRN-3) and 15 prosody noticing items (T-P1 rhythm, T-P2 final-vowel
+// epenthesis, T-P3 cluster breaking, FR-PRN-8). REQUIREMENTS.md §3.1 rates T-P1
+// the HIGHEST intelligibility impact of anything in the interference table —
+// above every individual sound — and it sat behind a review that nothing had
+// scheduled, i.e. behind nothing at all.
+//
+// The section already has exactly one navigation control, Prev/Next, and one
+// cursor per section is all the registry can hold. Three reasons the 36 items get
+// a group switch rather than being appended to that one walk:
+//
+//   1. `state.currentPronunciationIndex` stamps the exercise id
+//      `pronunciation_foundation_N`, and every comment in this file protects
+//      those ids because they are POSITIONAL. Appending is safe; interleaving is
+//      not — and appending would put the highest-impact content in the app
+//      behind eight pair sets, at position 30 of 44. Prev/Next is not a way to
+//      reach item 30.
+//   2. The three groups are different KINDS of task, not three difficulties of
+//      one. A pair set is a listening drill with an audio banner, a gate and a
+//      speaking task; a stress item is a marking task on text; a noticing item is
+//      a discrimination task on text. One card shape cannot be honest about all
+//      three, and the existing pair cards say "Which word did you hear?" in the
+//      markup.
+//   3. There is precedent in the section and in the app. This section already
+//      switches the drill between 'audio' and 'text' with a button
+//      (pronSetMode), and `puzzles` selects which sub-activity to do with
+//      `.puzzle-btn` rather than walking one flat list — js/core/sections.js
+//      records that as the reason puzzles has no `indexKey`.
+//
+// So: a group switch chooses the KIND, and the section's existing Prev/Next walks
+// within it. Each group keeps its own cursor, and the two new groups stamp their
+// exercise ids from the CONTENT ID rather than a number, which is what makes them
+// unable to collide with a pair index — see `state.currentPronunciationGroup`.
+//
+// NO AUDIO IN EITHER NEW GROUP, AT ANY POINT. Every stress drill is
+// `answerableFromText` and every noticing item is `requiresAudio: false` /
+// `answerableFrom: 'text'`. AS-3 ("browser TTS distinguishes minimal pairs
+// audibly on real devices") is still unverified and FR-PRN-8 says outright that
+// no claim is made that TTS models prosody correctly, so a learner whose device
+// cannot speak — or whose voice is useless — completes all 36 of these with
+// nothing missing. That is a property of the content, and these two groups do not
+// spend it.
+
+/**
+ * The three groups, in switcher order. `pairs` first because it is what the
+ * section has always opened on and what the FR-PRN-6 production gate hangs off.
+ *
+ *   label       the switcher button text
+ *   heading     the browse card's <h3>
+ *   indexKey    this group's own cursor in `state`
+ *   noun        what one item is, for the Prev/Next aria-labels and the counter
+ *   list        the items, in authored order, renderable ones only
+ */
+const PRON_GROUPS = {
+    pairs: {
+        id: 'pairs',
+        label: 'Sound pairs',
+        heading: 'Which word did you hear?',
+        indexKey: 'currentPronunciationIndex',
+        noun: 'sound pair',
+        list: () => pronunciationPairs()
+    },
+    stress: {
+        id: 'stress',
+        label: 'Word stress',
+        heading: 'Where is the beat?',
+        indexKey: 'currentStressIndex',
+        noun: 'word',
+        list: () => pronStressItems()
+    },
+    noticing: {
+        id: 'noticing',
+        label: 'Rhythm and syllables',
+        heading: 'Notice what English does',
+        indexKey: 'currentNoticingIndex',
+        noun: 'question',
+        list: () => pronNoticingItems()
+    }
+};
+
+/** The group id on screen. Validates, so a corrupt save cannot show nothing. */
+function pronGroup(value) {
+    const id = value === undefined ? state.currentPronunciationGroup : value;
+    return PRON_GROUPS[id] ? id : 'pairs';
+}
+
+/** The row for the group on screen. */
+function pronGroupSpec() {
+    return PRON_GROUPS[pronGroup()];
+}
+
+/**
+ * The 21 authored word-stress items, in order, minus any this build cannot put in
+ * front of a learner honestly.
+ *
+ * Dropping is LOUD, on the same reasoning as pronunciationPairs(): an item that
+ * quietly disappears from a walk of 21 is a content bug nobody would ever find.
+ * Two things get an item dropped, and `requiresImitation` is the interesting one —
+ * see pronBrowseRefusesImitation().
+ */
+function pronStressItems() {
+    return pronContentList('stress').filter(item => {
+        if (!item || !item.id) return false;
+        const drill = item.drill || {};
+        if (!Array.isArray(drill.options) || !drill.options.length ||
+            typeof drill.correctIndex !== 'number') {
+            console.warn('Pronunciation: stress item "' + item.id + '" has no answerable ' +
+                         'drill (options + numeric correctIndex), so it cannot be marked. ' +
+                         'Fix the content file.');
+            return false;
+        }
+        if (!Array.isArray(item.stressNumbers) || !item.stressNumbers.length) {
+            // The beat is marked from `stressNumbers` and never by parsing
+            // `display`, so an item without them has no beat to mark.
+            console.warn('Pronunciation: stress item "' + item.id + '" has no stressNumbers, ' +
+                         'so the beat cannot be marked without parsing `display` — which is ' +
+                         'forbidden. Fix the content file.');
+            return false;
+        }
+        return true;
+    });
+}
+
+/** The 15 authored prosody noticing items, in order, minus the ungradable. */
+function pronNoticingItems() {
+    return pronContentList('noticing').filter(item => {
+        if (!item || !item.id) return false;
+        if (!noticingGrading(item)) {
+            console.warn('Pronunciation: noticing item "' + item.id + '" matches none of the ' +
+                         'three grading shapes (options+correctIndex, tokens+correct, ' +
+                         'items[].answer), so there is nothing to grade. Fix the content file.');
+            return false;
+        }
+        if (typeof item.prompt !== 'string' || !item.prompt.trim()) {
+            console.warn('Pronunciation: noticing item "' + item.id + '" has no prompt, so ' +
+                         'there is no question. Fix the content file.');
+            return false;
+        }
+        return true;
+    });
+}
+
+/**
+ * FR-PRN-8, ENFORCED AND NOT ASSUMED — the browsable half of the guard the review
+ * card already carries.
+ *
+ * An item declaring `requiresImitation: true` is NOT filtered out of the walk. It
+ * is kept, reachable, and refused in place with the reason printed, for two
+ * reasons. A silently shorter walk hides the content bug, which is the failure
+ * this whole section is written against; and "21 words" has to keep meaning 21
+ * words, because the counter under the heading is what tells the learner how much
+ * is left. So the item is drawn as an explanation of why it is not drawn, and no
+ * control appears on it at all — not a play button, not a recorder, not an option.
+ *
+ * `requiresImitation` is checked on stress items too, even though the authored
+ * ones do not carry the field. The rule is about prosody, not about which array a
+ * prosody item happens to live in, and a guard that only covers the array where
+ * the flag exists today is a guard against nothing.
+ *
+ * @returns {boolean} true when the caller must draw nothing but the refusal.
+ */
+function pronBrowseRefusesImitation(item, host) {
+    if (!item || !item.requiresImitation) return false;
+    console.warn('Pronunciation: item "' + item.id + '" declares requiresImitation, which ' +
+                 'FR-PRN-8 forbids for prosody. It is shown as a refusal and no control is ' +
+                 'drawn for it.');
+    host.appendChild(pronParagraph(NOTICING_IMITATION_REFUSAL, 'pron-note'));
+    host.appendChild(pronParagraph(
+        'Nothing is lost by skipping it: use Previous or Next to carry on. This is a fault in the content, not in your device or your practice.',
+        'pron-note'));
+    return true;
+}
+
+/**
+ * Per-render state for one stress or noticing item on screen.
+ *
+ * Deliberately a SECOND object rather than more fields on `pronunciationSession`:
+ * that one is the pair drill's state, it is read by seven functions and by the
+ * FR-PRN-6 gate, and widening it so two unrelated surfaces share `graded` and
+ * `wrongSeen` is how one screen's outcome starts leaking into another's.
+ *
+ *   group      'stress' | 'noticing'
+ *   id         the content item id — also the exercise id's index component
+ *   index      position in the group's walk
+ *   total      how many items the group has
+ *   level      the tier the exercise id is stamped with (always `foundation`)
+ *   graded     the first answer on this render has been recorded (write once)
+ *   wrongSeen  any first-answer miss on this render
+ *   scheduled  the SRS outcome for this render has been written (write once)
+ */
+let pronBrowseSession = null;
+
+/**
+ * The SRS ref for one stress or noticing item, checked against the authored key.
+ *
+ * Derived the same way and for the same reason as pronPairKey(): if the authored
+ * `srsKey` ever stopped matching what this build stores, the review surface would
+ * be reading records this section never writes, and the two would silently teach
+ * from different schedules. A mismatch is one line to fix in the content, so it is
+ * worth a warning.
+ */
+function pronBrowseRef(item) {
+    const ref = item.srsRef || item.target || item.id;
+    const key = (window.SRS && typeof SRS._typedKey === 'function')
+        ? SRS._typedKey('phon', ref)
+        : 'phon:' + ref;
+    if (item.srsKey && item.srsKey !== key) {
+        console.warn('Pronunciation: item "' + item.id + '" declares the SRS key "' +
+                     item.srsKey + '" but this build stores it under "' + key + '".');
+    }
+    return ref;
+}
+
+/**
+ * The SRS half of one answer, written once per render.
+ *
+ * Same contract as the pair drill's schedulePronunciationLapse/Success pair and
+ * the grammar section's: the FIRST miss is the lapse, and only a render with no
+ * first-answer miss in it buys a longer interval. A learner who got it wrong and
+ * then fixed it has learned something and has not proved retention, which is
+ * TEACHING_METHODOLOGY.md §3 and the same rule srs.js applies to self-reports.
+ *
+ * NOTE what this does NOT do: it does not touch state.pronunciationAccuracy. That
+ * map is the input to the FR-PRN-6 production gate, which is a question about the
+ * learner's EAR on a specific phoneme pair. Marking a beat on paper is not
+ * evidence about anyone's ear, and feeding it in would open a self-comparison task
+ * for a learner who has never heard a contrast — the exact blind spot the gate
+ * exists to close. Per-item accuracy goes to state.itemAccuracy instead.
+ */
+function schedulePronBrowseOutcome(item, correct) {
+    if (!pronBrowseSession || pronBrowseSession.scheduled) return;
+    if (correct && pronBrowseSession.wrongSeen) return;
+    pronBrowseSession.scheduled = true;
+    if (window.SRS && typeof SRS.scheduleItem === 'function') {
+        SRS.scheduleItem('phon', pronBrowseRef(item), item, correct);
+        if (typeof updateDueCount === 'function') updateDueCount();
+    }
+}
+
+/** Log the miss by type so the mistake panel can resurface it (FR-SRS-3). */
+function recordPronBrowseMistake(item, given, expected) {
+    if (typeof Mistakes === 'undefined' || !Mistakes || typeof Mistakes.record !== 'function') return;
+    if (!item.mistakeCategory) return;
+    Mistakes.record(item.mistakeCategory, {
+        item: item.id,
+        given: given,
+        expected: expected,
+        source: pronBrowseSession && pronBrowseSession.group === 'stress'
+            ? 'stressDrill' : 'noticingDrill'
+    });
+}
+
+/**
+ * One graded first answer on the browsable surface: the per-item counter, the
+ * schedule, and the mistake log. Everything a wrong answer SHOWS is
+ * stressExplainBody() / noticingExplainBody()'s job, shared with the review card.
+ */
+function pronBrowseGrade(item, correct, given, expected) {
+    if (!pronBrowseSession || pronBrowseSession.graded) return false;
+    pronBrowseSession.graded = true;
+    if (!correct) pronBrowseSession.wrongSeen = true;
+    // Per-ITEM, keyed by content id. All 21 stress items share the single SRS key
+    // `phon:word-stress` and the 15 noticing items share three keys between them,
+    // so per-item accuracy is not an SRS fact and must not be derived from
+    // reps/lapses (TEACHING_METHODOLOGY.md principle 3).
+    recordItemAttempt(item.id, correct);
+    schedulePronBrowseOutcome(item, correct);
+    if (!correct) recordPronBrowseMistake(item, given, expected);
+    return true;
+}
+
+/**
+ * The item is finished. This is the call that makes the two new groups COUNT:
+ * updateStatistics('pronunciation') reads the js/core/sections.js row, so
+ * `pronunciationCompleted`, `totalPronunciation` and the `pronunciation` daily
+ * average all move with no section-specific code — the same single call the pair
+ * drill and the grammar section make.
+ *
+ * The exercise id's index component is the CONTENT ID
+ * ('pronunciation_foundation_stress-photograph'), not a number. Two reasons:
+ * `pronunciation_foundation_3` already means "the fourth pair set" for every
+ * existing learner, and a numeric offset would move every id the day a pair file
+ * is added or removed. `level` is `foundation` for the same reason the pair drill
+ * pins it there — the probe in registerContent() reports this section's content at
+ * one tier only, so an item cannot be completed once per level button (US-152).
+ *
+ * Guarded by isExerciseCompleted so that re-practising an item cannot inflate a
+ * counter. Re-practising is encouraged; double-counting is a lie.
+ */
+function completePronunciationBrowseItem(item) {
+    if (!pronBrowseSession) return;
+    const level = pronBrowseSession.level;
+    const alreadyDone = isExerciseCompleted('pronunciation', item.id, level);
+    if (!alreadyDone) {
+        state.dailyGoals.pronunciation = true;
+        updateStatistics('pronunciation');
+        updateDashboard();
+    }
+    markExerciseComplete('pronunciation', item.id, level);
+    // NOT a re-render. The card the learner just answered is the card holding the
+    // ✓, the marked beat and the author's explanation, and reloading the section
+    // would wipe all three the instant they got it right — the one moment the
+    // explanation is worth reading. Only the ✓ row changes, so only the ✓ row is
+    // repainted.
+    //
+    // markExerciseComplete() ends in updateNavigationButtons('pronunciation'),
+    // which paints #pronunciationStatus from state.currentPronunciationIndex —
+    // the PAIR cursor. That element is hidden while a browse group is on screen
+    // (pronShowGroupCards) precisely because it can only speak for one cursor.
+    pronPaintBrowseStatus(item);
+}
+
+/**
+ * Show the cards the group on screen needs and hide the ones it does not.
+ *
+ * The three pair cards stay exactly where they were in index.html rather than
+ * being wrapped in a container: `.pron-container` lays out its own children, and
+ * adding a level of nesting to hide three siblings would change the pair screen's
+ * layout to add a screen that is not the pair screen.
+ */
+function pronShowGroupCards(group) {
+    const pairCards = ['pronLessonCard', 'pronDrillCard', 'pronProduceCard'];
+    pairCards.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.hidden = group !== 'pairs';
+    });
+    const browse = document.getElementById('pronBrowseCard');
+    if (browse) browse.hidden = group === 'pairs';
+    // The registry's completion indicator speaks for currentPronunciationIndex,
+    // i.e. for the pair walk, and its Retake button clears a pair's exercise id.
+    // Leaving it visible above a word-stress item would show one item's ✓ over
+    // another item's question — which is the counters-right-and-invisible failure
+    // js/core/sections.js exists to prevent, inverted.
+    const status = document.getElementById('pronunciationStatus');
+    if (status) status.hidden = group !== 'pairs';
+}
+
+/** Paint the switcher: which group is active, for the eye and for a reader. */
+function pronPaintGroupButtons(group) {
+    const host = document.getElementById('pronunciationGroups');
+    if (!host) return;
+    host.querySelectorAll('.pron-group-btn').forEach(btn => {
+        const on = btn.getAttribute('data-pron-group') === group;
+        btn.classList.toggle('active', on);
+        // aria-pressed rather than aria-current: these are toggle buttons, and a
+        // screen reader should say "pressed", not "current page" (FR-A11Y-1).
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Section loader and navigation
 // ---------------------------------------------------------------------------
 
 /**
  * The section loader, registered as `pronunciation` in Sections.registerRuntime().
+ *
+ * Dispatches on the group and renders exactly one item of it. Synchronous and
+ * content-only, like every other section loader.
+ */
+function loadPronunciationSection() {
+    const group = pronGroup();
+    state.currentPronunciationGroup = group;
+    pronPaintGroupButtons(group);
+    pronShowGroupCards(group);
+
+    if (group === 'pairs') {
+        pronBrowseSession = null;
+        loadPronunciationPair();
+        return;
+    }
+    loadPronunciationBrowseItem(group);
+}
+
+/**
+ * One word-stress or noticing item, whichever this group's cursor points at.
+ */
+function loadPronunciationBrowseItem(group) {
+    const spec = PRON_GROUPS[group];
+    const host = document.getElementById('pronunciationBrowse');
+    const heading = document.getElementById('pronunciation-browse-title');
+    const feedbackEl = document.getElementById('pronunciationFeedback');
+    if (feedbackEl) { feedbackEl.className = 'feedback'; feedbackEl.textContent = ''; }
+    if (heading) heading.textContent = spec.heading;
+    if (!host) return;
+    host.textContent = '';
+
+    const list = spec.list();
+    if (!list.length) {
+        pronBrowseSession = null;
+        host.appendChild(pronParagraph(
+            'This group has no items this version can put in front of you. Nothing else in the app is affected — the console says which content item was refused and why.'
+        ));
+        updatePronunciationNavigationState(0);
+        return;
+    }
+
+    // Clamp rather than wrap, same reasoning as the pair walk and the grammar
+    // section: a learner who has reached the end has reached the end, and silently
+    // sending them back to item 1 reads as the app having lost their place.
+    const index = Math.min(Math.max(0, state[spec.indexKey] || 0), list.length - 1);
+    state[spec.indexKey] = index;
+    const item = list[index];
+
+    pronBrowseSession = {
+        group: group,
+        id: item.id,
+        index: index,
+        total: list.length,
+        level: resolveDifficulty(state.currentDifficulty, 'pronunciation'),
+        graded: false,
+        wrongSeen: false,
+        scheduled: false
+    };
+
+    // Built with textContent rather than pronParagraph(): this line is derived
+    // metadata (a counter, a T-P row, a target name), not authored prose, so it
+    // must not go through the `**bold**` / `*cited*` renderer that content does.
+    const meta = document.createElement('p');
+    meta.className = 'pron-meta';
+    meta.textContent = spec.noun.charAt(0).toUpperCase() + spec.noun.slice(1) + ' ' +
+        (index + 1) + ' of ' + list.length +
+        (item.code ? ' · ' + item.code : '') +
+        (item.target ? ' · ' + String(item.target).replace(/-/g, ' ') : '');
+    host.appendChild(meta);
+
+    pronBrowseStatusRow(host, item);
+
+    if (group === 'stress') renderPronStressItem(item, host);
+    else renderPronNoticingItem(item, host);
+
+    updatePronunciationNavigationState(list.length);
+}
+
+/**
+ * This group's own ✓ / Practise-again row, inside the browse card.
+ *
+ * Same words and the same classes as updateCompletionIndicator()'s, deliberately:
+ * "✓ Completed" has meant one thing in this app since long before this section,
+ * and a second vocabulary for the same fact would be a worse cost than the
+ * duplication. What it cannot share is the POSITION — that function reads
+ * `state[indexKey]`, one cursor, and this is a second one.
+ */
+function pronBrowseStatusRow(host, item) {
+    const row = document.createElement('div');
+    row.id = 'pronBrowseStatus';
+    row.className = 'exercise-status pron-browse-status';
+    host.appendChild(row);
+    pronPaintBrowseStatus(item);
+}
+
+/** Fill (or refill) that row for one item. Safe to call when it is not on screen. */
+function pronPaintBrowseStatus(item) {
+    const row = document.getElementById('pronBrowseStatus');
+    if (!row || !pronBrowseSession) return;
+    const level = pronBrowseSession.level;
+    const done = isExerciseCompleted('pronunciation', item.id, level);
+    row.textContent = '';
+
+    const status = document.createElement('span');
+    status.className = done ? 'status-complete' : 'status-incomplete';
+    status.textContent = done ? '✓ Completed' : '○ Not completed';
+    row.appendChild(status);
+
+    if (done) {
+        row.appendChild(document.createTextNode(' '));
+        const again = document.createElement('button');
+        again.type = 'button';
+        again.className = 'btn-secondary btn-retake';
+        again.textContent = 'Practise it again';
+        again.addEventListener('click', () => {
+            // Clears the ✓ so the item counts again next time, and redraws the
+            // card from scratch — which is what "again" means here, unlike the
+            // in-place retry a miss offers.
+            retakeExercise('pronunciation', item.id, level);
+            loadPronunciationSection();
+        });
+        row.appendChild(again);
+    }
+}
+
+/**
+ * One word-stress item: mark the syllable that carries the beat (FR-PRN-3, T-P4).
+ *
+ * WHAT IS DELIBERATELY NOT ON SCREEN BEFORE THE ANSWER. `display`
+ * ('PHO-to-graph'), `familyRule` ("the plain noun keeps the beat on the first
+ * syllable") and `reductionNote` each give the answer away, so all three arrive
+ * with the feedback. What IS shown first is the IPA and the learner's own record
+ * on this word, because neither is a hint and the second is the only per-word
+ * progress this app has (state.itemAccuracy — all 21 items share one SRS key).
+ */
+function renderPronStressItem(item, host) {
+    const title = document.createElement('h4');
+    title.className = 'pron-browse-title';
+    title.textContent = item.word || item.id;
+    if (item.pos) {
+        const pos = document.createElement('span');
+        pos.className = 'pron-browse-pos';
+        pos.textContent = ' · ' + item.pos;
+        title.appendChild(pos);
+    }
+    host.appendChild(title);
+
+    if (pronBrowseRefusesImitation(item, host)) return;
+
+    if (item.ipa) {
+        const ipaLine = document.createElement('p');
+        ipaLine.className = 'stress-ipa';
+        ipaLine.appendChild(pronIpa(item.ipa));
+        host.appendChild(ipaLine);
+    }
+
+    host.appendChild(pronParagraph(itemAccuracyLine(item.id, 'word'), 'pron-accuracy-own'));
+
+    const drill = item.drill;
+    host.appendChild(pronParagraph(drill.prompt, 'pron-prompt'));
+
+    const feedback = document.createElement('div');
+    feedback.className = 'pron-feedback';
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+
+    const options = pronChoiceGroup(drill.options,
+        drill.mode === 'choose-syllable-count'
+            ? 'How many syllables' : 'Which syllable carries the beat',
+        index => index === drill.correctIndex,
+        (correct, index, optionsHost) => {
+            pronBrowseGrade(item, correct, drill.options[index], drill.options[drill.correctIndex]);
+            const row = stressExplainBody(item, correct, feedback, optionsHost);
+            pronBrowseAfterAnswer(item, correct, feedback, row);
+        });
+    host.appendChild(options);
+    host.appendChild(feedback);
+
+    if (item.ameNote || item.family) {
+        host.appendChild(pronDisclosure('American English, and the family this word belongs to', body => {
+            if (item.ameNote) body.appendChild(pronParagraph(item.ameNote));
+            if (item.family) {
+                body.appendChild(pronParagraph(
+                    'Family: **' + item.family + '**. Words in one family share a root and often not a beat, which is the whole lesson of T-P4.'));
+            }
+        }));
+    }
+}
+
+/**
+ * One prosody noticing item: rhythm, final-vowel epenthesis, cluster breaking
+ * (T-P1 / T-P2 / T-P3), by noticing and discrimination on TEXT — never imitation.
+ *
+ * `teach` is shown OPEN here, and that is the one deliberate difference from the
+ * review card, which hides it behind a <details>. A review is not the first
+ * teaching; this surface IS, and hiding the paragraph that says what the learner
+ * is being shown would make the question trivia.
+ *
+ * The three grading shapes are the review card's own — noticingGrading() and the
+ * three builders it dispatches to — handed a different sink. The nine authored
+ * `mode` strings reduce to those three, so a tenth mode that grades one of those
+ * ways needs no code here or there.
+ */
+function renderPronNoticingItem(item, host) {
+    const title = document.createElement('h4');
+    title.className = 'pron-browse-title';
+    title.textContent = item.target
+        ? String(item.target).replace(/-/g, ' ') : item.id;
+    host.appendChild(title);
+
+    if (pronBrowseRefusesImitation(item, host)) return;
+
+    // AS-3, stated plainly and before the question rather than as a footnote. The
+    // pair drill has to warn that its audio may be worthless; this surface can
+    // tell the learner the better news, which is that there is nothing to trust.
+    const noAudio = document.createElement('div');
+    noAudio.className = 'pron-audio-notice pron-audio-tts';
+    noAudio.appendChild(pronParagraph(
+        'No sound is needed for this, and none is offered. Rhythm and stress are taught here by noticing them in writing, because nobody has verified that a phone\'s built-in voice gets English rhythm right — and copying a voice that has it wrong would teach the very habit this exercise exists to fix.'
+    ));
+    host.appendChild(noAudio);
+
+    if (item.teach) host.appendChild(pronParagraph(item.teach, 'pron-teach'));
+    host.appendChild(pronParagraph(itemAccuracyLine(item.id, 'question'), 'pron-accuracy-own'));
+    host.appendChild(pronParagraph(item.prompt, 'pron-prompt'));
+
+    const mode = noticingGrading(item);
+    if (item.text && mode !== 'tokens') {
+        host.appendChild(pronParagraph(item.text, 'notice-text'));
+    }
+
+    const feedback = document.createElement('div');
+    feedback.className = 'pron-feedback';
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+
+    const outcome = (correct, controlsHost) => {
+        pronBrowseGrade(item, correct, null, item.answer);
+        const row = noticingExplainBody(item, correct, feedback, controlsHost);
+        pronBrowseAfterAnswer(item, correct, feedback, row);
+    };
+
+    if (mode === 'choice') renderNoticingChoice(item, host, outcome);
+    if (mode === 'tokens') renderNoticingTokens(item, host, outcome);
+    if (mode === 'rows') renderNoticingRows(item, host, outcome);
+
+    host.appendChild(feedback);
+
+    if (item.notMinimalPairs && item.notMinimalPairsWhy) {
+        host.appendChild(pronDisclosure('A note on the word pairs in this item', body => {
+            body.appendChild(pronParagraph(item.notMinimalPairsWhy));
+        }));
+    }
+    if (item.l1) {
+        host.appendChild(pronDisclosure('Why this one is hard from Telugu', body => {
+            body.appendChild(pronParagraph(item.l1));
+        }));
+    }
+}
+
+/**
+ * What follows an answer on either browsable group: the move-on control, and — on
+ * a right answer — the completion that makes the section count.
+ *
+ * A MISS DOES NOT END THE ITEM. `row` is the button-group the shared explain body
+ * built around its retry button, so "Skip for now" sits beside "try again" and
+ * neither is the only way out. The item is not marked complete, and the SRS has
+ * already recorded the lapse, so it comes back.
+ *
+ * A right answer AFTER a miss still completes. Getting there is the point; what
+ * the miss costs is the longer interval, which schedulePronBrowseOutcome() has
+ * already withheld.
+ */
+function pronBrowseAfterAnswer(item, correct, feedback, row) {
+    const spec = pronGroupSpec();
+    const last = pronBrowseSession && pronBrowseSession.index >= pronBrowseSession.total - 1;
+    // Read BEFORE completing. `wrongSeen` is the reason this item does not buy a
+    // longer interval and the reason the confirmation says "right in the end", and
+    // both are facts about the render that is finishing.
+    const missed = !!(pronBrowseSession && pronBrowseSession.wrongSeen);
+
+    if (!correct) {
+        const skip = document.createElement('button');
+        skip.type = 'button';
+        skip.className = 'btn-secondary';
+        skip.textContent = last ? 'Leave it for now' : 'Skip for now →';
+        skip.addEventListener('click', () => { if (!last) pronBrowseStep(1); });
+        if (last) skip.disabled = true;
+        if (row) row.appendChild(skip);
+        return;
+    }
+
+    completePronunciationBrowseItem(item);
+
+    // The move-on control, next to the explanation rather than only at the bottom
+    // of the card: the learner's eyes are here, and the section's Next button is
+    // three cards down on a phone.
+    if (!last) {
+        const next = document.createElement('button');
+        next.type = 'button';
+        next.className = 'btn-primary review-next';
+        next.textContent = 'Next ' + spec.noun + ' →';
+        next.addEventListener('click', () => pronBrowseStep(1));
+        feedback.appendChild(next);
+    }
+
+    // A finished item with a miss in it is 'info', not 'error': the miss is how the
+    // item earns a shorter interval, and TEACHING_METHODOLOGY.md §5 forbids a ✗
+    // without the fix — which was on the card, and still is. Praise names the
+    // specific thing (§5) rather than saying "Great job!".
+    //
+    // No `*cited word*` markup in here: showFeedback() sets textContent, so the
+    // repo's authoring markers would arrive on screen as literal asterisks. The
+    // renderers that DO interpret them are grammarParagraph/appendGrammarText.
+    const word = item.word || item.id;
+    let msg = spec.id === 'stress'
+        ? (missed
+            ? 'Right in the end — the beat on "' + word + '" is marked above. This word will come back sooner, which is what a miss is for.'
+            : 'Right first time: the beat on "' + word + '" is where you put it.')
+        : (missed
+            ? 'Right in the end. This question will come back sooner, which is what a miss is for.'
+            : 'Right first time.');
+    msg += last
+        ? ' That is the last one in this group — Previous walks back through them, and they will come back on their own in review.'
+        : ' The next one is one press away.';
+    showFeedback('pronunciationFeedback', msg, missed ? 'info' : 'success');
+}
+
+/** Move the active group's cursor, clamped. */
+function pronBrowseStep(delta) {
+    const spec = pronGroupSpec();
+    const total = spec.list().length;
+    const at = state[spec.indexKey] || 0;
+    const to = at + delta;
+    if (to < 0 || to > total - 1) return;
+    state[spec.indexKey] = to;
+    loadPronunciationSection();
+    saveProgress();
+}
+
+/**
+ * The section loader for the `pairs` group.
  *
  * Renders exactly one pair: whichever `state.currentPronunciationIndex` points
  * at, clamped to what is authored. Synchronous and content-only.
@@ -7817,39 +8655,53 @@ function loadPronunciationPair() {
     updatePronunciationNavigationState(pairs.length);
 }
 
-/** Disable the ends of the walk rather than letting Next look broken. */
+/**
+ * Disable the ends of the walk rather than letting Next look broken, and say what
+ * is being walked.
+ *
+ * Reads the ACTIVE group's cursor, not `state.currentPronunciationIndex`: one
+ * Prev/Next pair moves three different walks (US-179), and the aria-labels have to
+ * follow or a screen-reader user is told "next sound pair" on a word-stress item.
+ */
 function updatePronunciationNavigationState(total) {
+    const spec = pronGroupSpec();
     const prev = document.getElementById('prevPronunciation');
     const next = document.getElementById('nextPronunciation');
-    const index = state.currentPronunciationIndex || 0;
-    if (prev) prev.disabled = total === 0 || index <= 0;
-    if (next) next.disabled = total === 0 || index >= total - 1;
+    const index = state[spec.indexKey] || 0;
+    if (prev) {
+        prev.disabled = total === 0 || index <= 0;
+        prev.setAttribute('aria-label', 'Previous ' + spec.noun);
+    }
+    if (next) {
+        next.disabled = total === 0 || index >= total - 1;
+        next.setAttribute('aria-label', 'Next ' + spec.noun);
+    }
 }
 
 function initializePronunciationButtons() {
     const prev = document.getElementById('prevPronunciation');
     const next = document.getElementById('nextPronunciation');
 
-    if (prev) {
-        prev.onclick = () => {
-            if ((state.currentPronunciationIndex || 0) > 0) {
-                state.currentPronunciationIndex--;
-                loadPronunciationPair();
-                saveProgress();
-            }
-        };
-    }
+    // The group switcher. One handler per button, reading the group off the
+    // element, so adding a fourth group is a PRON_GROUPS row plus a button and no
+    // change here — the same discipline js/core/sections.js applies to sections.
+    document.querySelectorAll('#pronunciationGroups .pron-group-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const id = btn.getAttribute('data-pron-group');
+            if (!PRON_GROUPS[id] || pronGroup() === id) return;
+            state.currentPronunciationGroup = id;
+            loadPronunciationSection();
+            saveProgress();
+        });
+    });
 
-    if (next) {
-        next.onclick = () => {
-            const total = pronunciationPairs().length;
-            if ((state.currentPronunciationIndex || 0) < total - 1) {
-                state.currentPronunciationIndex++;
-                loadPronunciationPair();
-                saveProgress();
-            }
-        };
-    }
+    // Prev/Next move whichever group is on screen. pronBrowseStep() handles the
+    // pair walk too, because the pair group's row names
+    // `currentPronunciationIndex` as its cursor and pronunciationPairs() as its
+    // list — so there is one stepper rather than one per group, and the ends
+    // cannot be clamped correctly in one place and wrongly in another.
+    if (prev) prev.onclick = () => pronBrowseStep(-1);
+    if (next) next.onclick = () => pronBrowseStep(1);
 }
 
 // WHAT THIS SECTION DELIBERATELY DOES NOT BUILD, and what it would need.
@@ -7864,19 +8716,40 @@ function initializePronunciationButtons() {
 //    Pairs 4–8, after the three vowel pairs, and every existing learner's
 //    `pronunciation_foundation_0..2` ids keep meaning what they meant.
 //
-// 2. `PRONUNCIATION_VOWELS_STRESS.stress` (21 word-stress items, FR-PRN-3) and
-//    `.noticing` (15 rhythm / final-vowel / cluster items, FR-PRN-8) still have no
-//    SECTION of their own, and this file still does not give them one. What US-177
-//    changed is that both are now REVIEWABLE: the typed review surface
-//    (renderPhonStressReviewCard / renderPhonNoticingReviewCard, near
-//    loadReviewCard above) draws one item at a time, srs.js gained a projector
-//    variant for each shape, and the mistake panel's drill button is what seeds
-//    the first record. So the content is reachable; a walk-the-whole-set section
-//    with Prev/Next, a progress model per item and the third stress mode
-//    ('choose-form', which no authored item uses yet) is not built.
+// 2. THE REST OF STRAND C. `PRONUNCIATION_VOWELS_STRESS.stress` (21 items) and
+//    `.noticing` (15 items) are now browsable groups of this section (US-179), on
+//    top of being reviewable (US-177). The parts of CURRICULUM.md §3 Strand C that
+//    remain unbuilt are unbuilt for one reason each, and none of them is code:
 //
-//    The two hard parts named here previously are both addressed rather than
-//    dodged, and it is worth saying where:
+//  - the PHONEME INVENTORY (parts 1–2: every English consonant and vowel with a
+//    plain-English gloss and an articulatory cue, FR-PRN-9). No data. It needs a
+//    file of the same shape as `pairs[]` but one entry per PHONEME rather than per
+//    contrast — symbol, gloss, keyword, articulation, feel — roughly 44 entries,
+//    plus a `PROJECTORS.phon` variant if inventory entries are ever to be
+//    scheduled. pronPhonemeBlock() already renders exactly that shape from a
+//    pair's `phonemes[]` and would be reused as-is.
+//  - CONNECTED SPEECH (linking, elision, assimilation — "fish and chips" →
+//    /fɪʃn̩tʃɪps/). No data, and it is the same authoring problem as `noticing[]`
+//    solved for rhythm: it must be text-and-discrimination, because FR-PRN-8
+//    covers it by name. It needs an array of items in the `noticing[]` shape with
+//    `target: 'linking'` (plus a `drill.target` in js/core/mistakes.js and one SRS
+//    key, `phon:linking`). If they are authored to that shape, the three grading
+//    builders here draw them with NO new code — that is what makes the shape worth
+//    keeping to.
+//  - INTONATION (statement/question/list tunes). No data, and this is the one that
+//    needs a decision before it needs authoring. A tune is a pitch contour; it is
+//    not markable on text the way a beat is, and FR-PRN-8 plus AS-3 together mean
+//    it cannot be taught by copying a synthesised voice either. OQ-9 in
+//    REQUIREMENTS.md is still open on exactly this ("which audio source for
+//    prosody"), and the honest answer today is a recorded native voice or nothing.
+//    Authoring intonation items against TTS would be building the thing FR-PRN-8
+//    forbids, so it is not attempted here.
+//  - the third stress drill mode, `'choose-form'`. Declared in the content file's
+//    schema; no authored item uses it. Nothing is written for it because there is
+//    nothing to write it against, and a renderer for an unused mode is a renderer
+//    nobody has ever seen work.
+//
+//    The two hard parts of surfacing what DOES exist, and where each is solved:
 //  - the per-word progress model is `state.itemAccuracy`, keyed by content item
 //    id. All 21 stress items share the SINGLE key `phon:word-stress`, so per-word
 //    accuracy is not an SRS fact and must not be derived from `reps`/`lapses`
@@ -7889,11 +8762,13 @@ function initializePronunciationButtons() {
 //    reduce to. A card reads the shape, never the mode string, so a tenth mode
 //    that grades one of those three ways needs no code here.
 //    `requiresImitation` is enforced by a guard and not by trust: FR-PRN-8 forbids
-//    an imitation task for prosody, so an item declaring one is refused by name.
+//    an imitation task for prosody, so an item declaring one is refused by name —
+//    on the review card (renderPhonNoticingReviewCard) and on the browsable
+//    surface (pronBrowseRefusesImitation), which also applies the guard to stress
+//    items, where today's content does not carry the flag at all.
 //
 // A syllable renderer that marks primary/secondary/reduced from `stressNumbers`
-// without parsing `display` does now exist — renderStressWord() — and a section
-// would reuse it rather than write a second one.
+// without parsing `display` is renderStressWord(), and both surfaces use it.
 
 // ============================================
 // SECTION LOADER REGISTRATION
@@ -7918,7 +8793,10 @@ Sections.registerRuntime({
     reading: loadReadingPassage,
     listening: loadListeningExercise,
     grammar: loadGrammarPoint,
-    pronunciation: loadPronunciationPair,
+    // The dispatcher, not the pair renderer: this section walks three content
+    // groups (pairs / word stress / prosody noticing) behind one nav id, and
+    // loadPronunciationSection() is the one place that decides which.
+    pronunciation: loadPronunciationSection,
     // Wrapped, not bare: puzzles reload whichever sub-puzzle is selected.
     puzzles: () => loadPuzzle(state.currentPuzzle)
 });
@@ -7979,8 +8857,15 @@ Sections.registerContent({
     // It also keeps the app-wide union honest: reporting content at `fluent`
     // would mark that tier available in every OTHER section's level selector,
     // because hasContentForLevel() with no section is a union over all probes.
+    //
+    // The COUNT now spans all three groups (US-179), because the question this
+    // probe answers is "how many items has this section got at this tier" and the
+    // answer stopped being 8 the moment the 21 stress and 15 noticing items became
+    // reachable. It is read as a boolean by hasContent()/isLevelAvailable() and as
+    // a number by nothing that would double-count — the exercise ids are stamped
+    // per item, and the two new groups stamp theirs from the content id.
     pronunciation: level => (level === (typeof DEFAULT_LEVEL === 'string' ? DEFAULT_LEVEL : 'foundation'))
-        ? pronunciationPairs().length
+        ? pronunciationPairs().length + pronStressItems().length + pronNoticingItems().length
         : 0
 });
 
@@ -8351,6 +9236,14 @@ function sessionOpenPronunciation(step, which) {
         if (open !== -1) index = open;
     }
     if (index !== -1) state.currentPronunciationIndex = index;
+
+    // The section walks three content groups behind one nav id (US-179), and a
+    // learner who last left it on Word stress would otherwise be handed a stress
+    // item by a step the planner promised as a minimal-pair drill. Every
+    // `phon.*` surface Session declares is a PAIR surface — the gate, the
+    // discrimination drill and the speaking task all live on the pair cards — so
+    // the group is forced rather than assumed.
+    state.currentPronunciationGroup = 'pairs';
 
     switchSection('pronunciation');
     const pair = pairs[Math.min(Math.max(0, state.currentPronunciationIndex || 0), pairs.length - 1)];

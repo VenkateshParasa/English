@@ -2,17 +2,20 @@
 // Provides offline functionality and caching
 
 const CACHE_NAME = 'english-portal-v1.0.2';
-// v14 -> v15 (US-177 / US-181). No file was ADDED, so STATIC_ASSETS below is
-// unchanged — but index.html, app.js, styles.css and js/core/session.js all
-// changed, and .js/.css go through cacheFirstStrategy(STATIC_CACHE) while
-// index.html goes network-first. Without a new cache name a returning learner
-// would be served the NEW markup (#reviewCard, #mistakePanel, #reviewHeldBack)
-// against the OLD app.js, which is a worse failure than a stale page: the review
-// host and the mistake panel would exist and stay permanently empty, and
-// startReview() would still be vocabulary-only behind a badge that now counts
-// every type. Renaming the cache is what makes the activate handler below delete
-// v14.
-const STATIC_CACHE = 'english-portal-static-v16';
+// v16 -> v17 (US-179). No file was ADDED, so STATIC_ASSETS below is unchanged —
+// but index.html, app.js and styles.css all changed together, and .js/.css go
+// through cacheFirstStrategy(STATIC_CACHE) while index.html goes network-first.
+// Without a new cache name a returning learner would be served the NEW markup
+// against the OLD app.js, which here is worse than a stale page: the
+// #pronunciationGroups switcher would exist and do nothing (the old app.js has no
+// handler for `.pron-group-btn`), and #pronBrowseCard would stay `hidden`
+// permanently — so the section would advertise the 21 word-stress and 15 prosody
+// items with three dead buttons and no way to reach either group. Renaming the
+// cache is what makes the activate handler below delete v16.
+//
+// The previous bump, for the record: v14 -> v15 -> v16 (US-177 / US-181), same
+// reasoning applied to #reviewCard and #mistakePanel.
+const STATIC_CACHE = 'english-portal-static-v17';
 const DYNAMIC_CACHE = 'english-portal-dynamic-v3';
 const API_CACHE = 'english-portal-api-v3';
 
