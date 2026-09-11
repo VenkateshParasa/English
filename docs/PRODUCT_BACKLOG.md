@@ -76,6 +76,8 @@ Every story, without exception:
 Epic sizes are indicative rollups for prioritisation; several stories serve more than one epic, so
 they do not sum to the sprint total in §16.
 
+**On story numbers and sprint attribution.** Stories were originally numbered per sprint (`US-1xx` = Sprint 1, `US-2xx` = Sprint 2). From `US-193` onward they are allocated **sequentially**, so the number no longer implies a sprint — `US-201`–`US-203` are test-infrastructure fixes, not Data-integrity work, despite the `2xx`. Sprint attribution in §16 is editorial and maintained by hand; treat the per-sprint split as approximate and the totals as exact.
+
 ---
 
 ## 5. Sprint 0 — unblock (do this first)
@@ -84,7 +86,7 @@ Not features. These make everything else possible, and two are already-live prob
 
 | # | Story | FR | Pts | MoSCoW |
 |---|---|---|---|---|
-| **US-001** | **Install Jest so `npm test` runs on a clean checkout.** `jest` and `jest-environment-jsdom` are referenced by 5 scripts and `jest.config.js` but are not in `devDependencies`. Also un-ignore `package-lock.json` — `npm ci` in CI cannot work without it | `NFR-16` | 1 | M |
+| 🔶 **US-001** | **2 of 3 done 2026-09-10.** `jest@30.5.1` and `jest-environment-jsdom` declared and installed; **the suites executed for the first time** after thirteen waves. **Still open:** `package-lock.json` remains gitignored (`.gitignore:3`), so `npm ci` in CI cannot work and `npm test` would still fail on a clean checkout — which is what this story was written to fix | `NFR-16` | 1 | M |
 | ✅ **US-002** | **Commit Phase 0** — **done 2026-09-08** | — | 1 | M |
 | ✅ **US-003** | **Migrations wired into startup** — `migrateStoredProgress()` runs the chain after parse and before merge, takes a `backupOnce` first, stamps `schemaVersion`, and soft-fails if the module is absent — **done 2026-09-09** | `FR-DATA-1` | 2 | M |
 | ✅ **US-004** | **`levels.js` wired in** — `resolveDifficulty()` normalises through `canonicalLevel()` at both entry points (storage and UI selector) and bridges canonical ids to the data keys that actually exist — **done 2026-09-09** | `FR-SES-3` | 2 | M |
@@ -180,6 +182,22 @@ behaviours that teach errors.
 | **US-190** | No mistake row for aspect confusion between perfect and continuous ("she's had lunch" for "she's having lunch"). Suggested: `gram.aspect-perfect-vs-progressive`, drill `present-simple-vs-continuous` | `FR-SRS-3` | 1 | S |
 | **US-191** | `switchSection()` does not exit review mode, so navigating away mid-review and back re-shows the card. Pre-existing, not a regression | — | 1 | S |
 | **US-192** | Wire `gram.subject-dropped` into `be.js`: add `"am"` to `be-p2`'s options **with** a `feedback` entry carrying `logAs`, plus a `rendersAs`. Without the feedback entry it falls through to `fallbackFeedback`, which has no `logAs`, so it would log the default `gram.copula` — the false label the new row exists to remove | `FR-SRS-3` | 1 | M |
+| ✅ **US-193** | **`portability.js` suite written — 0% → 96.44% statements, 179 tests.** Found **three real defects** (see `US-198`–`US-200`). 44 rejection cases table-driven, each asserting the store is byte-identical afterwards — **done 2026-09-12** | `NFR-16`, `FR-DATA-4` | 3 | M |
+| **US-194** | **`js/core/blobstore.js` has no test file** — 492 statements, 0% covered. Holds the recording archive; verified only by a fake-IndexedDB harness in `/tmp`, since deleted. The seams for injecting one are still in the module | `NFR-16`, `FR-DATA-6` | 3 | M |
+| **US-195** | **Version skew unverified:** every suite was authored against jest 29 conventions by agents that could not run either version; `jest@30` is installed. Jest 30 changed some `toEqual` and mock semantics, so a green run is reassuring but a failure should be checked against the version before the assertion | `NFR-16` | 1 | S |
+| **US-196** | `jest.config.js` deliberately has no `coverageThreshold`, with a comment saying to add one once the core modules are under test. Six modules are now at 85–100%, so a floor can be set — but only after `US-193`/`US-194`, or it locks in the two 0% modules | `NFR-16` | 1 | S |
+| ✅ **US-197** | **Word-stress and prosody content now browsable in the Pronunciation section** — all 21 stress and 15 noticing items reachable without needing a review scheduled first; ungradable items are dropped loudly, and `requiresImitation` is refused per `FR-PRN-8` rather than trusted — **done 2026-09-12** | `FR-PRN-3`, `FR-PRN-8` | 5 | M |
+| ✅ **US-201** | **`session.js` honoured an injected clock in `build()` but not on the walk path**, so `plan()` compared a test-stamped date against the wall date and `current()` returned null. The suite was green for its author and failed the next morning — 15 failures, no code change. Fixed with a `_now()` seam — **done 2026-09-12** | `NFR-16` | 2 | M |
+| ✅ **US-202** | `jest.config.js` collected `__tests__/setup.js` as a test suite — one red suite that said nothing about the code — **done 2026-09-12** | `NFR-16` | 1 | M |
+| ✅ **US-203** | **Two `mistakes` tests asserted nothing:** they patched `localStorage.setItem` on the instance, which jsdom does not honour, so the throw never fired and `save()` legitimately returned `true`. They passed under the plain-node shim — exactly the class of defect only a real jest run catches — **done 2026-09-12** | `NFR-16` | 1 | M |
+| **US-198** | **`resetReviewHistory()` reports success when the removal fails.** `SRS.reset()` swallows the `removeItem` exception, so the learner is told "Your review history is cleared" while `srsData` is still in storage; in-memory records *are* cleared so the badge reads zero and it returns on next reload. `rollback()` verifies by reading the store back for exactly this reason — the reset path takes the absence of an exception on trust | `FR-DATA-5`, `BR-3` | 2 | M |
+| **US-199** | **`MESSAGES.rollbackFailed` can name a recovery key that was never written.** `writePreImportBackup()` returns a boolean and `importFromText()` discards it, so on a device too full for both the backup and the rollback the learner is told to look under `learnerData.preImport.bak` — which does not exist. The one path where data is genuinely lost | `BR-7` | 2 | M |
+| **US-200** | `resetReviewHistory()` files its backup under the current `SCHEMA_VERSION`, so legacy bare-word `srsData` — precisely the pre-grading-fix data `FR-DATA-5` exists for — is saved as `.bak.v2`, naming a version it is not. `migrations.js` files the same data as `.bak.v1` | `FR-DATA-5` | 1 | S |
+| **US-204** | **An srsData-only import DELETES `learningProgress`.** The commit is a replacement, not a merge, and `validateExport` accepts a file with either key — so restoring a review-history-only export wipes progress. Consistent with the confirm copy, but the most surprising behaviour in the module | `FR-DATA-4`, `BR-7` | 2 | M |
+| **US-209** | A settings-only export reports `ok` but is rejected `no-data` on import — a "successful" backup that cannot be restored | `FR-DATA-4` | 1 | S |
+| **US-210** | `TextEncoder` is absent from `jest-environment-jsdom` 30, so `byteLength()` silently falls back to `String.length` and every byte figure (`MAX_IMPORT_BYTES`, `storageInfo()`, export size) is validated in **UTF-16 code units, not UTF-8**. A test pins the fallback so it fails loudly if the environment changes | `NFR-16` | 1 | S |
+| **US-207** | `portability.js`'s `suspended` flag is a one-way module-level latch with no reset, so the suite has an ordering dependency and would break under `--randomize`. Needs a `_resetForTests()` or a settable flag | `NFR-16` | 1 | S |
+| **US-208** | The post-import reload (`portability.js`) is the module's only unreachable line — jsdom's `location.reload` is unforgeable. Needs an injectable `Portability._reload` seam | `NFR-16` | 1 | S |
 | **US-110** | **Stop the crossword awarding the daily goal for a blank grid** (D2) | `BR-3` | 2 | M |
 | ✅ **US-111** | Guard the quiz counters against re-clicking a correct answer — **done 2026-09-09** | `FR-VOC-1` | 1 | M |
 | ✅ **US-112** | Stop dictation double-counting the reading passage — **done 2026-09-09** | `FR-DATA-3` | 1 | M |
@@ -585,15 +603,15 @@ one with a spike attached.
 | Sprint | Theme | Points | Cumulative |
 |---|---|---|---|
 | 0 | Unblock | 6 | 6 |
-| 1 | Honesty | 174 | 180 |
-| 2 | Data integrity | 19 | 199 |
-| 3 | Extensibility | 22 | 221 |
-| 4 | Pronunciation | 33 | 254 |
-| 5 | Grammar | 36 | 290 |
-| 6 | Speaking | 28 | 318 |
-| 7 | Listening & vocabulary | 40 | 358 |
-| 8 | Session & platform | 44 | 402 |
+| 1 | Honesty | 182 | 188 |
+| 2 | Data integrity | 19 | 207 |
+| 3 | Extensibility | 22 | 229 |
+| 4 | Pronunciation | 33 | 262 |
+| 5 | Grammar | 36 | 298 |
+| 6 | Speaking | 28 | 326 |
+| 7 | Listening & vocabulary | 40 | 366 |
+| 8 | Session & platform | 44 | 410 |
 
-**402 points total, of which 168 are done — 41%.** Sprints 2 and 3 complete. Five grammar points across two tiers, 8 phoneme pair sets, a session sequencer with a UI, typed reviews that render, and a mistake diagnosis on the dashboard. ** Sprints 2 and 3 complete. Grammar and Pronunciation exist as sections and the session sequencer has a UI, so a learner can now press one button and be walked through a session. ** Sprints 2 and 3 complete; Grammar and Pronunciation exist as sections; the session sequencer exists as a module. ** Sprints 2 and 3 complete; Grammar and Pronunciation both now exist as sections. ** Sprints 2 and 3 are complete; the Grammar section now exists. ** **Sprints 2 and 3 are both complete.** ** **Sprint 2 is complete** and Sprint 3 is 17 of 22.** At 8–12 points a week of evenings that is
+**430 points total, of which 180 are done — 41%.** Must-have work is 157 of 287 (54%). **`npm test` is green for the first time: 8 suites, 793 tests, 59.55% statement coverage.** ** Sprints 2 and 3 complete. **The test suites now execute** — every module with a suite is at 85–100%, and the gap is two untested modules plus dead code. ** Sprints 2 and 3 complete. Five grammar points across two tiers, 8 phoneme pair sets, a session sequencer with a UI, typed reviews that render, and a mistake diagnosis on the dashboard. ** Sprints 2 and 3 complete. Grammar and Pronunciation exist as sections and the session sequencer has a UI, so a learner can now press one button and be walked through a session. ** Sprints 2 and 3 complete; Grammar and Pronunciation exist as sections; the session sequencer exists as a module. ** Sprints 2 and 3 complete; Grammar and Pronunciation both now exist as sections. ** Sprints 2 and 3 are complete; the Grammar section now exists. ** **Sprints 2 and 3 are both complete.** ** **Sprint 2 is complete** and Sprint 3 is 17 of 22.** At 8–12 points a week of evenings that is
 roughly **5–7 months** for everything. Sprint 1 is the one to finish first: it is where every
 honesty defect lives.
