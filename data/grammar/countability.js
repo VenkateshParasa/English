@@ -170,12 +170,25 @@ const GRAMMAR_COUNTABILITY = {
             prompt: "Before you sign anything, you should get ___ from a lawyer.",
             options: ["advice", "advices", "an advice", "some advices"],
             accept: [
-                { answer: "advice", means: "Advice in general, as much of it as you need. English never counts this word, so nothing goes on it and nothing goes in front of it." },
-                { answer: "some advice", means: "The same thing, with the vague amount said out loud. This is what most people would actually say, and *some* is the natural partner for an uncountable noun." }
+                { answer: "advice", means: "Advice in general, as much of it as you need. English never counts this word, so nothing goes on it and nothing goes in front of it." }
             ],
-            // Two right answers: "some advice" is not among the options but a
-            // learner typing it must not be told it is wrong (FR-GRM-5).
-            showDifferenceOnCorrect: true,
+            // ONE right answer, so nothing extra is shown on a correct first try
+            // (US-188). *Some advice* was accepted here and is not among the
+            // options: the renderer builds one button per `options` entry and the
+            // grammar section has no typed input at all, so it could never be
+            // submitted (US-166) — and while it was listed, app.js announced "Both
+            // answers here are right, and they do not mean the same thing" and then
+            // named a form the learner had never been shown.
+            //
+            // DEMOTED rather than promoted, for the reason its own `means` gave
+            // away: *some advice* means the same as *advice* here. *Some* says the
+            // vague amount out loud and changes nothing else about the sentence, so
+            // the two are not two readings but one answer with and without a
+            // determiner. US-188 forbids accepting a true synonym precisely because
+            // the flag would then assert a difference that does not exist. It stays
+            // named as correct in `fallbackFeedback`, so a learner who thinks of it
+            // is not told they are wrong.
+            showDifferenceOnCorrect: false,
             spoken: "*get advice* → /ɡet ədˈvaɪs/, ending on a clean /s/ with no extra syllable after it. *some advice* → /səm ədˈvaɪs/, with *some* reduced almost to nothing.",
             feedback: [
                 {
@@ -233,11 +246,21 @@ const GRAMMAR_COUNTABILITY = {
             options: ["informations", "pieces of information", "information", "details"],
             accept: [
                 { answer: "pieces of information", means: "The number lands on *pieces*, and *information* stays exactly as it is. This is the unit-word route, and it works with every noun on the uncountable list." },
-                { answer: "details", means: "A countable word that means nearly the same thing, so the number can go straight on it. This is the route fluent speakers take most often, because it is shorter." },
-                { answer: "bits of information", means: "The same as *pieces of information*, and a little more casual. *Bit* and *piece* are interchangeable here." }
+                { answer: "details", means: "A countable word that means nearly the same thing, so the number can go straight on it. This is the route fluent speakers take most often, because it is shorter." }
             ],
-            // Three right answers, doing genuinely different work — the learner
-            // needs to be told they are not the same move.
+            // Two right answers, both offered, and they do genuinely different
+            // work — a unit word carries the number, or a countable noun replaces
+            // the uncountable one altogether — so the flag is true in fact and the
+            // learner does need telling that the two are not the same move.
+            //
+            // *Bits of information* was accepted here as a third and is not among
+            // the options, so it could never be submitted (US-166) while still
+            // being read out on a correct answer. DEMOTED rather than promoted
+            // because its own `means` said what the language says: *bit* and *piece*
+            // are interchangeable in this slot, and US-188 will not have a true
+            // synonym in an accept array — the flag would announce a difference
+            // between *pieces of* and *bits of* that does not exist. It stays named
+            // as correct in `fallbackFeedback`.
             showDifferenceOnCorrect: true,
             spoken: "*three pieces of information* is a mouthful, and in speech it compresses: /θriː ˈpiːsɪzəv ɪnfəˈmeɪʃn/, with *pieces of* run into one chunk. *three details* /θriː ˈdiːteɪlz/ is why people reach for it.",
             feedback: [
@@ -333,12 +356,23 @@ const GRAMMAR_COUNTABILITY = {
             prompt: "I did not get the job. They wanted five years of ___ and I have two.",
             options: ["experience", "experiences", "an experience", "the experience"],
             accept: [
-                { answer: "experience", means: "Knowledge and skill built up over time, measured in years rather than counted. This is the meaning every job advert has." },
-                { answer: "work experience", means: "The same thing with the kind spelled out. A very common fixed phrase in exactly this sentence, and no more or less correct than *experience* on its own." }
+                { answer: "experience", means: "Knowledge and skill built up over time, measured in years rather than counted. This is the meaning every job advert has." }
             ],
-            // "work experience" is not an option but is a likely typed answer and
-            // is correct, so it is accepted rather than marked wrong.
-            showDifferenceOnCorrect: true,
+            // ONE right answer, so nothing extra is shown on a correct first try
+            // (US-188). *Work experience* was accepted and is not among the options,
+            // so it was unreachable content (US-166) that the flag nevertheless read
+            // out to a learner who had never seen it.
+            //
+            // DEMOTED, on two grounds. In this sentence it is the same answer with
+            // the kind spelled out: *five years of experience* and *five years of
+            // work experience* make the same claim to the same employer, and its own
+            // `means` said so ("no more or less correct"), which is the true synonym
+            // US-188 forbids. And it varies the NOUN, where every option here varies
+            // only the number and the determiner — `options` must belong to one
+            // grammatical set so that nothing but the target form changes, and this
+            // item's target form is the -s. It stays named as correct in
+            // `fallbackFeedback`.
+            showDifferenceOnCorrect: false,
             spoken: "*years of experience* runs together: /ˈjɪəzəv ɪkˈspɪəriəns/. The stress is on *years* and on the middle of *experience*, and *of* almost disappears.",
             feedback: [
                 {
@@ -396,13 +430,30 @@ const GRAMMAR_COUNTABILITY = {
             options: ["much", "many", "a lot of", "a"],
             accept: [
                 { answer: "much", means: "The measuring word. *Much* only ever goes with uncountable nouns, so choosing it correctly is itself proof that you have sorted the noun right." },
-                { answer: "a lot of", means: "The same amount, and the one people actually say. *A lot of* goes with both countable and uncountable nouns, which makes it the safe choice whenever you are unsure." },
-                { answer: "lots of", means: "Interchangeable with *a lot of*, slightly more casual. Also works with both kinds of noun." },
-                { answer: "any", means: "None at all, rather than not much. A stronger claim about your packing, but perfectly correct English here — *any* also partners uncountable nouns." }
+                { answer: "a lot of", means: "The one people actually say, and it goes with countable and uncountable nouns alike — so it commits you to nothing about *luggage*, where *much* commits you to reading it as stuff. Under a negative it also denies a large amount rather than insisting on a small one: *not a lot of luggage* leaves room for a middling pile, and *not much luggage* does not." }
             ],
-            // Four defensible answers, so the difference is shown even when the
-            // learner is right: "much" and "a lot of" are about amount, "any" is
-            // about none.
+            // Two right answers, both offered. *Lots of* and *any* were accepted
+            // here too and neither is among the options, so neither could ever be
+            // submitted (US-166) — and both were read out to a learner who had never
+            // been shown them.
+            //
+            // Both DEMOTED, for different reasons. *Lots of* is interchangeable with
+            // *a lot of* and its own `means` said so, which is exactly the synonym
+            // US-188 keeps out of an accept array. *Any* is correct here and does
+            // mean something different — none at all, rather than not much — but it
+            // belongs to a different contrast from the one this item isolates: *any*
+            // partners countable and uncountable nouns alike (*I have not got any
+            // bags*), so clicking it would demonstrate nothing about the sorting this
+            // item is for, and putting it in `options` would break the rule that
+            // every option belongs to ONE grammatical set with nothing but the target
+            // form varying. Both stay named as correct in `fallbackFeedback`.
+            //
+            // The two answers that remain differ in degree rather than in kind, which
+            // is the thinnest difference this flag is set on anywhere in the file. It
+            // stays set because both are offered and both are right, and US-188's
+            // other half — omitting it on a two-answer item leaves the learner
+            // thinking they are interchangeable — bites here: *much* is the one that
+            // proves the noun was sorted.
             showDifferenceOnCorrect: true,
             spoken: "In this negative sentence the whole thing compresses: *I haven't got much luggage* → /aɪ ˈhævnt ɡɒt mʌtʃ ˈlʌɡɪdʒ/. *Luggage* ends /ɪdʒ/, not /ɪdʒɪz/ — the last sound is the one to keep clean.",
             feedback: [
@@ -446,19 +497,40 @@ const GRAMMAR_COUNTABILITY = {
             mode: "gap",
             focus: "singular-verb-with-an-uncountable-noun",
             prompt: "Have you heard? The news ___ not as bad as everyone expected.",
-            options: ["is", "are", "were", "have been"],
+            options: ["is", "are", "was", "were"],
             accept: [
                 { answer: "is", means: "One uncountable noun, so a singular verb. The -s on *news* is part of the word, not a plural ending." },
                 { answer: "was", means: "The same agreement, in the past. Correct if you are reporting news you heard earlier rather than reacting to it now." }
             ],
-            // "was" is not among the options but is correct with a past reading,
-            // so it is accepted rather than marked wrong.
+            // Two right answers, and after this change both are offered. *Was* was
+            // accepted and was not among the options, so it could never be submitted
+            // (US-166) while app.js still read it out on a correct answer.
+            //
+            // PROMOTED rather than demoted, because it is the one unreachable answer
+            // in this file that differs in MEANING: *is* reacts to news now, *was*
+            // reports news heard earlier, and both readings sit happily in this
+            // prompt. So the flag becomes true in fact rather than being cleared.
+            //
+            // It also repairs the option set. This item is about NUMBER — *news* is
+            // one uncountable thing — and the past used to be representable only as
+            // an error (*were*), so a learner who sorted the number correctly and
+            // wanted the past had nowhere to go. The set is now two singular forms,
+            // both right, against two plural forms, both wrong, so the correct/wrong
+            // split falls exactly on the sub-rule the item isolates and the time is
+            // free to vary.
+            //
+            // *Have been* made way for it, as the least valuable of the three
+            // distractors: all three carried the same `errorKind`
+            // (`plural-agreement-with-uncountable`), and its own feedback conceded
+            // that the form is not what a speaker would reach for here anyway. No
+            // diagnosis is lost — *are* and *were* still cover plural agreement with
+            // an uncountable noun, in the present and in the past.
             showDifferenceOnCorrect: true,
-            spoken: "*The news is* → /ðə ˈnjuːz ɪz/, which gives you /z/ then /ɪz/ back to back and feels wrong in the mouth at first. Say it slowly a few times; the awkwardness is the point where the habit gets made.",
+            spoken: "*The news is* → /ðə ˈnjuːz ɪz/, which gives you /z/ then /ɪz/ back to back and feels wrong in the mouth at first. Say it slowly a few times; the awkwardness is the point where the habit gets made. *The news was* → /ðə ˈnjuːz wəz/ is easier to say, because the /w/ puts something between the two /z/ sounds for you.",
             feedback: [
                 {
                     forAnswer: "are",
-                    reason: "*News* ends in -s but it is not a plural — the -s is simply part of the word, like the -s in *maths*. It is one uncountable noun, so it takes *is*. There is no *a news* either: the countable units are *a news story* and *a piece of news*.",
+                    reason: "*News* ends in -s but it is not a plural — the -s is simply part of the word, like the -s in *maths*. It is one uncountable noun, so it takes a singular verb: *is* if you are reacting now, *was* if you are reporting news you heard earlier. There is no *a news* either: the countable units are *a news story* and *a piece of news*.",
                     contrast: [
                         "The news is not as bad as everyone expected.",
                         "The headlines are not as bad as everyone expected."
@@ -476,18 +548,6 @@ const GRAMMAR_COUNTABILITY = {
                         "The reports were not as bad as everyone expected."
                     ],
                     retryCue: "Singular or plural first, then present or past. Which singular form do I need?",
-                    grammaticalButDifferent: false,
-                    logAs: "gram.uncountable-plural",
-                    errorKind: "plural-agreement-with-uncountable"
-                },
-                {
-                    forAnswer: "have been",
-                    reason: "*Have* is the plural form, so this carries the same assumption that *news* is more than one thing. The singular would be *has been*, though in this sentence the simple *is* is what a speaker would reach for.",
-                    contrast: [
-                        "The news is not as bad as everyone expected.",
-                        "The results have been better than anyone expected."
-                    ],
-                    retryCue: "How many things is *news*? Then pick the verb form that matches that number.",
                     grammaticalButDifferent: false,
                     logAs: "gram.uncountable-plural",
                     errorKind: "plural-agreement-with-uncountable"

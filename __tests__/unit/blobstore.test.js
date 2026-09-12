@@ -992,6 +992,126 @@ describe('retention: the pure planner', () => {
     });
 });
 
+describe('restore-only metadata: createdAt and baseline supplied by the caller (US-138)', () => {
+    // js/core/portability.js re-inserts a recording that ALREADY EXISTED. If put()
+    // re-stamped it with the restore's own clock, rescuing the archive would be the
+    // act that destroyed FR-SPK-6's month-one-against-month-three comparison — the
+    // whole reason the archive exists.
+
+    test('an explicit createdAt is kept, not replaced by the clock', async () => {
+        // The clock says 9000; the recording is from 100.
+        at(9000);
+        const res = await BlobStore.put('p1', fakeBlob(500), { createdAt: 100 });
+        expect(res.ok).toBe(true);
+        expect(res.record.createdAt).toBe(100);
+        // And it is the STORED value, not just the returned one.
+        expect((await BlobStore.list('p1'))[0].createdAt).toBe(100);
+    });
+
+    test('an ordinary caller that passes no createdAt still gets the clock', async () => {
+        at(4242);
+        const res = await BlobStore.put('p1', fakeBlob(500));
+        expect(res.record.createdAt).toBe(4242);
+        // Explicit junk is not a value: cleanNumber rejects it and now() wins.
+        at(4243);
+        for (const bad of [null, '', 'whenever', {}, [], NaN, false]) {
+            const r = await BlobStore.put('p2', fakeBlob(10), { createdAt: bad });
+            expect(r.record.createdAt).toBe(4243);
+        }
+    });
+
+    test('a restored createdAt still sorts by age, so retention stays correct', async () => {
+        // Restored OUT OF ORDER on purpose — newest inserted first.
+        at(9000);
+        const newest = await BlobStore.put('p1', fakeBlob(100), { createdAt: 400, baseline: false });
+        const first = await BlobStore.put('p1', fakeBlob(100), { createdAt: 100, baseline: true });
+        const middle = await BlobStore.put('p1', fakeBlob(100), { createdAt: 200, baseline: false });
+
+        // list() is newest-first by createdAt, not by insertion order.
+        expect((await BlobStore.list('p1')).map((r) => r.createdAt)).toEqual([400, 200, 100]);
+
+        // A fourth recording evicts the second-oldest and keeps the restored
+        // baseline — the property that would have broken if age came from the
+        // restore's clock, which would have made all three the same age.
+        const fourth = await putAt('p1', 100, 500);
+        expect(fourth.ok).toBe(true);
+        expect(fourth.evicted).toEqual([middle.record.id]);
+        expect(store.ids()).toEqual([newest.record.id, first.record.id, fourth.record.id].sort((a, b) => a - b));
+    });
+
+    test('an explicit baseline:true is honoured even when it is not inserted first', async () => {
+        at(9000);
+        const notFirst = await BlobStore.put('p1', fakeBlob(100), { createdAt: 400, baseline: false });
+        expect(notFirst.record.baseline).toBe(false);   // NOT promoted just for being first in
+
+        const theRealFirst = await BlobStore.put('p1', fakeBlob(100), { createdAt: 100, baseline: true });
+        expect(theRealFirst.record.baseline).toBe(true);
+    });
+
+    test('⚠️ THE CLAMP: a second baseline:true at one prompt is refused the flag', async () => {
+        // Two pinned baselines at one prompt is US-222 one level down.
+        // planRetention() credits ONE retention slot to a baseline while
+        // evictionCandidates() protects every row carrying the flag, so the second
+        // would be named a victim by the plan and shielded by the filter — and
+        // commit() would end up deleting a pinned baseline.
+        at(9000);
+        const a = await BlobStore.put('p1', fakeBlob(100), { createdAt: 100, baseline: true });
+        const b = await BlobStore.put('p1', fakeBlob(100), { createdAt: 200, baseline: true });
+        expect(a.record.baseline).toBe(true);
+        expect(b.record.baseline).toBe(false);
+
+        const flagged = (await BlobStore.list('p1')).filter((r) => r.baseline === true);
+        expect(flagged).toHaveLength(1);
+        expect(flagged[0].createdAt).toBe(100);
+    });
+
+    test('the clamp is per prompt: each prompt keeps its own baseline', async () => {
+        at(9000);
+        const p1 = await BlobStore.put('p1', fakeBlob(100), { createdAt: 100, baseline: true });
+        const p2 = await BlobStore.put('p2', fakeBlob(100), { createdAt: 100, baseline: true });
+        expect([p1.record.baseline, p2.record.baseline]).toEqual([true, true]);
+    });
+
+    test('baseline:false on the first recording at a prompt leaves it unpinned', async () => {
+        // The learner deleted their real baseline before exporting. Nothing is
+        // silently promoted to replace it — US-222's "the persisted flag wins".
+        at(9000);
+        const only = await BlobStore.put('p1', fakeBlob(100), { createdAt: 300, baseline: false });
+        expect(only.record.baseline).toBe(false);
+
+        // So the prompt keeps its 3 most recent and nothing is protected.
+        await putAt('p1', 100, 400);
+        await putAt('p1', 100, 500);
+        const fourth = await putAt('p1', 100, 600);
+        expect(fourth.evicted).toEqual([only.record.id]);
+    });
+
+    test('a non-boolean baseline is ignored, so ordinary saves derive it as before', async () => {
+        at(9000);
+        const bad = [undefined, null, 'true', 1, 0, {}];
+        for (let i = 0; i < bad.length; i++) {
+            // A fresh prompt each time rather than clearing the store, so "first
+            // recording at this prompt" is genuinely first.
+            const prompt = 'ignored-' + i;
+            const first = await BlobStore.put(prompt, fakeBlob(100), { baseline: bad[i] });
+            expect(first.record.baseline).toBe(true);      // derived: first at this prompt
+            const second = await BlobStore.put(prompt, fakeBlob(100), { baseline: bad[i] });
+            expect(second.record.baseline).toBe(false);
+        }
+    });
+
+    test('the restored flag survives the quota retry path', async () => {
+        // The retry re-commits, and it must be handed restoreBaseline too — or a
+        // restored baseline silently becomes a non-baseline whenever quota bites.
+        at(9000);
+        store.budget = 400;
+        const res = await BlobStore.put('p1', fakeBlob(300), { createdAt: 100, baseline: true });
+        expect(res.ok).toBe(true);
+        expect(res.record.baseline).toBe(true);
+        expect(res.record.createdAt).toBe(100);
+    });
+});
+
 describe('retention: end to end through IndexedDB', () => {
     test('four recordings at one prompt leave the baseline and the two newest', async () => {
         const r1 = await putAt('p1', 1000, 100);

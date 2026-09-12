@@ -239,6 +239,31 @@
                 <p>Restoring replaces the progress, review history and settings on this device. Clearing your review history keeps your progress, streak, completed exercises and settings.</p>
                 <div class="feedback" id="dataControlsStatus" role="status" aria-live="polite"></div>
                 <p id="dataControlsUsage" aria-live="polite"></p>
+
+                <!-- Recordings are a SECOND artefact, on purpose (US-138 / FR-DATA-4).
+                     Audio cannot go inside the data file above without base64ing a
+                     50MB archive into a ~67MB single JavaScript string, which the
+                     mid-range Android floor in NFR-6 cannot hold. So the data file
+                     carries a MANIFEST — counts, dates, sizes, and `audioIncluded:
+                     false` written unconditionally — and the audio rides in a
+                     separate binary container whose payloads are concatenated by
+                     reference and never become a string.
+
+                     Two artefacts also delete the hardest problem here: two learner
+                     actions over two stores means no single commit spans both, so
+                     there is never a state neither store agreed to, and rollback()
+                     keeps meaning exactly what it meant.
+
+                     js/core/portability.js wires all four of these ONLY if present,
+                     and until they existed its export copy told the learner their
+                     recordings could not be saved from this screen — which was true
+                     and is why they are here. -->
+                <div class="button-group" role="group" aria-label="Your recordings">
+                    <button class="btn-secondary" id="exportRecordings" aria-label="Save your recordings as a separate file">⬇️ Save my recordings</button>
+                    <button class="btn-secondary" id="importRecordings" aria-label="Restore your recordings from a saved file">⬆️ Restore my recordings</button>
+                </div>
+                <input type="file" id="importRecordingsFile" accept=".enrec" class="sr-only" tabindex="-1" aria-hidden="true">
+                <p id="dataControlsRecordings" aria-live="polite"></p>
             </div>
         </section>
 
@@ -491,8 +516,48 @@
                     <p class="read-aloud-lock" id="readAloudLock" role="status">This opens once you have attempted the sentence above. Reading it first would hand you the answer to the listening task.</p>
                     <div class="sentence-display" id="targetWord" aria-live="polite" aria-label="Sentence to read aloud"></div>
                     <button class="btn-primary" id="startSpeech" disabled aria-label="Start speech recognition">🎤 Start Speaking</button>
+                    <!-- US-608 / FR-SPK-9 / FR-A11Y-4. Read Aloud used to end at the
+                         recogniser: a learner with no microphone, or one who cannot
+                         speak aloud tonight, had a card with one dead button in it.
+                         app.js draws the silent route into #readAloudSilent and is
+                         explicit that reading it in your head is not something the
+                         app can observe. -->
+                    <div class="silent-route" id="readAloudSilent"></div>
                     <div class="recognized-text" id="recognizedText" role="status" aria-live="polite"></div>
                     <div class="feedback" id="speechFeedback" role="status" aria-live="polite"></div>
+                </div>
+                <!-- ===== US-601 / FR-SPK-3 — free production =====================
+                     The app's only unscripted-speaking surface: a prompt, a clock
+                     the learner starts, a recording kept by RecordingArchive, and a
+                     rubric the learner answers about themselves.
+
+                     WHY IT LIVES IN THIS SECTION. Speaking is not a row in
+                     js/core/sections.js and cannot become one without renumbering
+                     every learner's Alt+N shortcuts; this section is already called
+                     "Listening & Speaking", already owns the recorder and already
+                     owns the 'listening' object-url surface. Session step
+                     `speak.free` routes here.
+
+                     EVERYTHING INSIDE IS DRAWN BY app.js, on purpose: the prompt,
+                     the buttons and the rubric all differ between a device with a
+                     microphone and one without (FR-A11Y-4), and markup that assumed
+                     a microphone would be a dead button on P2's phone. -->
+                <div class="exercise-card free-speak" role="form" id="freeSpeaking" aria-labelledby="free-speaking-title">
+                    <h3 id="free-speaking-title">🗣️ Say something of your own</h3>
+                    <p class="instruction">One prompt, a clock you start yourself, and a checklist you answer for yourself afterwards. Nothing here is scored: the app cannot grade free speech, so it does not pretend to. The clock only counts — it never stops you.</p>
+                    <div class="free-speak-prompt" id="freeSpeakPrompt" aria-live="polite"></div>
+                    <!-- role="timer" with aria-live="off": a live region ticking once
+                         a second would talk over the learner. app.js announces the
+                         elapsed time once, in #freeSpeakStatus, when they stop. -->
+                    <p class="free-speak-clock" id="freeSpeakClock" role="timer" aria-live="off"></p>
+                    <div class="free-speak-controls" id="freeSpeakControls" role="group" aria-label="Record, clock and how you finished"></div>
+                    <div class="recording-status" id="freeSpeakStatus" role="status" aria-live="polite"></div>
+                    <div class="free-speak-rubric" id="freeSpeakRubric"></div>
+                    <div class="recording-archive" id="freeSpeakArchive" role="region" aria-label="Your kept recordings of this prompt" hidden></div>
+                    <div class="navigation-buttons" role="navigation" aria-label="Speaking prompt navigation">
+                        <button class="btn-secondary" id="prevFreeSpeak" aria-label="Previous speaking prompt">← Previous prompt</button>
+                        <button class="btn-primary" id="nextFreeSpeak" aria-label="Next speaking prompt">Next prompt →</button>
+                    </div>
                 </div>
             </div>
         </section>
@@ -750,6 +815,16 @@
          opened nothing. With this file every category that promises a drill opens a
          lesson that exists: 26 live, 0 dead. -->
     <script src="data/grammar/register.js"></script>
+    <!-- Everyday points 10 and 12 (US-238, US-239). `future-forms` teaches will /
+         going to / present continuous by WHEN THE DECISION WAS MADE rather than by
+         "predictions vs plans", because Telugu has one verb-marked future where
+         English has four forms. `gerund-infinitive` splits a real rule (after a
+         preposition, always -ing) from an arbitrary per-verb list, and routes the
+         arbitrary half to `vocab.collocation` so a memory gap is not reported as a
+         grammar gap. Neither closes a dead drill target; they exist because the
+         syllabus needs them. -->
+    <script src="data/grammar/future-forms.js"></script>
+    <script src="data/grammar/gerund-infinitive.js"></script>
     <!-- Strand C pronunciation content. Declares `PRONUNCIATION_VOWELS_STRESS`
          (vowel minimal pairs, word stress, prosody noticing). All three arrays are
          surfaced: `.pairs` by the discrimination drill, `.stress` and `.noticing`

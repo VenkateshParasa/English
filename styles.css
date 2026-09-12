@@ -3618,3 +3618,133 @@ header h1 {
     font-size: var(--text-sm, 0.875rem);
     min-height: 1.4em;
 }
+
+/* --- Free production (US-601 / FR-SPK-3) --------------------------------- */
+/* The card is the last one in Listening & Speaking and reads as the section's
+   pay-off, so it gets a border rather than blending into the two cards above.
+   Nothing in here is a progress bar, a meter or a badge: there is no score to
+   draw, and drawing one anyway is what BR-3 forbids. */
+.free-speak {
+    border: 2px solid #667eea;
+}
+
+.free-speak-task {
+    margin: 0 0 var(--space-2, 0.5rem);
+    font-size: var(--text-lg, 1.125rem);
+    font-weight: 600;
+    line-height: 1.5;
+}
+
+.free-speak-meta,
+.free-speak-note,
+.free-speak-history,
+.free-speak-totals,
+.free-speak-route-note,
+.free-speak-rubric-note,
+.free-speak-rubric-close,
+.free-speak-nomic,
+.silent-route-note {
+    margin: var(--space-2, 0.5rem) 0 0;
+    font-size: var(--text-sm, 0.875rem);
+    color: var(--text-secondary, #555);
+}
+
+.free-speak-cover {
+    margin: var(--space-3, 0.75rem) 0 var(--space-1, 0.25rem);
+    font-size: var(--text-sm, 0.875rem);
+    font-weight: 600;
+}
+
+.free-speak-bullets {
+    margin: 0 0 var(--space-2, 0.5rem);
+    padding-left: 1.25rem;
+}
+
+.free-speak-bullets li {
+    margin: 0 0 var(--space-1, 0.25rem);
+}
+
+/* The clock. Tabular figures so a digit change does not shift the line, and
+   deliberately not styled as a warning when the target goes by: passing it is a
+   fact about the attempt, not a failure state (session.js decision 1). */
+.free-speak-clock {
+    margin: var(--space-3, 0.75rem) 0;
+    font-size: var(--text-xl, 1.25rem);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.free-speak-clock.is-past-target {
+    color: #2f855a;
+}
+
+.free-speak-route-head {
+    margin: var(--space-4, 1rem) 0 0;
+    font-size: var(--text-base, 1rem);
+}
+
+.free-speak-rubric,
+.free-speak-rubric-preview {
+    list-style: none;
+    margin: var(--space-2, 0.5rem) 0 0;
+    padding: 0;
+}
+
+.free-speak-rubric-preview li {
+    margin: 0 0 var(--space-2, 0.5rem);
+    padding-left: 1.25rem;
+    position: relative;
+    font-size: var(--text-sm, 0.875rem);
+}
+
+.free-speak-rubric-preview li::before {
+    content: '·';
+    position: absolute;
+    left: 0.35rem;
+}
+
+.free-speak-rubric li {
+    margin: 0 0 var(--space-2, 0.5rem);
+}
+
+/* A big enough hit area for a thumb, and the label is the control, so the whole
+   question is tappable (FR-A11Y-1). */
+.free-speak-rubric-item {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2, 0.5rem);
+    padding: var(--space-2, 0.5rem);
+    border: 1px solid var(--border-color, #e0e0e0);
+    border-radius: 8px;
+    cursor: pointer;
+    line-height: 1.5;
+}
+
+.free-speak-rubric-item .free-speak-tick {
+    margin-top: 0.2em;
+    width: 1.15rem;
+    height: 1.15rem;
+    flex: 0 0 auto;
+}
+
+.free-speak-more {
+    margin: var(--space-3, 0.75rem) 0 0;
+}
+
+.free-speak-more summary {
+    cursor: pointer;
+    font-size: var(--text-sm, 0.875rem);
+    font-weight: 600;
+}
+
+/* --- The silent route on Read Aloud (US-608 / FR-A11Y-4) ----------------- */
+.silent-route {
+    margin: var(--space-3, 0.75rem) 0 0;
+}
+
+/* --- Pronunciation production: the silent route stated (US-608) ---------- */
+.pron-silent-route {
+    margin: var(--space-2, 0.5rem) 0 0;
+    font-size: var(--text-sm, 0.875rem);
+    color: var(--text-secondary, #555);
+}

@@ -2892,3 +2892,1333 @@ describe('pronunciation self-comparison, A -> B -> A (US-404 / FR-PRN-4)', () =>
         expect(body).toContain("compare.disabled = !(pronCompare.url || pronCompare.recordId)");
     });
 });
+
+// ===========================================================================
+// US-601 — free production: prompt, clock, recording, rubric (FR-SPK-3)
+// ===========================================================================
+//
+// Three kinds of assertion here, and the split is deliberate.
+//
+//  1. THE CONTENT is real data and is tested as data: every authored prompt has
+//     to survive data.js's normaliser, and every rubric item has to be one the
+//     LEARNER can answer. That second one is the whole story of this feature —
+//     the app cannot grade free speech, so a rubric asking "was my pronunciation
+//     good?" would hand the learner a question only a teacher could answer and
+//     leave them assuming the fault was theirs.
+//
+//  2. THE MARKUP is checked against the code that draws into it, in the same
+//     spirit as the rest of this file.
+//
+//  3. THE BEHAVIOUR is WALKED in jsdom, not grepped. app.js cannot be required,
+//     so the block between the BEGIN/END markers is extracted and evaluated with
+//     its dependencies injected — exactly the arrangement the recording archive
+//     uses, and for the same reason: "the clock cannot end the task" and "the
+//     silent route finishes it with no microphone" are behaviour, and a regex
+//     over source text cannot prove either.
+
+describe('free production — prompt, clock, recording, rubric (US-601 / FR-SPK-3)', () => {
+    const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+    const Data = require(path.join(ROOT, 'data.js'));
+    const BlobStore = require(path.join(ROOT, 'js', 'core', 'blobstore.js'));
+
+    const TIERS = ['foundation', 'everyday', 'confident', 'fluent'];
+
+    /** Source between two markers. */
+    function between(begin, end) {
+        const from = appSource.indexOf(begin);
+        const to = appSource.indexOf(end);
+        expect(from).toBeGreaterThan(-1);
+        expect(to).toBeGreaterThan(from);
+        return appSource.slice(from, to);
+    }
+
+    function fsBlock() {
+        return between('// ===== BEGIN FREE PRODUCTION (US-601) =====',
+            '// ===== END FREE PRODUCTION (US-601) =====');
+    }
+
+    function archiveBlock() {
+        return between('// ===== BEGIN RECORDING ARCHIVE (US-136) =====',
+            '// ===== END RECORDING ARCHIVE (US-136) =====');
+    }
+
+    /** The body of one top-level function, by brace matching. */
+    function functionBody(header) {
+        const start = appSource.indexOf(header);
+        expect(start).toBeGreaterThan(-1);
+        let depth = 0;
+        for (let i = appSource.indexOf('{', start); i < appSource.length; i++) {
+            if (appSource[i] === '{') depth++;
+            else if (appSource[i] === '}' && --depth === 0) return appSource.slice(start, i + 1);
+        }
+        throw new Error('unbalanced braces after ' + header);
+    }
+
+    /** Code with the comments stripped — the assertions below forbid particular
+     *  code, and the comments explain at length why. */
+    function codeOnly(source) {
+        return source
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .split('\n')
+            .filter(line => !/^\s*\/\//.test(line))
+            .join('\n');
+    }
+
+    const allPrompts = () => TIERS.reduce((out, tier) => out.concat(
+        Data.normaliseFreeSpeakingList(Data.freeSpeakingPrompts[tier], tier)), []);
+
+    // ------------------------------------------------------------------
+    // 1. The content
+    // ------------------------------------------------------------------
+
+    describe('the prompts are authored and reachable', () => {
+        it('authors prompts for every tier, so no tier falls back', () => {
+            // A tier with nothing authored sends the learner down a level by
+            // resolveDifficulty()'s step-down rule, which for P4 (fluent) would
+            // mean the app has no prompt written for the persona it names.
+            TIERS.forEach(tier => {
+                const list = Data.normaliseFreeSpeakingList(Data.freeSpeakingPrompts[tier], tier);
+                expect(list.length).toBeGreaterThan(0);
+                list.forEach(p => expect(p.tier).toBe(tier));
+            });
+        });
+
+        it('loses nothing to the normaliser', () => {
+            // Every authored entry renders. A prompt silently dropped is content
+            // nobody would ever find missing (FR-CNT-1).
+            TIERS.forEach(tier => {
+                const authored = Data.freeSpeakingPrompts[tier];
+                expect(Data.normaliseFreeSpeakingList(authored, tier))
+                    .toHaveLength(authored.length);
+            });
+        });
+
+        it('grades the advisory length by tier (FR-SPK-3)', () => {
+            allPrompts().forEach(p => {
+                expect(typeof p.targetSeconds).toBe('number');
+                expect(p.targetSeconds).toBeGreaterThan(0);
+            });
+            // The tier defaults exist so an author can leave it out, and every
+            // tier has one — otherwise "graded by tier" is 90 seconds for all.
+            TIERS.forEach(tier => expect(Data.FREE_SPEAKING_SECONDS[tier]).toBeGreaterThan(0));
+            expect(Data.FREE_SPEAKING_SECONDS.foundation)
+                .toBeLessThan(Data.FREE_SPEAKING_SECONDS.confident);
+        });
+
+        it('covers the persona patterns the backlog names', () => {
+            const situations = allPrompts().map(p => p.situation);
+            // A commute-length task (P1), an interview-style task (P3/P4) and a
+            // describe-your-work task (P1/P4).
+            expect(situations).toContain('commute');
+            expect(situations).toContain('interview');
+            expect(situations).toContain('work');
+            // And the commute one is actually commute-length.
+            const commute = allPrompts().filter(p => p.situation === 'commute');
+            commute.forEach(p => expect(p.targetSeconds).toBeLessThanOrEqual(60));
+        });
+
+        it('gives every prompt at least two rubric items and unique ids', () => {
+            const seen = new Set();
+            allPrompts().forEach(p => {
+                expect(p.rubric.length).toBeGreaterThanOrEqual(2);
+                expect(seen.has(p.id)).toBe(false);
+                seen.add(p.id);
+                const ids = p.rubric.map(r => r.id);
+                expect(new Set(ids).size).toBe(ids.length);
+            });
+        });
+    });
+
+    describe('every rubric item is one the learner can answer about themselves', () => {
+        it('ships nothing rubricRefuses() would refuse', () => {
+            allPrompts().forEach(p => {
+                p.rubric.forEach(item => {
+                    expect(Data.rubricRefuses(item.ask)).toBeNull();
+                });
+            });
+        });
+
+        it('refuses the question FR-PRN-5 forbids everywhere else', () => {
+            // The one the learner cannot answer, in the wordings an author would
+            // actually reach for.
+            [
+                'Was your pronunciation good?',
+                'Did it sound right?',
+                'Did you sound natural?',
+                'Did you sound like a native speaker?',
+                'Was your accent clear?',
+                'Were you fluent?',
+                'Score yourself out of 5',
+                'Was your grammar correct?'
+            ].forEach(ask => {
+                expect(Data.rubricRefuses(ask)).not.toBeNull();
+            });
+        });
+
+        it('drops a refused item at author time rather than softening it', () => {
+            const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+            try {
+                const dropped = Data.normaliseFreeSpeakingPrompt({
+                    id: 'x', prompt: 'Say something.',
+                    rubric: [
+                        { id: 'a', ask: 'Did you keep going without stopping?' },
+                        { id: 'b', ask: 'Was your pronunciation good?' },
+                        { id: 'c', ask: 'Did you finish every sentence?' }
+                    ]
+                }, 'everyday');
+                expect(dropped.rubric.map(r => r.id)).toEqual(['a', 'c']);
+                expect(warn.mock.calls.join(' ')).toContain('was dropped because it');
+                // And a prompt left with fewer than two usable items is dropped
+                // whole: a recording with nothing to check it against is the thing
+                // CURRICULUM.md Strand E opens by calling the problem.
+                expect(Data.normaliseFreeSpeakingPrompt({
+                    id: 'y', prompt: 'Say something.',
+                    rubric: [{ ask: 'Did it sound right?' }, { ask: 'Was it fluent?' }]
+                }, 'everyday')).toBeNull();
+            } finally {
+                warn.mockRestore();
+            }
+        });
+
+        it('never puts a score, a mark or a percentage in front of the learner', () => {
+            // BR-3 / FR-PRN-5 over the CONTENT, not just the code: a rubric item
+            // saying "give yourself 4/5" would be a score the app invited.
+            allPrompts().forEach(p => {
+                [p.prompt, p.notes || ''].concat(p.rubric.map(r => r.ask))
+                    .concat(p.bullets)
+                    .forEach(text => {
+                        expect(text).not.toMatch(/\b\d+\s*(\/|out of)\s*\d+\b/);
+                        expect(text).not.toMatch(/%|percent|\bscore\b|\bgrade\b|\bpass\/fail\b/i);
+                    });
+            });
+        });
+
+        it('asks about what the learner did, in the second person', () => {
+            // Every item is a yes/no question addressed to the learner. Not a
+            // style rule: an item that is not a question about their own attempt
+            // is one they cannot answer, which is the failure this whole block is
+            // about.
+            allPrompts().forEach(p => {
+                p.rubric.forEach(item => {
+                    expect(item.ask).toMatch(/\?$/);
+                    expect(item.ask.toLowerCase()).toMatch(/\byou\b|\byour\b/);
+                });
+            });
+        });
+    });
+});
+
+describe('free production — the card, walked in jsdom (US-601)', () => {
+    const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+    const Data = require(path.join(ROOT, 'data.js'));
+    const BlobStore = require(path.join(ROOT, 'js', 'core', 'blobstore.js'));
+    const REAL_NOW = BlobStore._now;
+
+    function between(begin, end) {
+        const from = appSource.indexOf(begin);
+        const to = appSource.indexOf(end);
+        expect(from).toBeGreaterThan(-1);
+        expect(to).toBeGreaterThan(from);
+        return appSource.slice(from, to);
+    }
+    const fsBlock = () => between('// ===== BEGIN FREE PRODUCTION (US-601) =====',
+        '// ===== END FREE PRODUCTION (US-601) =====');
+    const archiveBlock = () => between('// ===== BEGIN RECORDING ARCHIVE (US-136) =====',
+        '// ===== END RECORDING ARCHIVE (US-136) =====');
+
+    // --- stand-ins for the browser APIs the two blocks touch ----------------
+
+    function FakeBlob(parts, opts) {
+        this.size = (parts || []).reduce((n, p) => n + ((p && p.size) || 0), 0);
+        this.type = (opts && opts.type) || '';
+    }
+    class FakeMediaRecorder {
+        constructor(stream) { this.stream = stream; this.state = 'inactive'; this.mimeType = 'audio/webm;codecs=opus'; }
+        start() { this.state = 'recording'; }
+        stop() {
+            this.state = 'inactive';
+            if (this.ondataavailable) this.ondataavailable({ data: { size: 4096, type: this.mimeType } });
+            if (this.onstop) this.onstop();
+        }
+    }
+    function FakeAudio(url) { this.src = url; FakeAudio.played.push(url); }
+    FakeAudio.played = [];
+    FakeAudio.prototype.play = function () { return Promise.resolve(); };
+    FakeAudio.prototype.pause = function () {};
+
+    /** The real markup, lifted out of index.html so the code and the card that
+     *  ships are tested against each other rather than against a stub. */
+    function cardMarkup() {
+        const card = doc.getElementById('freeSpeaking');
+        expect(card).not.toBeNull();
+        return card.outerHTML;
+    }
+
+    let state;
+    let FS;
+    let Archive;
+    let warned;
+    const flush = () => new Promise(r => setTimeout(r, 0));
+
+    /**
+     * Build the card: real markup, real archive over a fake IndexedDB, and the
+     * free-production block with its app.js dependencies injected.
+     * @param {Object} [opts] { level, microphone }
+     */
+    function build(opts) {
+        const o = opts || {};
+        document.body.innerHTML = cardMarkup();
+
+        BlobStore._reset();
+        BlobStore._useEnvironment({ indexedDB: new FakeIndexedDB({}), IDBKeyRange: FakeKeyRange });
+        BlobStore._now = () => new Date(2026, 8, 12, 21, 40).getTime();
+
+        global.URL.createObjectURL = () => 'blob:free/1';
+        global.URL.revokeObjectURL = () => {};
+
+        const win = {
+            BlobStore: BlobStore,
+            AppErrorHandler: { logError: (e, context) => warned.push(context) },
+            URL: global.URL,
+            Audio: FakeAudio,
+            Blob: FakeBlob,
+            MediaRecorder: o.microphone === false ? undefined : FakeMediaRecorder,
+            navigator: o.microphone === false
+                ? {}
+                : {
+                    mediaDevices: {
+                        getUserMedia: () => o.microphone === 'refused'
+                            ? Promise.reject(new Error('NotAllowedError'))
+                            : Promise.resolve({ getTracks: () => [{ stop() {} }] })
+                    }
+                }
+        };
+        Archive = new Function('window', archiveBlock() + '\n;return window.RecordingArchive;')(win);
+        win.RecordingArchive = Archive;
+
+        state = {
+            currentDifficulty: o.level || 'everyday',
+            freeSpeaking: { index: 0, prompts: o.prompts || {} }
+        };
+
+        const deps = {
+            state: state,
+            window: win,
+            // app.js reads the archive through the bare global after guarding on
+            // `window.RecordingArchive`, which is the house style in this file.
+            RecordingArchive: Archive,
+            URL: global.URL,
+            Audio: FakeAudio,
+            AppErrorHandler: win.AppErrorHandler,
+            appendGrammarText: appendGrammarText,
+            joinWithAnd: list => !list || !list.length ? ''
+                : (list.length === 1 ? list[0]
+                    : list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1]),
+            saveProgress: () => { state.saved = (state.saved || 0) + 1; },
+            reportArchiveSave: (result, statusId) => {
+                const el = document.getElementById(statusId);
+                if (el && result && result.message) el.textContent = result.message;
+            },
+            Levels: { levelLabel: id => ({ foundation: 'Foundation', everyday: 'Everyday', confident: 'Confident', fluent: 'Fluent' })[id] || null },
+            canonicalLevel: v => v,
+            LEVELS: [
+                { id: 'foundation', order: 1 }, { id: 'everyday', order: 2 },
+                { id: 'confident', order: 3 }, { id: 'fluent', order: 4 }
+            ],
+            freeSpeakingPrompts: Data.freeSpeakingPrompts,
+            normaliseFreeSpeakingList: Data.normaliseFreeSpeakingList,
+            Session: null
+        };
+        const names = Object.keys(deps);
+        FS = new Function(...names, fsBlock() + `
+;return {
+    load: loadFreeSpeakingPrompt, ensure: ensureFreeSpeakingPrompt,
+    open: openFreeSpeakingPrompt, promptsFor: freeSpeakingPromptsFor,
+    all: freeSpeakingAllPrompts, mark: markFreeSpeakDone, tick: freeSpeakTick,
+    totals: freeSpeakTotals, elapsed: freeSpeakElapsed,
+    suggested: freeSpeakSuggestedIndex, sanitize: sanitizeFreeSpeaking,
+    session: () => freeSpeakSession, SURFACE: FREE_SPEAK_SURFACE
+};`)(...names.map(n => deps[n]));
+        return FS;
+    }
+
+    /** app.js's own markup helper, lifted verbatim so the *cited word* markup is
+     *  rendered the way the app renders it. */
+    function appendGrammarText(el, text) {
+        const raw = text == null ? '' : String(text);
+        raw.split(/(\*\*[^*]+\*\*)/).forEach(chunk => {
+            if (!chunk) return;
+            if (chunk.length > 4 && chunk.startsWith('**') && chunk.endsWith('**')) {
+                const strong = document.createElement('strong');
+                strong.textContent = chunk.slice(2, -2);
+                el.appendChild(strong);
+                return;
+            }
+            chunk.split(/(\*[^*]+\*)/).forEach(part => {
+                if (!part) return;
+                if (part.length > 2 && part.startsWith('*') && part.endsWith('*')) {
+                    const em = document.createElement('em');
+                    em.textContent = part.slice(1, -1);
+                    el.appendChild(em);
+                    return;
+                }
+                el.appendChild(document.createTextNode(part));
+            });
+        });
+        return el;
+    }
+
+    const text = id => (document.getElementById(id) || {}).textContent;
+    const labels = id => Array.from(document.getElementById(id).querySelectorAll('button'))
+        .map(b => b.textContent);
+    const paragraphs = id => Array.from(document.getElementById(id).querySelectorAll('p'))
+        .map(p => p.textContent);
+
+    beforeEach(() => {
+        warned = [];
+        FakeAudio.played = [];
+        global.AppErrorHandler = { logError: (e, context) => warned.push(context) };
+    });
+
+    afterEach(() => {
+        BlobStore._useEnvironment(null);
+        BlobStore._now = REAL_NOW;
+    });
+
+    // ------------------------------------------------------------------
+    // The markup
+    // ------------------------------------------------------------------
+
+    describe('the markup it draws into', () => {
+        it('puts the card inside Listening & Speaking, after Read Aloud', () => {
+            const card = doc.getElementById('freeSpeaking');
+            expect(card.closest('#listening')).not.toBeNull();
+            const cards = Array.from(doc.querySelectorAll('#listening .exercise-card'));
+            expect(cards.indexOf(card)).toBe(cards.length - 1);
+            // Speaking is not a section in js/core/sections.js and cannot become
+            // one without renumbering every learner's Alt+N shortcuts, so the
+            // section that already says "& Speaking" is where this lives.
+            expect(doc.getElementById('listening-title').textContent)
+                .toContain('Speaking');
+        });
+
+        it.each([
+            'freeSpeakPrompt', 'freeSpeakClock', 'freeSpeakControls',
+            'freeSpeakStatus', 'freeSpeakRubric', 'freeSpeakArchive',
+            'prevFreeSpeak', 'nextFreeSpeak'
+        ])('#%s exists inside the card', id => {
+            const el = doc.getElementById(id);
+            expect(el).not.toBeNull();
+            expect(el.closest('#freeSpeaking')).not.toBeNull();
+        });
+
+        it('does not announce the clock once a second', () => {
+            // role="timer" with aria-live="off": a live region ticking every
+            // second would talk over the learner mid-sentence, which is the one
+            // thing this card exists to let them do.
+            const clock = doc.getElementById('freeSpeakClock');
+            expect(clock.getAttribute('role')).toBe('timer');
+            expect(clock.getAttribute('aria-live')).toBe('off');
+            // The status line IS polite, so the one message that matters — the
+            // target going by, and the outcome — is announced.
+            expect(doc.getElementById('freeSpeakStatus').getAttribute('aria-live'))
+                .toBe('polite');
+        });
+
+        it('starts the archive region empty and hidden', () => {
+            const archive = doc.getElementById('freeSpeakArchive');
+            expect(archive.hasAttribute('hidden')).toBe(true);
+            expect(archive.textContent.trim()).toBe('');
+        });
+
+        it('says in the markup that nothing here is scored', () => {
+            const card = doc.getElementById('freeSpeaking');
+            const instruction = card.querySelector('.instruction').textContent;
+            expect(instruction).toContain('Nothing here is scored');
+            expect(instruction).toContain('cannot grade free speech');
+            expect(instruction).toContain('The clock only counts — it never stops you.');
+        });
+    });
+
+    // ------------------------------------------------------------------
+    // The walk
+    // ------------------------------------------------------------------
+
+    describe('what the learner sees, step by step', () => {
+        it('opens on a prompt, a clock at zero and a collapsed rubric', () => {
+            build({ level: 'everyday' });
+            FS.load();
+
+            const prompt = FS.session().prompt;
+            expect(prompt.id).toBe('tell-me-about-yourself');
+            expect(paragraphs('freeSpeakPrompt')).toEqual([
+                'Answer the interview question Tell me about yourself out loud, as if the interview has just started.',
+                'about 1:30, as a target and not a limit · interview practice · Everyday prompt',
+                'Cover these, in any order and in your own words:',
+                'Say it to the wall, to your phone, or under your breath. The part that transfers is building the answer while the clock runs.'
+            ]);
+            expect(Array.from(document.querySelectorAll('.free-speak-bullets li')).map(li => li.textContent))
+                .toEqual([
+                    'what you do now, in one sentence',
+                    'one thing you are good at, and a time it mattered',
+                    'what you want to do next'
+                ]);
+
+            // The clock is drawn before anything starts, and it says what the
+            // number means: a target, not a limit.
+            expect(text('freeSpeakClock')).toBe('0:00 of the 1:30 you are aiming for');
+
+            // The rubric is COLLAPSED. An open checklist above an unstarted task
+            // is a script, and §1.1 asks for speech not read off the screen.
+            const details = document.querySelector('#freeSpeakRubric details');
+            expect(details).not.toBeNull();
+            expect(details.hasAttribute('open')).toBe(false);
+            expect(details.querySelector('summary').textContent)
+                .toBe('What you will check afterwards — open it now if you want to');
+            expect(document.querySelectorAll('#freeSpeakRubric input').length).toBe(0);
+        });
+
+        it('offers every route before it offers the microphone', () => {
+            build({ level: 'everyday' });
+            FS.load();
+            expect(labels('freeSpeakControls')).toEqual([
+                '🎤 Record and start the clock',
+                '▶ Start the clock without recording',
+                '⏹ Stop',
+                '🗣️ I said it out loud',
+                '🤫 I did it silently',
+                '↷ Skip this one'
+            ]);
+            // Stop is the only disabled control, and only because nothing has
+            // started. No finishing route is ever gated (FR-SPK-9).
+            expect(document.getElementById('freeSpeakStop').disabled).toBe(true);
+            ['freeSpeakAloud', 'freeSpeakSilent', 'freeSpeakSkip'].forEach(id => {
+                expect(document.getElementById(id).disabled).toBe(false);
+            });
+            expect(text('freeSpeakControls'))
+                .toContain('All three of these finish the task.');
+            expect(text('freeSpeakControls'))
+                .toContain('it cannot hear you, so your word is the only evidence there is');
+        });
+
+        it('records, and says so while it is recording', async () => {
+            build({ level: 'everyday' });
+            FS.load();
+            document.getElementById('freeSpeakRecord').click();
+            await flush();
+
+            expect(text('freeSpeakStatus')).toBe(
+                '🔴 Recording, and the clock is running. Press Stop when you have finished — ' +
+                'nothing will cut you off.');
+            expect(Archive.isRecording(FS.SURFACE)).toBe(true);
+            expect(document.getElementById('freeSpeakStop').disabled).toBe(false);
+        });
+
+        it('passing the target changes the words and nothing else', async () => {
+            build({ level: 'everyday' });
+            FS.load();
+            document.getElementById('freeSpeakRecord').click();
+            await flush();
+
+            // 200 seconds against a 90-second target.
+            FS.session().clock.elapsedMs = 200 * 1000;
+            FS.tick();
+
+            expect(text('freeSpeakClock')).toBe('3:20 of the 1:30 you are aiming for');
+            expect(text('freeSpeakStatus')).toBe(
+                'You have passed the 1:30 you were aiming for. Nothing stops — keep going for as ' +
+                'long as you have something to say, and press Stop when you are finished.');
+
+            // THE PROOF THAT THE TIMER CANNOT END THE TASK: after the target has
+            // gone by, the recorder is still running, no route has been recorded,
+            // no control has been disabled and nothing has been written.
+            expect(Archive.isRecording(FS.SURFACE)).toBe(true);
+            expect(FS.session().route).toBeNull();
+            expect(document.getElementById('freeSpeakStop').disabled).toBe(false);
+            expect(state.freeSpeaking.prompts).toEqual({});
+
+            // And it is said once, not once a second.
+            FS.session().clock.elapsedMs = 300 * 1000;
+            FS.tick();
+            expect(text('freeSpeakStatus')).toContain('You have passed the 1:30');
+            expect(FS.session().clock.passed).toBe(true);
+        });
+
+        it('stops, keeps the recording, and opens the rubric', async () => {
+            build({ level: 'everyday' });
+            FS.load();
+            document.getElementById('freeSpeakRecord').click();
+            await flush();
+            FS.session().clock.elapsedMs = 95 * 1000;
+            document.getElementById('freeSpeakStop').click();
+            await flush();
+
+            expect(FS.session().route).toBe('recorded');
+            expect(text('freeSpeakStatus')).toContain('Kept.');
+            expect(text('freeSpeakStatus')).toContain('You kept going for 1:35.');
+            expect(text('freeSpeakStatus')).toContain(
+                'Nothing was scored: the app can play it back to you, and that is the whole of ' +
+                'what it can honestly do.');
+
+            // The rubric is now the learner's checklist, one checkbox per item.
+            expect(document.querySelector('#freeSpeakRubric h4').textContent)
+                .toBe('Check yourself');
+            const asks = Array.from(document.querySelectorAll('#freeSpeakRubric li'))
+                .map(li => li.textContent.trim());
+            expect(asks).toEqual([
+                'After you said what you are good at, did you give an actual example — a time it happened — or did you only make the claim?',
+                'Did you say I have five years of experience rather than I am having five years of experience?',
+                'Did you talk for about as long as you aimed for, or did you run out halfway?',
+                'Did you reach the end of every sentence you started?'
+            ]);
+            expect(document.querySelectorAll('#freeSpeakRubric input[type="checkbox"]').length)
+                .toBe(4);
+            expect(paragraphs('freeSpeakRubric')[0]).toBe(
+                'Notes to yourself, and nothing else: nothing counts the ticks, nothing stores them ' +
+                'and there is no total. Every question is about what you did, which is the only ' +
+                'thing you are in a position to answer — and it is why none of them asks how you ' +
+                'sounded.');
+            expect(labels('freeSpeakRubric')).toEqual(['▶ Play your recording back']);
+        });
+
+        it('shows no total, no fraction and no score after the attempt', async () => {
+            build({ level: 'everyday' });
+            FS.load();
+            document.getElementById('freeSpeakRecord').click();
+            await flush();
+            document.getElementById('freeSpeakStop').click();
+            await flush();
+
+            // Tick every box. Nothing on screen counts them.
+            const boxes = Array.from(document.querySelectorAll('.free-speak-tick'));
+            boxes.forEach(box => { box.checked = true; box.dispatchEvent(new Event('change')); });
+
+            const card = document.getElementById('freeSpeaking').textContent;
+            expect(card).not.toMatch(/\b4\s*(\/|of)\s*4\b/);
+            expect(card).not.toMatch(/%/);
+            expect(card).not.toMatch(/\bscore\b/i);
+            expect(card).not.toMatch(/\b(pass|fail)ed?\b/i);
+            // And nothing was stored: the ticks are the learner's private notes.
+            expect(JSON.stringify(state.freeSpeaking)).not.toContain('example-given');
+        });
+
+        it('lands the recording in the archive under a content-derived id', async () => {
+            build({ level: 'everyday' });
+            FS.load();
+            const prompt = FS.session().prompt;
+
+            // The id is the digest of the PROMPT TEXT, not the authored slug and
+            // not the position in the array.
+            expect(FS.session().promptId)
+                .toBe(Archive.promptIdFor('free', prompt.prompt));
+            expect(FS.session().promptId).toMatch(/^free:1:[a-z0-9]{14}$/);
+            expect(FS.session().promptId).not.toContain(prompt.id);
+            // The position is not in it, so inserting a prompt in front is free.
+            const reversed = Data.normaliseFreeSpeakingList(
+                Data.freeSpeakingPrompts.everyday.slice().reverse(), 'everyday');
+            expect(Archive.freeSpeakingPromptId(reversed[reversed.length - 1]))
+                .toBe(FS.session().promptId);
+
+            document.getElementById('freeSpeakRecord').click();
+            await flush();
+            document.getElementById('freeSpeakStop').click();
+            await flush();
+            await flush();
+
+            const rows = await Archive.list(FS.session().promptId);
+            expect(rows).toHaveLength(1);
+            expect(rows[0].baseline).toBe(true);
+            expect(rows[0].promptId).toBe(FS.session().promptId);
+            // Drawn, with the archive's own copy and the right noun.
+            expect(document.querySelector('#freeSpeakArchive .archive-head').textContent)
+                .toBe('Your recordings of this prompt');
+            expect(document.querySelector('#freeSpeakArchive .archive-when').textContent)
+                .toBe('Your first try — 12 Sep 2026, 21:40 (0:01)');
+        });
+
+        it('keys the archive on the task, so editing anything else is free', () => {
+            build({ level: 'everyday' });
+            const prompt = Data.normaliseFreeSpeakingList(
+                Data.freeSpeakingPrompts.everyday, 'everyday')[0];
+            const id = Archive.freeSpeakingPromptId(prompt);
+
+            // The slug, the tier, the length, the situation, the bullets and the
+            // whole rubric can be rewritten without costing a learner a recording.
+            const edited = Object.assign({}, prompt, {
+                id: 'renamed-slug', tier: 'confident', targetSeconds: 300,
+                situation: 'work', bullets: [], rubric: [], notes: 'different'
+            });
+            expect(Archive.freeSpeakingPromptId(edited)).toBe(id);
+
+            // Rewriting the TASK does change it, and must: a different prompt is a
+            // different thing to have recorded.
+            expect(Archive.freeSpeakingPromptId(
+                Object.assign({}, prompt, { prompt: 'Describe your last holiday.' })))
+                .not.toBe(id);
+
+            // Punctuation and casing are not the utterance.
+            expect(Archive.freeSpeakingPromptId(
+                Object.assign({}, prompt, { prompt: prompt.prompt.toUpperCase() })))
+                .toBe(id);
+        });
+
+        it('gives no two authored prompts the same archive key', () => {
+            build({});
+            const ids = FS.all().map(p => Archive.freeSpeakingPromptId(p));
+            expect(ids.filter(Boolean)).toHaveLength(ids.length);
+            expect(new Set(ids).size).toBe(ids.length);
+        });
+    });
+
+    // ------------------------------------------------------------------
+    // US-608 — the silent path, on this surface
+    // ------------------------------------------------------------------
+
+    describe('the silent path finishes it, with no microphone at all', () => {
+        it('drops one button and nothing else when there is no recorder', () => {
+            build({ microphone: false });
+            FS.load();
+
+            // No 🎤 button, because there is nothing behind it. Not a disabled
+            // one: a dead control is what the listening card used to be.
+            expect(document.getElementById('freeSpeakRecord')).toBeNull();
+            expect(labels('freeSpeakControls')).toEqual([
+                '▶ Start the clock',
+                '⏹ Stop',
+                '🗣️ I said it out loud',
+                '🤫 I did it silently',
+                '↷ Skip this one'
+            ]);
+            expect(text('freeSpeakControls')).toContain(
+                'This device has no microphone the app can use, so there is nothing to record or ' +
+                'play back. Start the clock, say your answer — out loud or under your breath — and ' +
+                'mark how you did it below. That is the task, and it was never the recording.');
+            // The prompt, the clock and the rubric are all still there.
+            expect(text('freeSpeakClock')).toBe('0:00 of the 1:30 you are aiming for');
+            expect(document.querySelector('#freeSpeakRubric details')).not.toBeNull();
+        });
+
+        it('completes the task silently, and stores it as silent', async () => {
+            build({ microphone: false });
+            FS.load();
+
+            document.getElementById('freeSpeakClockStart').click();
+            expect(text('freeSpeakStatus')).toBe(
+                'The clock is running. Say your answer — nothing is being recorded, and nothing ' +
+                'is listening.');
+
+            FS.session().clock.elapsedMs = 88 * 1000;
+            document.getElementById('freeSpeakStop').click();
+            expect(text('freeSpeakStatus')).toBe(
+                'Clock stopped at 1:28. Nothing was recorded, so tell the app how you did it — ' +
+                'out loud, or silently.');
+
+            document.getElementById('freeSpeakSilent').click();
+            expect(FS.session().route).toBe('silent');
+            expect(text('freeSpeakStatus')).toBe(
+                'Marked as done, silently — and that counts as production, not as a skip. ' +
+                'Composing the sentence is the part that transfers to a real conversation. The app ' +
+                'records that you did it silently rather than pretending it heard you. ' +
+                'You kept going for 1:28.');
+
+            // The rubric opens for a silent attempt exactly as it does for a
+            // recorded one — with no playback button, because there is nothing to
+            // play.
+            expect(document.querySelector('#freeSpeakRubric h4').textContent)
+                .toBe('Check yourself');
+            expect(document.getElementById('freeSpeakPlayback')).toBeNull();
+
+            // Stored as SILENT, not as spoken and not as a skip.
+            const row = state.freeSpeaking.prompts[FS.session().promptId];
+            expect(row).toEqual({
+                recorded: 0, aloud: 0, silent: 1, skipped: 0,
+                lastAt: expect.any(Number), lastRoute: 'silent', lastSeconds: 88
+            });
+            expect(FS.totals()).toEqual({
+                recorded: 0, aloud: 0, silent: 1, skipped: 0, productions: 1, prompts: 1
+            });
+        });
+
+        it('distinguishes spoken from silent from skipped, and never merges them', () => {
+            // The four routes are four different claims, and §9.1 Decision 2
+            // forbids laundering one into another. A skip is not a production.
+            build({});
+            FS.load();
+            const first = FS.session().promptId;
+            FS.mark('silent');
+
+            FS.open(1);
+            FS.mark('aloud');
+            const second = FS.session().promptId;
+
+            FS.open(0);
+            expect(FS.session().route).toBeNull();   // a fresh attempt at prompt 1
+            FS.mark('skipped');
+
+            expect(state.freeSpeaking.prompts[first].silent).toBe(1);
+            expect(state.freeSpeaking.prompts[first].skipped).toBe(1);
+            expect(state.freeSpeaking.prompts[first].recorded).toBe(0);
+            expect(state.freeSpeaking.prompts[second].aloud).toBe(1);
+            expect(FS.totals()).toEqual({
+                recorded: 0, aloud: 1, silent: 1, skipped: 1, productions: 2, prompts: 2
+            });
+        });
+
+        it('says a skip is a skip, and does not open the rubric for it', () => {
+            build({});
+            FS.load();
+            document.getElementById('freeSpeakSkip').click();
+
+            expect(text('freeSpeakStatus')).toBe(
+                'Skipped, and recorded as a skip rather than as a production. It costs you ' +
+                'nothing, and this prompt will be here next time.');
+            // Nothing happened, so there is nothing to check. The collapsed
+            // preview is left as it was.
+            expect(document.querySelector('#freeSpeakRubric details')).not.toBeNull();
+            expect(document.querySelector('#freeSpeakRubric h4')).toBeNull();
+        });
+
+        it('leaves the clock running when the microphone is refused', async () => {
+            // R-7 / FR-A11Y-4 at the moment it bites: the learner presses Record
+            // and then declines the permission dialog. Before US-703 the listening
+            // card alert()ed and stopped; this card must not lose the task.
+            build({ microphone: 'refused' });
+            FS.load();
+            document.getElementById('freeSpeakRecord').click();
+            await flush();
+
+            expect(text('freeSpeakStatus')).toBe(
+                'No microphone, so nothing is being recorded. The clock is still running — say ' +
+                'your answer anyway and mark how you did it below. Nothing here is scored ' +
+                'either way.');
+            // The clock is running, the finishing routes are live, and the task is
+            // finishable in one press.
+            expect(FS.session().clock.startedAt).not.toBeNull();
+            expect(document.getElementById('freeSpeakSilent').disabled).toBe(false);
+            document.getElementById('freeSpeakAloud').click();
+            expect(FS.session().route).toBe('aloud');
+            expect(FS.totals().productions).toBe(1);
+        });
+
+        it('counts a silent completion exactly as it counts an aloud one', () => {
+            build({});
+            FS.load();
+            FS.mark('silent');
+            const silent = FS.totals();
+
+            build({});
+            FS.load();
+            FS.mark('aloud');
+            const aloud = FS.totals();
+
+            // Same number of finished tasks, same number of prompts produced.
+            // Saying yes to this is the whole of the judgement in US-608: a
+            // silently-completed task counts, and the route is what is reported.
+            expect(silent.productions).toBe(aloud.productions);
+            expect(silent.prompts).toBe(aloud.prompts);
+            expect(silent.silent).toBe(1);
+            expect(aloud.aloud).toBe(1);
+        });
+
+        it('lets a learner answer it again, including after a mis-pressed skip', () => {
+            build({});
+            FS.load();
+            document.getElementById('freeSpeakSkip').click();
+            expect(FS.session().route).toBe('skipped');
+
+            // markFreeSpeakDone() is idempotent per attempt, so the first route
+            // wins and a second press does nothing — which without a way back
+            // would make a mis-pressed Skip cost the prompt for the session.
+            document.getElementById('freeSpeakSilent').click();
+            expect(FS.session().route).toBe('skipped');
+            expect(FS.totals().silent).toBe(0);
+
+            const again = document.getElementById('freeSpeakAgain');
+            expect(again).not.toBeNull();
+            expect(again.textContent).toBe('🔄 Answer it again');
+            again.click();
+
+            // A fresh attempt: no route, clock back to zero — and the skip is
+            // still on the record, because a redraw is not an erasure.
+            expect(FS.session().route).toBeNull();
+            expect(text('freeSpeakClock')).toBe('0:00 of the 1:30 you are aiming for');
+            expect(FS.totals().skipped).toBe(1);
+
+            document.getElementById('freeSpeakSilent').click();
+            expect(FS.totals()).toEqual({
+                recorded: 0, aloud: 0, silent: 1, skipped: 1, productions: 1, prompts: 1
+            });
+        });
+
+        it('offers the silent route first when the learner cannot speak aloud', () => {
+            build({});
+            // The session's own control, which is the one the learner already
+            // knows about — not a second copy of "can I speak tonight".
+            document.body.insertAdjacentHTML('beforeend',
+                '<input type="checkbox" id="sessionSilent" checked>');
+            FS.load();
+            expect(labels('freeSpeakControls').slice(3))
+                .toEqual(['🤫 I did it silently', '🗣️ I said it out loud', '↷ Skip this one']);
+        });
+    });
+
+    // ------------------------------------------------------------------
+    // What must not be here
+    // ------------------------------------------------------------------
+
+    describe('nothing in this block scores free speech', () => {
+        it('never touches SRS, Mistakes or the accuracy maps', () => {
+            const code = codeOnlyOf(fsBlock());
+            expect(code).not.toContain('SRS.');
+            expect(code).not.toContain('Mistakes.');
+            expect(code).not.toContain('pronunciationAccuracy');
+            expect(code).not.toContain('itemAccuracy');
+            // Nor the section counters: this card lives in Listening for markup
+            // reasons and must not credit a listening item for a speaking task.
+            expect(code).not.toContain('updateStatistics(');
+            expect(code).not.toContain('markExerciseComplete(');
+            expect(code).not.toContain('dailyGoals');
+        });
+
+        it('computes no percentage, ratio or verdict', () => {
+            const code = codeOnlyOf(fsBlock());
+            expect(code).not.toMatch(/\*\s*100\b/);
+            expect(code).not.toMatch(/\bcorrect\b/);
+            expect(code).not.toMatch(/\bwpm\b|wordsPerMinute/i);
+            // No ' of ' arithmetic over the rubric: the ticks are not counted.
+            expect(code).not.toMatch(/rubric[\s\S]{0,80}\.length[\s\S]{0,40}checked/);
+        });
+
+        it('never reads a rubric checkbox back', () => {
+            // The strongest statement the code can make about "the ticks are not
+            // counted": nothing anywhere reads .checked on them.
+            const code = codeOnlyOf(fsBlock());
+            expect(code).toContain("box.type = 'checkbox'");
+            expect(code).not.toMatch(/\.checked\b(?!\s*===\s*true)/);
+        });
+
+        it('has no timer callback that can end the task', () => {
+            // Belt and braces beside the walk above: the only interval in this
+            // block calls freeSpeakTick, and freeSpeakTick paints and nothing else.
+            const block = codeOnlyOf(fsBlock());
+            const intervals = block.match(/setInterval\([^)]*\)/g) || [];
+            expect(intervals).toEqual(['setInterval(freeSpeakTick, 1000)']);
+            const tick = block.slice(block.indexOf('function freeSpeakTick('),
+                block.indexOf('function startFreeSpeakClock('));
+            expect(tick).not.toContain('markFreeSpeakDone');
+            expect(tick).not.toContain('stopCapture');
+            expect(tick).not.toContain('stopFreeSpeaking');
+            expect(tick).not.toMatch(/\.disabled\s*=/);
+            // It cannot move the session on either.
+            expect(tick).not.toContain('SessionUI');
+            expect(tick).not.toMatch(/\bSession\.(advance|skip|markSilent)/);
+        });
+
+        it('finishes the task before it touches storage', () => {
+            const start = functionBodyOf('function startFreeSpeaking(');
+            expect(start.indexOf('markFreeSpeakDone('))
+                .toBeLessThan(start.indexOf('keepFreeSpeakRecording('));
+        });
+
+        it('refuses to key a save on anything but the derived promptId', () => {
+            const keep = functionBodyOf('function keepFreeSpeakRecording(');
+            expect(keep).toContain("const promptId = freeSpeakSession ? freeSpeakSession.promptId : '';");
+            expect(keep).toContain('if (!promptId || !blob || !blob.size) return;');
+            expect(codeOnlyOf(keep)).not.toContain('Index');
+        });
+
+        it('releases its own surface and never reaches across', () => {
+            const release = functionBodyOf('function releaseFreeSpeak(');
+            expect(release).toContain('RecordingArchive.release(FREE_SPEAK_SURFACE)');
+            expect(codeOnlyOf(release)).not.toContain('revokeAll');
+            // And leaving the section takes the url AND the ticking clock with it.
+            const switching = functionBodyOf('function switchSection(');
+            expect(switching).toContain('releaseFreeSpeak()');
+            expect(functionBodyOf('function releaseFreeSpeak(')).toContain('stopFreeSpeakClock()');
+        });
+
+        it('says out loud that a refused microphone changes nothing', () => {
+            const start = functionBodyOf('function startFreeSpeaking(');
+            expect(start).toContain('No microphone, so nothing is being recorded. The clock is still');
+            expect(start).toContain('mark how you did it below');
+            expect(start).toContain('Nothing here is scored either way');
+        });
+    });
+
+    /** Local copies, because the helpers above live in a sibling describe. */
+    function codeOnlyOf(source) {
+        return source
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .split('\n')
+            .filter(line => !/^\s*\/\//.test(line))
+            .join('\n');
+    }
+    function functionBodyOf(header) {
+        const start = appSource.indexOf(header);
+        expect(start).toBeGreaterThan(-1);
+        let depth = 0;
+        for (let i = appSource.indexOf('{', start); i < appSource.length; i++) {
+            if (appSource[i] === '{') depth++;
+            else if (appSource[i] === '}' && --depth === 0) return appSource.slice(start, i + 1);
+        }
+        throw new Error('unbalanced braces after ' + header);
+    }
+});
+
+// ===========================================================================
+// US-608 — the silent / skip-and-mark-done path, on every speaking surface
+// ===========================================================================
+//
+// FR-SPK-9 ("speaking is never a hard gate") and FR-A11Y-4 ("every speaking task
+// has a silent / skip-and-mark-done path"). The requirement no persona but P2
+// surfaces: Lakshmi practises at 10pm and cannot speak aloud without being
+// overheard, so a surface whose only completion route makes a sound is a surface
+// she cannot use at all.
+//
+// The check is per-surface, and there are four. Two of them already passed before
+// this story (the listening sentence card since US-703, the pronunciation
+// production task since US-404) and are pinned here so they cannot regress; two
+// did not: Read Aloud had one control and it needed a microphone, and grammar's
+// produce task offered "I said it" or "Skip", so a learner who did it silently
+// had to choose between a lie and a skip.
+//
+// The standard every route is held to is the one the listening card set: the route
+// is RECORDED and never laundered (BR-3). "I did it silently" must not be stored,
+// or reported, as "the app heard you".
+
+describe('the silent path, surface by surface (US-608 / FR-SPK-9 / FR-A11Y-4)', () => {
+    const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+
+    function functionBody(header) {
+        const start = appSource.indexOf(header);
+        expect(start).toBeGreaterThan(-1);
+        let depth = 0;
+        for (let i = appSource.indexOf('{', start); i < appSource.length; i++) {
+            if (appSource[i] === '{') depth++;
+            else if (appSource[i] === '}' && --depth === 0) return appSource.slice(start, i + 1);
+        }
+        throw new Error('unbalanced braces after ' + header);
+    }
+    function codeOnly(source) {
+        return source
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .split('\n')
+            .filter(line => !/^\s*\/\//.test(line))
+            .join('\n');
+    }
+
+    describe('1. the listening sentence card — unchanged, and pinned (US-703)', () => {
+        it('still has the no-microphone attempt route', () => {
+            expect(doc.getElementById('listeningRepeated')).not.toBeNull();
+            expect(doc.getElementById('listeningRepeated').textContent).toBe('✓ I said it');
+            const wiring = appSource.slice(
+                appSource.indexOf("wireListening('listeningRepeated'"),
+                appSource.indexOf("wireListening('listeningTextRoute'"));
+            expect(wiring).toContain("markListeningAttempt('self-report', true)");
+            expect(wiring).toContain('nothing was recorded, so the app is not claiming anything');
+        });
+    });
+
+    describe('2. Read Aloud — new (it had one control, and it needed a microphone)', () => {
+        it('has a container in the markup that app.js draws into', () => {
+            const host = doc.getElementById('readAloudSilent');
+            expect(host).not.toBeNull();
+            // In the Read Aloud card, after the recogniser button — the same
+            // ordering the pronunciation task uses: the route that needs no
+            // hardware is beside the one that does, not in a separate place.
+            expect(host.closest('.exercise-card')
+                .querySelector('h3').textContent).toBe('Read Aloud');
+            expect(host.previousElementSibling.id).toBe('startSpeech');
+        });
+
+        it('offers an aloud route and a silent route, and both complete the card', () => {
+            const body = functionBody('function renderReadAloudSilentRoute(');
+            expect(body).toContain("aloud.textContent = '🗣️ I read it aloud';");
+            expect(body).toContain("silent.textContent = '🤫 I read it silently';");
+            // Both go through the one call site for "the learner attempted this",
+            // with `complete` true — so neither is a button that only looks like
+            // it finished something.
+            expect(body).toContain("markListeningAttempt('read-aloud-self-report', true)");
+            expect(body).toContain("markListeningAttempt('read-aloud-silent', true)");
+        });
+
+        it('records the route and refuses to claim it heard anything', () => {
+            const body = functionBody('function renderReadAloudSilentRoute(');
+            // Distinct route names: 'read-aloud' is the recogniser, and these two
+            // are not it. BR-3 — the route is reported, never laundered.
+            expect(body).toContain('read-aloud-self-report');
+            expect(body).toContain('read-aloud-silent');
+            expect(body).toContain('The recogniser was not used, so the app has no idea ');
+            expect(body).toContain('which words landed and is not going to guess');
+            expect(body).toContain('is stored as your word — never as something the app heard');
+            // And no word-level diff is invented for a route that produced none.
+            expect(codeOnly(body)).not.toContain('diffSpeechAttempt');
+            expect(codeOnly(body)).not.toContain('renderSpeechDiff');
+        });
+
+        it('appears with the text it is about, not before it', () => {
+            // This card's target IS the transcript (FR-LSN-3), so offering to mark
+            // it done before the reveal would be offering to complete a task whose
+            // words the learner cannot see.
+            const body = functionBody('function renderReadAloudSilentRoute(');
+            expect(body).toContain('!listeningSession.revealed) return;');
+            const reveal = functionBody('function revealListeningTranscript(');
+            expect(reveal).toContain('renderReadAloudSilentRoute();');
+            // Reset per item, from the loader, like every other per-item surface.
+            expect(functionBody('function loadListeningExercise('))
+                .toContain('renderReadAloudSilentRoute();');
+        });
+    });
+
+    describe('3. grammar produce — new (it had "I said it" or "Skip")', () => {
+        it('now offers all three routes', () => {
+            const body = functionBody('function renderGrammarProduce(');
+            expect(body).toContain("done.textContent = '🗣️ I said it';");
+            expect(body).toContain("silently.textContent = '🤫 I did it silently';");
+            expect(body).toMatch(/notYet\.textContent = produce\.skippable \? 'Skip for now' : 'Not yet';/);
+            // All three are appended, so all three are reachable.
+            expect(body).toContain('buttons.appendChild(silently);');
+            expect(body).toContain('buttons.appendChild(notYet);');
+        });
+
+        it('does not style the silent route as the lesser one', () => {
+            const body = functionBody('function renderGrammarProduce(');
+            // Same class as "I said it" — §9.1 Decision 2: "neither is presented
+            // as the lesser path". Only the ORDER changes, and only for a learner
+            // who has said they cannot speak aloud.
+            expect(body).toContain("silently.className = 'btn-primary';");
+            expect(body).toContain("done.className = 'btn-primary';");
+            expect(body).toContain('if (freeSpeakPrefersSilent()) {');
+        });
+
+        it('says the silent route counts, and still claims nothing', () => {
+            const body = functionBody('function renderGrammarProduce(');
+            expect(body).toContain('Noted as done silently, and that counts');
+            expect(body).toContain('Nothing was recorded and nothing is scored.');
+            // And it is not sent to SRS, for the same reason "I said it" is not:
+            // a learner marking their own production right is not evidence, and
+            // FR-SRS-5 would refuse to certify it.
+            const handler = body.slice(
+                body.indexOf("silently.addEventListener('click'"),
+                body.indexOf('const notYet = document.createElement'));
+            expect(codeOnly(handler)).not.toContain('SRS.');
+        });
+    });
+
+    describe('4. pronunciation production — already silent-capable, now said out loud', () => {
+        it('states the silent route rather than leaving it to be inferred', () => {
+            const body = functionBody('function renderPronunciationProduce(');
+            // "out loud, in front of a mirror" reads as a requirement to a learner
+            // who cannot make a sound tonight. The feel-checks are articulatory,
+            // so mouthing the word answers them exactly as well.
+            expect(body).toContain('If you cannot speak out loud right now, mouth it or whisper it.');
+            expect(body).toContain('about what your mouth did, not about what came out');
+            expect(body).toContain('practise properly at midnight');
+        });
+
+        it('still completes with no microphone and no audio', () => {
+            const body = functionBody('function renderPronunciationProduce(');
+            const silentLine = body.indexOf('If you cannot speak out loud right now');
+            const yes = body.indexOf('Yes, I felt that');
+            const comparison = body.indexOf('appendPronunciationComparison(host, pair)');
+            // The order that matters: the no-hardware routes come before the
+            // recorder, which is appended last.
+            expect(silentLine).toBeLessThan(yes);
+            expect(yes).toBeLessThan(comparison);
+        });
+    });
+
+    describe('the session step, which is what a route finally completes', () => {
+        it('still offers three routes and marks the step done on all three', () => {
+            const body = functionBody('    renderControls(step) {');
+            expect(body).toContain("'🗣️ I said it'");
+            expect(body).toContain("'🤫 I did it silently'");
+            expect(body).toContain("'↷ Skip this'");
+            expect(body).toContain("SessionUI.advance('silent')");
+            expect(body).toContain("SessionUI.advance('skipped')");
+        });
+
+        it('routes a silent completion through the module\'s own silent path', () => {
+            // Session.markSilent(), not Session.advance('done'): the planner is
+            // what reports the route in the wrap-up, and it can only report what
+            // it was told (BR-3 / metric M-1).
+            const body = functionBody('    advance(outcome) {');
+            expect(body).toContain("outcome === 'silent' ? Session.markSilent()");
+            expect(body).toContain("outcome === 'skipped' ? Session.skip()");
+        });
+
+        it('tells the learner a skipped production produced nothing', () => {
+            const wrap = functionBody('    renderWrapUp() {');
+            expect(wrap).toContain('so this session produced no English of your own');
+            expect(wrap).toContain('That is recorded as it happened');
+        });
+    });
+
+    describe('the honesty audit', () => {
+        it('no longer says nothing renders a free-production prompt', () => {
+            // The audit is the thing that must not lie. Before this story the row
+            // read `available: false` with the note "No function in app.js renders
+            // a free-production prompt with a timer, a recording and a rubric",
+            // and that sentence has to go because it is no longer true.
+            expect(appSource).not.toContain(
+                'No function in app.js renders a free-production prompt');
+            const at = appSource.indexOf("'speak.free': function");
+            expect(at).toBeGreaterThan(-1);
+            const row = appSource.slice(at, at + 2000);
+            expect(row).toContain('freeSpeakingPromptsFor(');
+            expect(row).toContain("requirement: 'FR-SPK-3'");
+            // It reports available only when a prompt actually resolves — the
+            // predicate calls the same function the loader resolves the tier with.
+            expect(row).toContain('if (!prompts.length)');
+            expect(row).toContain('available: false');
+            expect(row).toContain('available: true');
+            expect(row).toContain('never a countdown');
+        });
+
+        it('leaves the two surfaces that are still unbuilt saying so', () => {
+            // US-608 is not a licence to tidy the audit: listen.comprehend and
+            // speak.shadow are still unbuilt and still say `false`, each with the
+            // requirement it misses.
+            const row = name => {
+                const at = appSource.indexOf("'" + name + "': {");
+                expect(at).toBeGreaterThan(-1);
+                return appSource.slice(at, appSource.indexOf('},', at));
+            };
+            expect(row('listen.comprehend')).toContain('available: false');
+            expect(row('listen.comprehend')).toContain("requirement: 'FR-LSN-1'");
+            expect(row('speak.shadow')).toContain('available: false');
+            expect(row('speak.shadow')).toContain("requirement: 'FR-SPK-8'");
+        });
+
+        it('routes the speak step into the card it now has', () => {
+            const at = appSource.indexOf("    'speak.free': function (step) {");
+            expect(at).toBeGreaterThan(-1);
+            const route = appSource.slice(at, appSource.indexOf("    'session.summary': function ()"));
+            expect(route).toContain("switchSection('listening')");
+            expect(route).toContain('openFreeSpeakingPrompt(freeSpeakSuggestedIndex())');
+            expect(route).toContain("sessionReveal(document.getElementById('freeSpeaking'))");
+            expect(route).toContain('the clock does not stop you');
+        });
+    });
+});
+
+/**
+ * Vocabulary must render with the network broken (NFR-8, FR-CNT-4, US-714).
+ *
+ * WHY THIS BLOCK EXISTS, because it is the whole point of it: an eighteen-second
+ * hang reached production and was reported from the live site. `fetchWordData()`
+ * tried api.dictionaryapi.dev FIRST for every curated word, through a retry ladder
+ * of 3 attempts x a 5s timeout plus 1s and 2s of backoff, before falling back to
+ * data.js. "Happy" — the first foundation word, authored with its own IPA and its
+ * own quiz — sat behind a "Loading word..." spinner for eighteen seconds on flaky
+ * mobile data.
+ *
+ * NFR-8 says the dictionary API is enhancement-only and its failure must never
+ * block an exercise; FR-CNT-4 says curated content serves first. Both were stated
+ * requirements and neither was asserted anywhere, which is why this shipped. So
+ * these tests are about the ORDER of resolution and the CEILING on waiting, not
+ * about the API.
+ */
+describe('vocabulary resolves offline: curated content serves first (NFR-8, FR-CNT-4)', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const ROOT = path.join(__dirname, '..', '..');
+    const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+
+    /** One top-level function's source, by brace matching. */
+    function fnSource(name) {
+        const start = appSource.indexOf('function ' + name + '(');
+        expect(start).toBeGreaterThan(-1);
+        let depth = 0;
+        for (let i = appSource.indexOf('{', start); i < appSource.length; i++) {
+            if (appSource[i] === '{') depth++;
+            else if (appSource[i] === '}' && --depth === 0) return appSource.slice(start, i + 1);
+        }
+        throw new Error('unbalanced braces in ' + name);
+    }
+
+    /** curatedWordData(), evaluated against the real data.js. */
+    function loadCuratedLookup() {
+        const Data = require(path.join(ROOT, 'data.js'));
+        const factory = new Function('vocabularyData',
+            fnSource('curatedWordData') + '\n;return curatedWordData;');
+        return factory(Data.vocabularyData);
+    }
+
+    test('the first curated word resolves from data.js, with its authored ipa and quiz', () => {
+        const curatedWordData = loadCuratedLookup();
+        const happy = curatedWordData('Happy');
+        expect(happy).toBeTruthy();
+        expect(happy.word).toBe('Happy');
+        // Authored, not whatever the API's `phonetic` happens to be.
+        expect(happy.pronunciation).toBe('/ˈhæpi/');
+        // Authored distractors, not definitions borrowed from other entries.
+        expect(happy.quiz.options).toHaveLength(4);
+        expect(typeof happy.quiz.correct).toBe('number');
+        expect(happy.quiz.options[happy.quiz.correct]).toBe('Joyful');
+    });
+
+    test('lookup is case-insensitive and searches every tier', () => {
+        const curatedWordData = loadCuratedLookup();
+        expect(curatedWordData('happy')).toBeTruthy();
+        expect(curatedWordData('HAPPY')).toBeTruthy();
+        const Data = require(path.join(ROOT, 'data.js'));
+        // One word from each populated tier must be findable.
+        Object.keys(Data.vocabularyData).forEach((tier) => {
+            const list = Data.vocabularyData[tier];
+            if (!Array.isArray(list) || !list.length) return;
+            expect(curatedWordData(list[0].word)).toBeTruthy();
+        });
+    });
+
+    test('⚠️ THE TRAP: an unknown word returns null, not an arbitrary curated word', () => {
+        // getLocalWordData() cannot be used as the "do we have this?" test, because
+        // it ends with `localWords[state.currentWordIndex % localWords.length]` and
+        // therefore answers YES for every word in the language. A curated-first
+        // check built on it would cheerfully serve the wrong word.
+        const curatedWordData = loadCuratedLookup();
+        expect(curatedWordData('zzzznotaword')).toBeNull();
+        expect(curatedWordData('')).toBeNull();
+        expect(curatedWordData(null)).toBeNull();
+        expect(curatedWordData(undefined)).toBeNull();
+    });
+
+    test('the curated check precedes the network branch, so a curated word never fetches', () => {
+        const fetchWordData = fnSource('fetchWordData');
+        const curatedAt = fetchWordData.indexOf('curatedWordData(word)');
+        const onlineAt = fetchWordData.indexOf('navigator.onLine');
+        const fetchAt = fetchWordData.indexOf('await fetch(');
+        expect(curatedAt).toBeGreaterThan(-1);
+        expect(onlineAt).toBeGreaterThan(-1);
+        expect(curatedAt).toBeLessThan(onlineAt);
+        expect(curatedAt).toBeLessThan(fetchAt);
+        // And it returns rather than falling through.
+        expect(fetchWordData).toMatch(/if \(curated\) return curated;/);
+    });
+
+    test('the retry ladder is gone from this call: one attempt, no backoff', () => {
+        const fetchWordData = fnSource('fetchWordData');
+        // 3 attempts with a 1000ms base was up to 18s of spinner. A retry ladder is
+        // right for a resource you NEED; for an optional enrichment it only turns a
+        // fast failure into a slow one.
+        expect(fetchWordData).toMatch(/,\s*1,\s*0,\s*`fetchWordData/);
+        expect(fetchWordData).not.toMatch(/,\s*3,\s*1000,/);
+    });
+
+    test('the per-attempt timeout is bounded well under the old 5s', () => {
+        const fetchWordData = fnSource('fetchWordData');
+        const m = fetchWordData.match(/AbortSignal\.timeout\((\d+)\)/);
+        expect(m).toBeTruthy();
+        expect(Number(m[1])).toBeLessThanOrEqual(4000);
+    });
+
+    test('retryWithBackoff itself is untouched, so other callers keep the ladder', () => {
+        // The fix belongs at the call site. Weakening the shared helper would
+        // silently change every caller that legitimately wants retries.
+        expect(appSource).toContain('async retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000');
+        // And someone else IS still relying on those defaults, so this matters:
+        // the helper is called somewhere other than fetchWordData.
+        const calls = appSource.match(/retryWithBackoff\(/g) || [];
+        expect(calls.length).toBeGreaterThanOrEqual(2);   // the definition plus >=1 call
+    });
+});

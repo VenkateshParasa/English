@@ -1194,6 +1194,348 @@ const puzzleData = {
 };
 
 // ============================================
+// FREE-PRODUCTION PROMPTS  (US-601 / FR-SPK-3)
+// ============================================
+//
+// WHAT THIS IS. The content behind the app's only unscripted-speaking surface:
+// a prompt, an advisory length, and a self-assessed rubric. Nothing here is a
+// script to read out — the whole point is that the sentences are the learner's
+// (TEACHING_METHODOLOGY.md §1.1: "every session must end with the learner having
+// said something that was not read off the screen").
+//
+// THE ONE RULE THAT SHAPES EVERY FIELD BELOW: THE APP CANNOT GRADE FREE SPEECH.
+// There is no recogniser result to compare against, no reference answer, and no
+// way to know whether a human would have understood. So there is no `answer`
+// field, no `correct`, no score and no weight on a rubric item — and
+// `FR-PRN-5` / `BR-3` mean the app must not imply otherwise. What ships instead
+// is the substitute REQUIREMENTS.md §5.3 names: "rubric-based self-review".
+//
+// WHAT MAKES A RUBRIC ITEM AUTHORABLE, which is the only interesting authoring
+// rule in this block. Every `rubric[].ask` must be answerable BY THE LEARNER,
+// about themselves, from memory or by replaying their own recording:
+//
+//   YES  "Did you keep going to the end without stopping to find a word?"
+//        — they know whether they stopped.
+//   YES  "Did you say at least two sentences about each point?"
+//        — countable, by them, on a replay.
+//   YES  "Every time you talked about this morning, did you say *went* rather
+//        than *go*?" — a fact about which words they chose, and a noticing task
+//        (§1.7) rather than a judgement.
+//   NO   "Was your pronunciation good?" — the one thing the person who needs the
+//        answer cannot supply. FR-PRN-5 forbids it elsewhere and
+//        rubricRefuses() below refuses it here, at author time, so the rule is
+//        enforced by code and not by good intentions.
+//   NO   "Did you sound natural / fluent / like a native speaker?" — same
+//        reason, plus REQUIREMENTS.md §5.2 (accent is not a goal).
+//
+// THE SHAPE  (normaliseFreeSpeakingPrompt() below is the only binding definition)
+//   id            REQUIRED. Stable authored id, used for the exercise stamp.
+//                 NOT the recording key: RecordingArchive derives that from the
+//                 prompt TEXT, so editing an id cannot orphan a recording and
+//                 editing the prompt deliberately does.
+//   prompt        REQUIRED. The task, in the second person. No prompt, no item.
+//   situation     'commute' | 'interview' | 'work' | 'meeting' — which persona
+//                 pattern this suits (REQUIREMENTS.md §2). Free text; used for
+//                 the on-screen label only.
+//   targetSeconds Advisory length, graded by tier. ADVISORY IS LOAD-BEARING:
+//                 js/core/session.js is count-boxed, not time-boxed, and a
+//                 countdown that cut a learner off mid-sentence would be the
+//                 opposite of fluency practice. app.js counts UP to this number
+//                 and past it.
+//   bullets       2–4 things to cover. Scaffolding, not a script: they are
+//                 phrases like "what you did first", never sentences to read.
+//   rubric        REQUIRED, ≥2 items of `{ id, ask }`. See the rule above.
+//   notes         Optional one-liner shown under the prompt.
+//
+// WHY NO SCHEMA_VERSION BUMP: this is authored content, like the listening
+// conversion above. What a learner stores is `state.freeSpeaking`, keyed by the
+// CONTENT-DERIVED recording id, so nothing in localStorage points at a position
+// in this array.
+
+/** Advisory seconds by tier, when a prompt does not name its own. */
+const FREE_SPEAKING_SECONDS = {
+    foundation: 60,
+    everyday: 90,
+    confident: 120,
+    fluent: 120
+};
+
+/**
+ * Rubric wording this file refuses to ship, with the reason it refuses it.
+ *
+ * Enforced in code rather than in a style guide because the failure is silent:
+ * a rubric that asks "did it sound right?" looks exactly like a rubric that
+ * works, and the learner who cannot answer it concludes the fault is theirs.
+ */
+const RUBRIC_FORBIDDEN = [
+    { re: /sound(ed|s)?\s+(right|good|correct|natural|native|like)/i, why: 'asks the learner to judge how they sounded, which is the one thing they cannot judge (FR-PRN-5)' },
+    { re: /\b(how did (it|you) sound|did (it|you) sound)\b/i, why: 'asks the learner to judge how they sounded (FR-PRN-5)' },
+    { re: /\b(pronunciation|accent)\b/i, why: 'no rubric item may turn on pronunciation or accent — the app cannot measure either, and accent is not a goal (REQUIREMENTS.md §5.2)' },
+    { re: /\b(fluent|fluency|natural|native)\b/i, why: 'asks for a verdict on fluency, which is FR-SPK-5\'s trended number and never a self-graded one' },
+    { re: /\b(score|marks?|out of \d|percent|%|grade|pass|fail)\b/i, why: 'free speech is never scored (BR-3, FR-PRN-5)' },
+    { re: /\b(correct|right)\s+(english|grammar)\b/i, why: 'too broad to self-judge: name the exact form to listen for instead' },
+    { re: /\b(grammar|english)\b[^?]*\b(correct|right|good|fine|ok)\b/i, why: 'asks for a verdict on the English as a whole, which is too broad to self-judge — name the exact form to listen for instead' }
+];
+
+/** The forbidding reason for a rubric question, or null when it is authorable. */
+function rubricRefuses(ask) {
+    if (typeof ask !== 'string') return 'is not a string';
+    for (let i = 0; i < RUBRIC_FORBIDDEN.length; i++) {
+        if (RUBRIC_FORBIDDEN[i].re.test(ask)) return RUBRIC_FORBIDDEN[i].why;
+    }
+    return null;
+}
+
+/**
+ * One rubric item, or null.
+ *
+ * Dropped loudly, never rewritten: an item that cannot be self-judged is an
+ * authoring mistake, and quietly softening the wording would hide it.
+ */
+function normaliseRubricItem(raw, promptId, index) {
+    const item = (typeof raw === 'string') ? { ask: raw } : raw;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const ask = listeningText(item.ask);
+    if (!ask) return null;
+    const refused = rubricRefuses(ask);
+    if (refused) {
+        console.warn('Free speaking: rubric item ' + (item.id || index) + ' on prompt "' +
+            promptId + '" was dropped because it ' + refused + ': "' + ask + '"');
+        return null;
+    }
+    return {
+        id: listeningText(item.id) || (promptId + '-r' + index),
+        ask: ask
+    };
+}
+
+/**
+ * One free-production prompt, normalised — or `null` when it cannot be put in
+ * front of a learner honestly.
+ *
+ * Three things make it null, and all three are authoring mistakes rather than
+ * learner-facing states: no id, no prompt text, or fewer than two surviving
+ * rubric items. The last is the interesting one — a prompt with no rubric is a
+ * recording with nothing to do with it, which is the "record yourself and listen
+ * back, with no comparison or rubric" that CURRICULUM.md Strand E opens by
+ * calling the problem.
+ */
+function normaliseFreeSpeakingPrompt(raw, tier) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+
+    const id = listeningText(raw.id);
+    const prompt = listeningText(raw.prompt);
+    if (!id || !prompt) return null;
+
+    const rubric = (Array.isArray(raw.rubric) ? raw.rubric : [])
+        .map(function (item, i) { return normaliseRubricItem(item, id, i + 1); })
+        .filter(function (item) { return item !== null; });
+    if (rubric.length < 2) {
+        console.warn('Free speaking: prompt "' + id + '" has fewer than two usable ' +
+            'rubric items, so it was dropped. A recording with nothing to check it ' +
+            'against is the thing CURRICULUM.md Strand E calls the problem.');
+        return null;
+    }
+
+    const authoredSeconds = (typeof raw.targetSeconds === 'number' &&
+        isFinite(raw.targetSeconds) && raw.targetSeconds > 0) ? Math.round(raw.targetSeconds) : null;
+
+    return {
+        id: id,
+        prompt: prompt,
+        tier: listeningText(raw.tier) || listeningText(tier),
+        situation: listeningText(raw.situation),
+        // Never null: the card always has a number to aim at, and the tier
+        // default is what "graded by tier" (FR-SPK-3) means when a prompt does
+        // not name its own.
+        targetSeconds: authoredSeconds ||
+            FREE_SPEAKING_SECONDS[listeningText(tier) || ''] || 90,
+        bullets: Array.isArray(raw.bullets)
+            ? raw.bullets.map(listeningText).filter(Boolean)
+            : [],
+        rubric: rubric,
+        notes: listeningText(raw.notes)
+    };
+}
+
+/** Normalise a whole authored tier, dropping what cannot render. */
+function normaliseFreeSpeakingList(list, tier) {
+    if (!Array.isArray(list)) return [];
+    return list
+        .map(function (raw) { return normaliseFreeSpeakingPrompt(raw, tier); })
+        .filter(function (item) { return item !== null; });
+}
+
+/**
+ * Eight prompts, two per tier, chosen against the four personas in
+ * REQUIREMENTS.md §2 rather than to fill a grid:
+ *
+ *   commute-length   `morning-today`, `deadline-too-short` — P1 practises 15
+ *                    minutes on a train, so one prompt per tier is ≤ 60s.
+ *   interview-style  `tell-me-about-yourself`, `late-status-update` — P3 has
+ *                    campus placements weeks away; P4 presents to clients.
+ *   describe-your-work `explain-your-job`, `decision-and-trade-off`.
+ *   everyday errand  `way-to-the-shop` — P2 wants to handle a shop and an
+ *                    appointment, and can practise this one silently at 10pm.
+ *
+ * The `fluent` tier is authored here even though vocabulary and grammar leave it
+ * empty, because P4 is a real persona and an empty tier would send her down to
+ * `confident` by resolveDifficulty()'s step-down rule.
+ */
+const freeSpeakingPrompts = {
+    foundation: [
+        {
+            id: 'morning-today',
+            situation: 'commute',
+            prompt: 'Talk about your morning today, from waking up until now.',
+            targetSeconds: 60,
+            bullets: [
+                'what time you woke up, and how you felt',
+                'two things you did before you left the house',
+                'where you are now, and what you will do next'
+            ],
+            notes: 'There is nothing to get right here. If you catch yourself saying something you would never say to a person, say it again in the words you would really use.',
+            rubric: [
+                { id: 'kept-going', ask: 'Did you keep going from the first sentence to the last without stopping to hunt for a word?' },
+                { id: 'two-each', ask: 'Did you say at least two sentences about each of the three points?' },
+                { id: 'past-form', ask: 'Every time you talked about this morning, did you use the past form — *woke*, *had*, *went* — and not *wake*, *have*, *go*?' },
+                { id: 'finished', ask: 'Did you finish your last sentence, or did it trail off?' }
+            ]
+        },
+        {
+            id: 'way-to-the-shop',
+            situation: 'everyday',
+            prompt: 'Explain to somebody how to get from your front door to the nearest shop or bus stop.',
+            targetSeconds: 60,
+            bullets: [
+                'which way they turn when they come out',
+                'two things they will see on the way',
+                'how they will know they have arrived'
+            ],
+            rubric: [
+                { id: 'direction-words', ask: 'Did you say *turn left*, *turn right* or *go straight on* out loud, rather than only *there* and *that side*?' },
+                { id: 'landmarks', ask: 'Did you name at least two things they will see on the way?' },
+                { id: 'arrived', ask: 'Did you get them all the way to the shop before you stopped talking?' },
+                { id: 'one-go', ask: 'Did you say it in one go, or did you start again from the beginning more than once?' }
+            ]
+        }
+    ],
+    everyday: [
+        {
+            id: 'tell-me-about-yourself',
+            situation: 'interview',
+            prompt: 'Answer the interview question *Tell me about yourself* out loud, as if the interview has just started.',
+            targetSeconds: 90,
+            bullets: [
+                'what you do now, in one sentence',
+                'one thing you are good at, and a time it mattered',
+                'what you want to do next'
+            ],
+            notes: 'Say it to the wall, to your phone, or under your breath. The part that transfers is building the answer while the clock runs.',
+            rubric: [
+                { id: 'example-given', ask: 'After you said what you are good at, did you give an actual example — a time it happened — or did you only make the claim?' },
+                { id: 'have-not-having', ask: 'Did you say *I have five years of experience* rather than *I am having five years of experience*?' },
+                { id: 'lasted', ask: 'Did you talk for about as long as you aimed for, or did you run out halfway?' },
+                { id: 'finished-sentences', ask: 'Did you reach the end of every sentence you started?' }
+            ]
+        },
+        {
+            id: 'explain-your-job',
+            situation: 'work',
+            prompt: 'Explain what you do at work to somebody who has never worked in your field.',
+            targetSeconds: 90,
+            bullets: [
+                'who uses the thing you work on',
+                'what you actually do on a normal day',
+                'one part of it that is harder than it looks'
+            ],
+            rubric: [
+                { id: 'no-jargon', ask: 'Did you get through it without a word only your own team would know — and if you used one, did you say what it means straight after?' },
+                { id: 'who-for', ask: 'Did you say who it is *for*, the person who uses it, and not only what it is?' },
+                { id: 'present-simple', ask: 'For what you do every day, did you say *I check*, *I send*, *I write* rather than *I am checking*, *I am sending*?' },
+                { id: 'no-translating', ask: 'Did you keep going without stopping to build a sentence in your head first?' }
+            ]
+        }
+    ],
+    confident: [
+        {
+            id: 'when-it-went-wrong',
+            situation: 'work',
+            prompt: 'Two minutes on a time something went wrong at work, and what you did about it.',
+            targetSeconds: 120,
+            bullets: [
+                'what the situation was before it went wrong',
+                'what went wrong, and when you noticed',
+                'what you did',
+                'how it ended'
+            ],
+            rubric: [
+                { id: 'past-throughout', ask: 'Was every verb you used about that day in the past — *found*, *told*, *fixed* — including the ones buried in the middle of a long sentence?' },
+                { id: 'you-did', ask: 'Did you say what *you* did, and not only what happened?' },
+                { id: 'reached-the-end', ask: 'Did you get as far as how it ended, or did you stop before the end?' },
+                { id: 'order-out-loud', ask: 'Did you say *first*, *then*, *in the end* out loud, so the order was in the words and not only in your head?' }
+            ]
+        },
+        {
+            id: 'deadline-too-short',
+            situation: 'meeting',
+            prompt: 'Your team has just agreed a deadline you think is too short. Say what you would say in that meeting, out loud, from the beginning.',
+            targetSeconds: 60,
+            bullets: [
+                'one thing in the plan you agree with',
+                'what you think will not fit, and why',
+                'what you would do instead'
+            ],
+            notes: 'This is the two minutes P1 turned down a team-lead conversation over. Nobody is listening, so it costs nothing to get it wrong the first three times.',
+            rubric: [
+                { id: 'agree-first', ask: 'Did you name something you agree with before you disagreed?' },
+                { id: 'hedged', ask: 'Did you soften it — *I see what you mean, but…*, *I am not sure we can…*, *Could we…?* — rather than a flat *no*?' },
+                { id: 'alternative', ask: 'Did you offer an alternative, or only object?' },
+                { id: 'said-it-once', ask: 'Did you say the whole thing once through, instead of rehearsing it silently three times first?' }
+            ]
+        }
+    ],
+    fluent: [
+        {
+            id: 'late-status-update',
+            situation: 'interview',
+            prompt: 'Give a two-minute status update on a piece of work that is running late, as if the client is on the call.',
+            targetSeconds: 120,
+            bullets: [
+                'where it stands today',
+                'why it slipped, in one sentence',
+                'the new date',
+                'what you need from them'
+            ],
+            rubric: [
+                { id: 'state-before-reason', ask: 'Did you say where the work stands before you said why it slipped?' },
+                { id: 'a-real-date', ask: 'Did you give an actual date, rather than *soon* or *sometime next week*?' },
+                { id: 'articles', ask: 'Play it back and listen for *a* and *the*: is one in front of every singular thing you named — *the release*, *a delay* — or did some drop out under pressure?' },
+                { id: 'asked-and-stopped', ask: 'Did you say what you need from them and then stop, rather than filling the silence?' }
+            ]
+        },
+        {
+            id: 'decision-and-trade-off',
+            situation: 'work',
+            prompt: 'Explain a decision your team made, the option you turned down, and why.',
+            targetSeconds: 120,
+            bullets: [
+                'the two options as they stood',
+                'what decided it',
+                'what you gave up by choosing that way',
+                'what you would do differently now'
+            ],
+            rubric: [
+                { id: 'rejected-option', ask: 'Did you state the option you turned down as clearly as the one you chose?' },
+                { id: 'named-the-cost', ask: 'Did you name what the decision cost, or only what it bought?' },
+                { id: 'one-hedge', ask: 'Did you use one hedge — *it depends on*, *broadly*, *in most cases* — instead of stating a preference as a fact?' },
+                { id: 'no-abandoned', ask: 'Did you get to the end without a sentence you had to abandon halfway?' }
+            ]
+        }
+    ]
+};
+
+// ============================================
 // NODE EXPORT  (US-701)
 // ============================================
 //
@@ -1217,6 +1559,16 @@ if (typeof module !== 'undefined' && module.exports) {
         puzzleData: puzzleData,
         LISTENING_RATES: LISTENING_RATES,
         normaliseListeningItem: normaliseListeningItem,
-        normaliseListeningList: normaliseListeningList
+        normaliseListeningList: normaliseListeningList,
+        // US-601 / FR-SPK-3. Exported for the same reason the listening
+        // normaliser is: "a rubric item that cannot be self-judged is refused"
+        // is a promise that needs real assertions, not a regex over source text.
+        freeSpeakingPrompts: freeSpeakingPrompts,
+        FREE_SPEAKING_SECONDS: FREE_SPEAKING_SECONDS,
+        RUBRIC_FORBIDDEN: RUBRIC_FORBIDDEN,
+        rubricRefuses: rubricRefuses,
+        normaliseRubricItem: normaliseRubricItem,
+        normaliseFreeSpeakingPrompt: normaliseFreeSpeakingPrompt,
+        normaliseFreeSpeakingList: normaliseFreeSpeakingList
     };
 }

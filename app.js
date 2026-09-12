@@ -91,6 +91,33 @@ const state = {
      * boolean preference has an honest default, so there is nothing to migrate.
      */
     listeningTextRoute: false,
+    /**
+     * Free production — US-601 / FR-SPK-3.
+     *
+     *   index    where the learner is in the walk of authored prompts
+     *   prompts  promptId -> { recorded, aloud, silent, skipped, lastAt,
+     *                          lastRoute, lastSeconds }
+     *
+     * FOUR COUNTERS AND NOT ONE, because the four routes are different claims and
+     * §9.1 Decision 2 forbids laundering one into another: `recorded` means audio
+     * exists, `aloud` and `silent` are the learner's own word, `skipped` is no
+     * production at all. Metric M-1 is defined as the split, so a single total
+     * would make it unanswerable.
+     *
+     * KEYED BY THE CONTENT-DERIVED promptId, the same key the recordings are
+     * under, so a learner's history and their recordings move together when a
+     * prompt is reordered and part company when the prompt is rewritten — which
+     * is correct, because a rewritten prompt is a different task.
+     *
+     * WHAT IS NOT IN HERE: the rubric ticks. They are the learner's private
+     * judgement of one attempt, and storing them would invite exactly the "3 of 4"
+     * that BR-3 forbids the app to produce from free speech.
+     *
+     * Absent on every save written before this story, which reads as "no free
+     * speaking yet" — correct, so there is nothing to migrate (the same reasoning
+     * as `listeningTextRoute` above).
+     */
+    freeSpeaking: { index: 0, prompts: {} },
     vocabProgress: 0,
     // Legacy counters kept for backwards-compatible loading of old saves only.
     // Not authoritative: see state.dailyStats / state.overallStats.
@@ -490,6 +517,14 @@ function loadProgress() {
             // it — that would silently convert their listening practice into
             // reading practice, which is the thing FR-LSN-3 exists to prevent.
             state.listeningTextRoute = loaded.listeningTextRoute === true;
+
+            // Free-production history (US-601). Sanitised rather than trusted,
+            // for the same reason the accuracy maps are: these counters are shown
+            // to the learner as "you have finished N speaking tasks", and a
+            // corrupt or hand-edited record must not be able to make the app
+            // report a number it did not observe. Absent before this story, which
+            // reads as "no free speaking yet".
+            state.freeSpeaking = sanitizeFreeSpeaking(loaded.freeSpeaking);
 
             // Per-pair discrimination accuracy (FR-PRN-2). Sanitised rather than
             // trusted: it is the input to the FR-PRN-6 production gate, so a
@@ -1535,17 +1570,65 @@ window.LoadingIndicator = LoadingIndicator;
 // API INTEGRATION WITH OFFLINE FALLBACK
 // ============================================
 
+/**
+ * The curated entry for exactly this word, or null.
+ *
+ * Deliberately NOT getLocalWordData(), which ends with
+ * `localWords[state.currentWordIndex % localWords.length]` and therefore always
+ * returns SOMETHING — an arbitrary word when there is no match. That fallback is
+ * right for "give me a word to show", and completely wrong as the test for "do we
+ * already have this word", because it answers yes for every word in the language.
+ */
+function curatedWordData(word) {
+    if (!word) return null;
+    const wanted = String(word).toLowerCase();
+    const levels = Object.keys(vocabularyData || {});
+    for (let i = 0; i < levels.length; i++) {
+        const list = vocabularyData[levels[i]];
+        if (!Array.isArray(list)) continue;
+        const hit = list.filter(w => w && w.word && w.word.toLowerCase() === wanted)[0];
+        if (hit) return hit;
+    }
+    return null;
+}
+
 async function fetchWordData(word) {
     const cached = cache.get(`word_${word.toLowerCase()}`);
     if (cached) return cached;
 
+    // FR-CNT-4 / US-714: CURATED CONTENT SERVES FIRST, and for a curated word the
+    // network is not consulted at all.
+    //
+    // This used to be the other way round, and it shipped an 18-second hang. The
+    // vocabulary section called this for every curated word, the API was tried
+    // first, and a timing-out request cost 3 attempts x a 5s timeout plus 1s and
+    // 2s of backoff before the local fallback ran. "Happy" — data.js's very first
+    // foundation word — sat behind a spinner for eighteen seconds on flaky mobile
+    // data, which is precisely what NFR-8 forbids: the dictionary API is
+    // enhancement-only and its failure must never block an exercise.
+    //
+    // Serving curated directly is not a degraded path, it is the better one. A
+    // curated entry carries an authored `quiz` with hand-written distractors and
+    // an authored IPA string, where the API path generates distractors from other
+    // definitions and takes whatever `phonetic` the API happens to return.
+    const curated = curatedWordData(word);
+    if (curated) return curated;
+
     if (CONFIG.useAPIFirst && navigator.onLine) {
         try {
-            // Use ErrorHandler with retry logic
+            // ONE attempt, short timeout. A retry ladder with exponential backoff
+            // is the right shape for a resource you NEED; for an optional
+            // enrichment it just converts a fast failure into a slow one. Only
+            // words with no curated entry reach this line, and getLocalWordData()
+            // below always yields something, so the ceiling here is what the
+            // learner waits — not whether they get a word at all.
+            //
+            // retryWithBackoff is left as it is: other callers legitimately want
+            // the ladder, so this fixes the call rather than weakening the helper.
             const wordData = await AppErrorHandler.retryWithBackoff(
                 async () => {
                     const response = await fetch(`${CONFIG.dictionaryAPI}${word.toLowerCase()}`, {
-                        signal: AbortSignal.timeout(5000)
+                        signal: AbortSignal.timeout(4000)
                     });
                     if (!response.ok) {
                         throw new Error(`API returned ${response.status}`);
@@ -1553,8 +1636,8 @@ async function fetchWordData(word) {
                     const data = await response.json();
                     return parseAPIResponse(data[0]);
                 },
-                3,
-                1000,
+                1,
+                0,
                 `fetchWordData("${word}")`
             );
 
@@ -1968,7 +2051,14 @@ function switchSection(sectionName) {
     // who wandered off mid-comparison (NFR-6: 3GB Android devices). Each release
     // touches only its own surface — see the RecordingArchive header.
     if (state.currentSection !== sectionName && window.RecordingArchive) {
-        if (state.currentSection === 'listening') RecordingArchive.release('listening');
+        if (state.currentSection === 'listening') {
+            RecordingArchive.release('listening');
+            // US-601. The free-production card lives in this section and owns its
+            // own surface, so leaving takes its url AND stops its clock — a
+            // setInterval left ticking behind a hidden section is a wall-clock
+            // number nobody is looking at, which is worse than no number.
+            releaseFreeSpeak();
+        }
         if (state.currentSection === 'pronunciation') releasePronCompare();
     }
 
@@ -2784,7 +2874,9 @@ async function loadVocabularyWord() {
     document.getElementById('currentWord').textContent = 'Loading...';
 
     try {
-        // Try to fetch from API if it's a curated word
+        // A curated word resolves from data.js without touching the network —
+        // fetchWordData() checks the curated set first (FR-CNT-4). The API is
+        // consulted only for a generated word beyond the curated range.
         let wordData;
         if (state.currentWordIndex < curatedCount) {
             wordData = await fetchWordData(currentWord.word);
@@ -6100,6 +6192,7 @@ function initializeReadingButtons() {
 
     const KIND_LISTENING = 'lsn';
     const KIND_PRONUNCIATION = 'pron';
+    const KIND_FREE = 'free';
 
     function store() {
         return global.BlobStore || null;
@@ -6192,6 +6285,31 @@ function initializeReadingButtons() {
     function pronunciationPromptId(pair) {
         if (!pair || !pair.id) return '';
         return KIND_PRONUNCIATION + ':' + ID_VERSION + ':' + String(pair.id);
+    }
+
+    /**
+     * A free-production prompt's promptId (US-601 / FR-SPK-3).
+     *
+     * Keyed on the PROMPT TEXT and not on the authored `id`, which is the
+     * opposite of the pronunciation case above and worth the two lines of
+     * explanation:
+     *
+     *   - `pair.id` is a phoneme pair ('v-w'). It cannot change meaning without
+     *     becoming a different pair, so it is already content identity.
+     *   - a free-production `id` is a slug ('morning-today') attached to a
+     *     sentence an author can rewrite. Rewriting "Talk about your morning" into
+     *     "Describe your last holiday" under the same slug would hand a learner's
+     *     month-one recording to a prompt they never answered — the failure the
+     *     header spends thirty lines refusing for listening sentences.
+     *
+     * So the id moves when the TASK moves, and an author is free to fix a typo in
+     * the slug, retag the situation, retune targetSeconds or rewrite the whole
+     * rubric without costing anybody a recording. `bullets` are deliberately not
+     * in the key either: they are scaffolding around the same task.
+     */
+    function freeSpeakingPromptId(prompt) {
+        if (!prompt) return '';
+        return promptIdFor(KIND_FREE, prompt.prompt || '');
     }
 
     // ------------------------------------------------------------------
@@ -6663,9 +6781,10 @@ function initializeReadingButtons() {
     function drawList(host, records, o, surface, thing) {
         const heading = document.createElement('h4');
         heading.className = 'archive-head';
-        heading.textContent = thing === 'pair'
-            ? 'Your recordings of this pair'
-            : 'Your recordings of this sentence';
+        // Generic over `thing` ('sentence' | 'pair' | 'prompt'), so a third
+        // surface does not need a third branch here and cannot silently inherit
+        // the word "sentence" for something that is not one.
+        heading.textContent = 'Your recordings of this ' + thing;
         host.appendChild(heading);
 
         if (!records.length) {
@@ -6778,12 +6897,14 @@ function initializeReadingButtons() {
         ID_VERSION: ID_VERSION,
         KIND_LISTENING: KIND_LISTENING,
         KIND_PRONUNCIATION: KIND_PRONUNCIATION,
+        KIND_FREE: KIND_FREE,
 
         // Identity
         contentKey: contentKey,
         promptIdFor: promptIdFor,
         listeningPromptId: listeningPromptId,
         pronunciationPromptId: pronunciationPromptId,
+        freeSpeakingPromptId: freeSpeakingPromptId,
         setCatalogue: setCatalogue,
         describePrompt: describePrompt,
 
@@ -6856,6 +6977,20 @@ RecordingArchive.setCatalogue(function () {
         });
     } catch (e) {
         // A content file that is not loaded is not a reason to fail a lookup.
+        AppErrorHandler.logError(e, 'recording catalogue');
+    }
+    // US-601. Every tier, not just the one on screen: an eviction can name a
+    // prompt the learner recorded at a level they have since moved off, and
+    // "another sentence you have recorded" would be a worse answer than the
+    // prompt itself when we have it.
+    try {
+        freeSpeakingAllPrompts().forEach(prompt => {
+            out.push({
+                promptId: RecordingArchive.freeSpeakingPromptId(prompt),
+                label: prompt.prompt
+            });
+        });
+    } catch (e) {
         AppErrorHandler.logError(e, 'recording catalogue');
     }
     return out;
@@ -7108,6 +7243,11 @@ function revealListeningTranscript(route) {
     if (speak) speak.disabled = false;
     if (lock) lock.hidden = true;
     if (reveal) reveal.hidden = true;
+
+    // US-608. The two no-recogniser routes appear with the text they are about,
+    // from the same place that unlocks the recogniser — one rule, one call site,
+    // so a route cannot unlock and fail to offer its silent twin.
+    renderReadAloudSilentRoute();
 }
 
 /**
@@ -7181,6 +7321,17 @@ function loadListeningExercise() {
     // unrenderable item has no promptId and render() hides the region.
     refreshListeningArchive();
 
+    // The free-production card in this section (US-601). ensureFreeSpeakingPrompt(),
+    // never loadFreeSpeakingPrompt(): this function runs on every Previous/Next in
+    // the SENTENCE card, and a full redraw would throw away a two-minute answer the
+    // learner had just recorded against the PROMPT.
+    ensureFreeSpeakingPrompt();
+
+    // Read Aloud's silent route (US-608). Drawn on every item because the card's
+    // own state is reset above, and because the route it offers depends on whether
+    // the transcript has been revealed yet.
+    renderReadAloudSilentRoute();
+
     if (!item) {
         // normaliseListeningItem() returned null: an authored entry with no text.
         // Said out loud rather than rendered as an empty card, which a learner
@@ -7204,6 +7355,82 @@ function loadListeningExercise() {
     // The one exception, declared by the learner and remembered: see
     // state.listeningTextRoute.
     if (listeningTextRouteOn()) revealListeningTranscript('no-audio');
+}
+
+/**
+ * Read Aloud's silent / skip-and-mark-done route — US-608 / FR-SPK-9 / FR-A11Y-4.
+ *
+ * WHAT WAS MISSING. The sentence card above has had a no-microphone route since
+ * US-703 ("✓ I said it"), and the pronunciation task has had one since it
+ * shipped. Read Aloud had exactly one control — 🎤 Start Speaking — so a learner
+ * with no microphone, a browser with no SpeechRecognition, or P2 at 10pm with a
+ * sleeping house, had a card they could look at and not finish. FR-SPK-9 says
+ * speaking is never a hard gate and only discrimination may gate on audio.
+ *
+ * WHAT IT CLAIMS, AND WHAT IT REFUSES TO CLAIM. The recogniser route reports a
+ * word-level diff because it has one (FR-SPK-1). These two routes have no
+ * evidence at all, so they say so in the sentence the learner reads: the app did
+ * not hear anything and is not claiming it did. That is the same distinction the
+ * transcript gate already draws between 'attempt' and 'no-audio' — the route is
+ * recorded and never laundered (BR-3).
+ *
+ * WHY IT IS ONLY DRAWN AFTER THE REVEAL. This card's target IS the transcript
+ * (FR-LSN-3), so there is nothing to read aloud, or silently, until the sentence
+ * is on screen. Drawing the buttons earlier would be offering to mark done a task
+ * whose text the learner cannot see.
+ */
+function renderReadAloudSilentRoute() {
+    const host = document.getElementById('readAloudSilent');
+    if (!host) return;
+    host.textContent = '';
+    if (!listeningSession || !listeningSession.item || !listeningSession.revealed) return;
+
+    const note = document.createElement('p');
+    note.className = 'silent-route-note';
+    note.textContent = 'No microphone, or nobody you can speak in front of right now? Either of ' +
+        'these finishes this card. Reading the sentence — aloud, in a whisper, or in your head — ' +
+        'is the practice; the recogniser is only how the app can sometimes check. When you use ' +
+        'these it cannot check, and it will not pretend it did.';
+    host.appendChild(note);
+
+    const group = document.createElement('div');
+    group.className = 'button-group';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', 'Finish without the recogniser');
+
+    const aloud = document.createElement('button');
+    aloud.type = 'button';
+    aloud.id = 'readAloudSaidIt';
+    aloud.className = 'btn-secondary';
+    aloud.textContent = '🗣️ I read it aloud';
+    aloud.setAttribute('aria-label', 'I read it aloud without using the recogniser');
+    aloud.addEventListener('click', () => {
+        markListeningAttempt('read-aloud-self-report', true);
+        showFeedback('speechFeedback',
+            'Marked as done, on your word. The recogniser was not used, so the app has no idea ' +
+            'which words landed and is not going to guess — read it once more and watch the words ' +
+            'you find hardest to get out.',
+            'info');
+    });
+
+    const silent = document.createElement('button');
+    silent.type = 'button';
+    silent.id = 'readAloudSilently';
+    silent.className = 'btn-secondary';
+    silent.textContent = '🤫 I read it silently';
+    silent.setAttribute('aria-label', 'I read it silently, without speaking aloud');
+    silent.addEventListener('click', () => {
+        markListeningAttempt('read-aloud-silent', true);
+        showFeedback('speechFeedback',
+            'Marked as done, silently. Putting the words together in your head is real practice ' +
+            'and it counts here; what the app cannot do is observe it, so this is your word and it ' +
+            'is stored as your word — never as something the app heard.',
+            'info');
+    });
+
+    group.appendChild(aloud);
+    group.appendChild(silent);
+    host.appendChild(group);
 }
 
 /** The honest note under the "I can't use the audio" switch, in both states. */
@@ -7595,6 +7822,1059 @@ function appendReadAloudRetry(hostId, diff) {
         'Listen to the slow version, then press 🎤 Start Speaking again and read the marked words a little more deliberately.',
         'question-retry'));
 }
+
+// ===== BEGIN FREE PRODUCTION (US-601) =====
+// ============================================
+// FREE PRODUCTION  (US-601 / FR-SPK-3)
+// ============================================
+//
+// The app's only unscripted-speaking surface. Before this block, the honesty
+// audit in Session.registerSurfaces() recorded `speak.free` as
+// `available: false` and was right to: TEACHING_METHODOLOGY.md §1.1 ("every
+// session must end with the learner having said something that was not read off
+// the screen") was honoured only by grammar's `produce` task, which is a
+// prompted sentence about one grammar point rather than two minutes of the
+// learner's own English.
+//
+// FOUR PARTS, AND THE RULE THAT GOVERNS ALL OF THEM.
+// A prompt, a clock, a recording, and a rubric — FR-SPK-3's own list. The rule:
+// THE APP CANNOT GRADE FREE SPEECH AND MUST NEVER IMPLY IT CAN. There is no
+// score anywhere in this block, no pass/fail, no percentage, no "fluency: 72%",
+// and nothing here writes to SRS, to Mistakes or to the accuracy maps. The
+// substitute REQUIREMENTS.md §5.3 names is "rubric-based self-review", and that
+// is what this is.
+//
+//   1. THE PROMPT is authored in data.js (`freeSpeakingPrompts`), normalised by
+//      normaliseFreeSpeakingPrompt(), and rendered here — authored-and-unreachable
+//      is a trap this project has fallen into repeatedly, so the content and the
+//      surface land together.
+//
+//   2. THE CLOCK COUNTS UP AND CANNOT END THE TASK. js/core/session.js is
+//      count-boxed, not time-boxed, and its Decision 1 permits exactly one timer
+//      in the app: "a stopwatch the learner starts, surfaced as targetSeconds,
+//      not a guillotine". So freeSpeakTick() paints a number and, once, a line
+//      saying the target has been passed. It does not disable a button, stop the
+//      recorder, mark the task done or advance a session step — nothing in this
+//      block calls markFreeSpeakDone() or stopFreeSpeakRecording() from a timer.
+//      A countdown that cut a learner off mid-sentence would be the opposite of
+//      fluency practice, and it would land hardest on P2, who "will abandon
+//      anything that feels like a test she is failing".
+//
+//   3. THE RECORDING goes through RecordingArchive, which already handles quota,
+//      eviction, graceful degradation and object-url discipline, under a
+//      CONTENT-DERIVED promptId (RecordingArchive.freeSpeakingPromptId) — never
+//      an index. Everything the archive header says about why applies here
+//      verbatim.
+//
+//   4. THE RUBRIC IS THE LEARNER'S OWN CHECKLIST. Every item is a question they
+//      can actually answer about themselves — did I keep going, did I say two
+//      sentences per point, did I use the past form throughout — and data.js
+//      refuses to ship one that is not (rubricRefuses(), which forbids "did it
+//      sound right?" the way FR-PRN-5 forbids it in the pronunciation task).
+//      The ticks are not counted, not stored and not totalled; the card says so.
+//
+// FOUR COMPLETION ROUTES, AND WHY THERE ARE FOUR (US-608 / FR-SPK-9 / FR-A11Y-4).
+// P2 practises at 10pm and cannot speak aloud without being overheard. The
+// listening card's precedent is a route that is REPORTED rather than laundered
+// ('attempt' vs 'no-audio'), so this card records which of four things happened
+// and never conflates them:
+//
+//   'recorded'  a recording exists. The strongest claim available, and note what
+//               it is NOT: evidence that the English was good. The app observed
+//               audio, nothing more.
+//   'aloud'     the learner says they spoke and did not record. Self-reported.
+//   'silent'    sub-vocal, whispered, or said in their head. Self-reported, and
+//               a PRODUCTION, not a skip — REQUIREMENTS.md §9.1 Decision 2:
+//               "the thing that transfers is composing the utterance, not
+//               vibrating the air". It completes the task on exactly the same
+//               press as 'aloud' and is not styled as the lesser route.
+//   'skipped'   no production. Completes the card, counts as nothing, and is
+//               reported as nothing.
+//
+// The finishing buttons are drawn BEFORE the recorder is even asked about, and
+// none of them needs a microphone, speech synthesis or IndexedDB. On a device
+// with no microphone at all the card loses one button and nothing else.
+//
+// WHY THIS BLOCK SITS BETWEEN BEGIN/END MARKERS. Same reason as the recording
+// archive above: app.js cannot be required by the test suite, and the promises
+// this story makes — the clock cannot end the task, the silent route completes it
+// with no microphone, nothing is scored — are behaviour, not source text, so they
+// have to be PROVED rather than grepped for. __tests__/unit/sections.test.js
+// extracts the source between these markers and evaluates it in jsdom with the
+// handful of app.js globals below injected. Keep the dependency list short and
+// pass things in; do not reach for a new app.js global from in here.
+// Injected today: state, window, document, URL, Audio, AppErrorHandler,
+// appendGrammarText, joinWithAnd, saveProgress, reportArchiveSave, Levels,
+// canonicalLevel, LEVELS, freeSpeakingPrompts, normaliseFreeSpeakingList, Session.
+
+/** The object-url surface this card owns. Never 'listening': one live handle per
+ *  surface, so sharing would let a Prev/Next in the sentence card revoke a url
+ *  this one is playing (see the RecordingArchive header). */
+const FREE_SPEAK_SURFACE = 'free';
+
+/**
+ * Per-prompt state, rebuilt by loadFreeSpeakingPrompt().
+ *
+ *   prompt     the normalised prompt on screen
+ *   promptId   the archive key, derived from the prompt TEXT
+ *   level      the tier the prompt came from (may differ from the selected one)
+ *   index      position in this tier's walk
+ *   total      how many prompts this tier has
+ *   url        this page-session's object url for the recording just made, ours
+ *              to revoke — the same arrangement as pronCompare.url
+ *   recordId   the archive row to play back when there is no session url
+ *   route      how this attempt was finished, or null. See the four above.
+ *   clock      { startedAt, elapsedMs, timer, passed } — see freeSpeakTick()
+ */
+let freeSpeakSession = null;
+
+/** Release this card's object url and archive handle. Not BlobStore.revokeAll(). */
+function releaseFreeSpeak() {
+    stopFreeSpeakClock();
+    if (freeSpeakSession && freeSpeakSession.url) {
+        URL.revokeObjectURL(freeSpeakSession.url);
+        freeSpeakSession.url = null;
+    }
+    if (window.RecordingArchive) RecordingArchive.release(FREE_SPEAK_SURFACE);
+}
+
+/**
+ * The prompts authored for one tier, normalised, minus any this build cannot put
+ * in front of a learner honestly.
+ *
+ * Dropping happens in data.js and is loud there (a prompt with no text, or with
+ * fewer than two self-judgeable rubric items, is an authoring mistake). This
+ * function is the single place the tier key is resolved, so "which tier does the
+ * speaking card show" and "how much speaking content is there" cannot disagree —
+ * the same discipline grammarLessonsFor() has.
+ */
+function freeSpeakingPromptsFor(level) {
+    if (typeof freeSpeakingPrompts === 'undefined' || !freeSpeakingPrompts) return [];
+    if (typeof normaliseFreeSpeakingList !== 'function') return [];
+    const canonical = (typeof canonicalLevel === 'function') ? canonicalLevel(level) : level;
+    const own = normaliseFreeSpeakingList(freeSpeakingPrompts[canonical], canonical);
+    if (own.length) return own;
+
+    // Every tier is authored today, so this is unreachable — and it is here
+    // anyway, because the alternative to a step-down is an empty card, and an
+    // empty card is what §9.1 Decision 3 calls the app overstating itself. Down
+    // first, then up: the same order and the same reason as resolveDifficulty().
+    const order = (typeof LEVELS !== 'undefined' && Array.isArray(LEVELS))
+        ? LEVELS.slice().sort((a, b) => a.order - b.order).map(l => l.id)
+        : ['foundation', 'everyday', 'confident', 'fluent'];
+    const at = order.indexOf(canonical);
+    const search = at === -1 ? order.slice() : order.slice(0, at).reverse().concat(order.slice(at + 1));
+    for (let i = 0; i < search.length; i++) {
+        const list = normaliseFreeSpeakingList(freeSpeakingPrompts[search[i]], search[i]);
+        if (list.length) return list;
+    }
+    return [];
+}
+
+/** Every authored prompt, every tier — for the eviction catalogue only. */
+function freeSpeakingAllPrompts() {
+    if (typeof freeSpeakingPrompts === 'undefined' || !freeSpeakingPrompts) return [];
+    if (typeof normaliseFreeSpeakingList !== 'function') return [];
+    const out = [];
+    Object.keys(freeSpeakingPrompts).forEach(tier => {
+        normaliseFreeSpeakingList(freeSpeakingPrompts[tier], tier).forEach(p => out.push(p));
+    });
+    return out;
+}
+
+/** The tier this card is showing, which is the tier its content came from. */
+function freeSpeakingLevel() {
+    const list = freeSpeakingPromptsFor(state.currentDifficulty);
+    return (list[0] && list[0].tier) ||
+        ((typeof canonicalLevel === 'function') ? canonicalLevel(state.currentDifficulty) : 'foundation');
+}
+
+/**
+ * `state.freeSpeaking` with every value forced to a sane shape (US-601).
+ *
+ * Sanitised on the way in from storage rather than trusted, on the same reasoning
+ * as sanitizePronunciationAccuracy(): these counters are shown to the learner as
+ * "you have finished N speaking tasks, M of them silently", so a corrupt or
+ * hand-edited record must not be able to make the app state a number it never
+ * observed (BR-3). Unknown keys are dropped, counts are clamped to non-negative
+ * integers, and an all-zero row is discarded rather than kept as noise.
+ */
+function sanitizeFreeSpeaking(raw) {
+    const out = { index: 0, prompts: {} };
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    out.index = Math.max(0, Math.floor(Number(raw.index) || 0));
+    const prompts = raw.prompts;
+    if (!prompts || typeof prompts !== 'object' || Array.isArray(prompts)) return out;
+    Object.keys(prompts).forEach(id => {
+        const row = prompts[id];
+        if (!row || typeof row !== 'object') return;
+        const count = value => Math.max(0, Math.floor(Number(value) || 0));
+        const clean = {
+            recorded: count(row.recorded),
+            aloud: count(row.aloud),
+            silent: count(row.silent),
+            skipped: count(row.skipped),
+            lastAt: count(row.lastAt),
+            // Only the four routes are storable; anything else reads as "no route".
+            lastRoute: ['recorded', 'aloud', 'silent', 'skipped'].indexOf(row.lastRoute) > -1
+                ? row.lastRoute : null,
+            lastSeconds: count(row.lastSeconds)
+        };
+        if (!clean.recorded && !clean.aloud && !clean.silent && !clean.skipped) return;
+        out.prompts[id] = clean;
+    });
+    return out;
+}
+
+/** The learner's record for one prompt: four route counters and when. */
+function freeSpeakRecordFor(promptId) {
+    const all = (state.freeSpeaking && state.freeSpeaking.prompts) || {};
+    const row = promptId ? all[promptId] : null;
+    return {
+        recorded: (row && row.recorded) || 0,
+        aloud: (row && row.aloud) || 0,
+        silent: (row && row.silent) || 0,
+        skipped: (row && row.skipped) || 0,
+        lastAt: (row && row.lastAt) || 0,
+        lastRoute: (row && row.lastRoute) || null
+    };
+}
+
+/** Productions of a prompt, by any route that produced something. */
+function freeSpeakProductions(record) {
+    return record.recorded + record.aloud + record.silent;
+}
+
+/**
+ * Totals across every prompt, split by route.
+ *
+ * Split, never summed into one number: metric M-1 is "% of sessions containing
+ * ≥1 unscripted spoken production, SPLIT BY ROUTE", and FR-SES-4 counts
+ * "≥5 free-speaking tasks" — both of which a single total would make
+ * unanswerable. Skips are counted and reported as skips, because a skip that
+ * quietly became a production is exactly the laundering BR-3 forbids.
+ */
+function freeSpeakTotals() {
+    const out = { recorded: 0, aloud: 0, silent: 0, skipped: 0, productions: 0, prompts: 0 };
+    const all = (state.freeSpeaking && state.freeSpeaking.prompts) || {};
+    Object.keys(all).forEach(id => {
+        const row = freeSpeakRecordFor(id);
+        out.recorded += row.recorded;
+        out.aloud += row.aloud;
+        out.silent += row.silent;
+        out.skipped += row.skipped;
+        if (freeSpeakProductions(row) > 0) out.prompts++;
+    });
+    out.productions = out.recorded + out.aloud + out.silent;
+    return out;
+}
+
+// --------------------------------------------------------------------------
+// The clock  (advisory, and structurally incapable of ending the task)
+// --------------------------------------------------------------------------
+
+/** '1:04'. Hand-formatted for the same reason RecordingArchive.whenText() is. */
+function freeSpeakClockText(ms) {
+    const seconds = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+    return Math.floor(seconds / 60) + ':' + (seconds % 60 < 10 ? '0' : '') + (seconds % 60);
+}
+
+/** Elapsed milliseconds on this attempt, running or stopped. */
+function freeSpeakElapsed() {
+    const clock = freeSpeakSession && freeSpeakSession.clock;
+    if (!clock) return 0;
+    return clock.elapsedMs + (clock.startedAt ? Date.now() - clock.startedAt : 0);
+}
+
+/**
+ * Paint the clock, and say ONCE when the advisory target has gone by.
+ *
+ * This is the whole of what the timer does. There is deliberately no branch here
+ * that stops the recorder, disables a control, marks the task done or moves a
+ * session step — the target is a number to aim at, and passing it is a fact
+ * about the attempt rather than the end of it.
+ */
+function freeSpeakTick() {
+    if (!freeSpeakSession) return;
+    const clock = freeSpeakSession.clock;
+    const target = (freeSpeakSession.prompt && freeSpeakSession.prompt.targetSeconds) || 0;
+    const elapsed = freeSpeakElapsed();
+    const el = document.getElementById('freeSpeakClock');
+    if (el) {
+        el.textContent = target
+            ? freeSpeakClockText(elapsed) + ' of the ' + freeSpeakClockText(target * 1000) + ' you are aiming for'
+            : freeSpeakClockText(elapsed);
+        el.classList.toggle('is-past-target', !!target && elapsed >= target * 1000);
+    }
+    if (target && !clock.passed && elapsed >= target * 1000) {
+        clock.passed = true;
+        // Said once, in the status line, and then never again: a message that
+        // repeated every second would be a countdown wearing a friendly face.
+        freeSpeakStatus('You have passed the ' + freeSpeakClockText(target * 1000) +
+            ' you were aiming for. Nothing stops — keep going for as long as you have ' +
+            'something to say, and press Stop when you are finished.');
+    }
+}
+
+/** Start (or resume) the clock. Idempotent: a second press is not a restart. */
+function startFreeSpeakClock() {
+    if (!freeSpeakSession) return false;
+    const clock = freeSpeakSession.clock;
+    if (clock.startedAt) return false;
+    clock.startedAt = Date.now();
+    freeSpeakTick();
+    if (clock.timer) clearInterval(clock.timer);
+    clock.timer = setInterval(freeSpeakTick, 1000);
+    return true;
+}
+
+/** Stop the clock and keep the elapsed time. Safe to call when it never ran. */
+function stopFreeSpeakClock() {
+    const clock = freeSpeakSession && freeSpeakSession.clock;
+    if (!clock) return;
+    if (clock.timer) {
+        clearInterval(clock.timer);
+        clock.timer = null;
+    }
+    if (clock.startedAt) {
+        clock.elapsedMs += Date.now() - clock.startedAt;
+        clock.startedAt = null;
+    }
+    freeSpeakTick();
+}
+
+/** The card's status line. One place, so no caller invents a second class. */
+function freeSpeakStatus(text, ok) {
+    const el = document.getElementById('freeSpeakStatus');
+    if (!el) return;
+    el.textContent = text || '';
+    el.className = 'recording-status' + (ok === true ? ' success' : (ok === false ? ' info' : ''));
+}
+
+// --------------------------------------------------------------------------
+// Drawing the prompt
+// --------------------------------------------------------------------------
+
+/** What an authored `situation` is called on screen. Falls through to the raw
+ *  value rather than dropping it, so a new tag is visible instead of silent. */
+const FREE_SPEAK_SITUATIONS = {
+    commute: 'short enough for a commute',
+    interview: 'interview practice',
+    work: 'talking about your work',
+    meeting: 'something you would say in a meeting',
+    everyday: 'an everyday errand'
+};
+
+/** `<p class=…>`, with the *cited word* markup rendered. Uses the grammar
+ *  section's helper on purpose: one markup convention, one renderer. */
+function freeSpeakParagraph(text, className) {
+    const p = document.createElement('p');
+    if (className) p.className = className;
+    return appendGrammarText(p, text);
+}
+
+function freeSpeakButton(id, label, className, ariaLabel, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.id = id;
+    b.className = className;
+    b.textContent = label;
+    if (ariaLabel) b.setAttribute('aria-label', ariaLabel);
+    b.addEventListener('click', onClick);
+    return b;
+}
+
+/** The learner's own history with this prompt, in words. Null when it is new. */
+function freeSpeakHistoryText(record) {
+    const done = freeSpeakProductions(record);
+    if (!done) return null;
+    const parts = [];
+    if (record.recorded) parts.push(record.recorded + ' with a recording');
+    if (record.aloud) parts.push(record.aloud + ' aloud without recording');
+    if (record.silent) parts.push(record.silent + ' silently');
+    return 'You have answered this prompt ' + done + ' time' + (done === 1 ? '' : 's') +
+        ' so far — ' + joinWithAnd(parts) + '. Answering the same prompt again is the point rather ' +
+        'than a repeat: the second telling of anything is usually the easier one.';
+}
+
+/**
+ * Draw the prompt, the advisory length, the scaffolding and the learner's own
+ * history with it.
+ *
+ * The bullets are `bullets`, from the content, and they are phrases rather than
+ * sentences on purpose (see data.js): a card that printed model sentences would
+ * be a reading exercise, and TEACHING_METHODOLOGY.md §1.1 asks for something that
+ * was NOT read off the screen.
+ */
+function renderFreeSpeakPrompt(prompt, level) {
+    const host = document.getElementById('freeSpeakPrompt');
+    if (!host) return;
+    host.textContent = '';
+
+    host.appendChild(freeSpeakParagraph(prompt.prompt, 'free-speak-task'));
+
+    const bits = [];
+    if (prompt.targetSeconds) {
+        bits.push('about ' + freeSpeakClockText(prompt.targetSeconds * 1000) + ', as a target and not a limit');
+    }
+    if (prompt.situation) {
+        bits.push(FREE_SPEAK_SITUATIONS[prompt.situation] || prompt.situation);
+    }
+    if (level && typeof Levels !== 'undefined' && Levels && typeof Levels.levelLabel === 'function') {
+        const label = Levels.levelLabel(level);
+        if (label) bits.push(label + ' prompt');
+    }
+    if (bits.length) {
+        host.appendChild(freeSpeakParagraph(bits.join(' · '), 'free-speak-meta'));
+    }
+
+    if (prompt.bullets.length) {
+        const intro = document.createElement('p');
+        intro.className = 'free-speak-cover';
+        intro.textContent = 'Cover these, in any order and in your own words:';
+        host.appendChild(intro);
+        const ul = document.createElement('ul');
+        ul.className = 'free-speak-bullets';
+        prompt.bullets.forEach(bullet => {
+            const li = document.createElement('li');
+            appendGrammarText(li, bullet);
+            ul.appendChild(li);
+        });
+        host.appendChild(ul);
+    }
+
+    if (prompt.notes) host.appendChild(freeSpeakParagraph(prompt.notes, 'free-speak-note'));
+
+    const history = freeSpeakHistoryText(freeSpeakRecordFor(
+        window.RecordingArchive ? RecordingArchive.freeSpeakingPromptId(prompt) : ''));
+    if (history) host.appendChild(freeSpeakParagraph(history, 'free-speak-history'));
+
+    // The only numbers this card shows: how many free-speaking tasks have been
+    // finished, split by route, plus the skips. FR-SES-4 counts "≥5 free-speaking
+    // tasks" and metric M-1 wants the split, so both are answerable — and neither
+    // is a score, an average or a verdict on anything that was said.
+    const totals = freeSpeakTotals();
+    if (totals.productions || totals.skipped) {
+        const parts = [];
+        if (totals.recorded) parts.push(totals.recorded + ' recorded');
+        if (totals.aloud) parts.push(totals.aloud + ' aloud');
+        if (totals.silent) parts.push(totals.silent + ' silently');
+        host.appendChild(freeSpeakParagraph(
+            'Across all prompts you have finished ' + totals.productions +
+            ' speaking task' + (totals.productions === 1 ? '' : 's') +
+            (parts.length ? ' — ' + joinWithAnd(parts) : '') + '. ' +
+            (totals.skipped
+                ? 'You have skipped ' + totals.skipped + ', which is counted as skipped and not as speaking.'
+                : 'Nothing here is scored; it is a count of what you did, not of how it went.'),
+            'free-speak-totals'));
+    }
+}
+
+// --------------------------------------------------------------------------
+// Doing it, and saying how it was done  (US-608 / FR-SPK-9 / FR-A11Y-4)
+// --------------------------------------------------------------------------
+
+/**
+ * The controls, in two groups, and the ORDER is the story.
+ *
+ * The finishing group — aloud / silently / skip — is appended FIRST in the DOM
+ * and is drawn unconditionally, before the recorder is asked whether it exists.
+ * That is the same shape as the pronunciation task, where the self-check pair
+ * comes before appendPronunciationComparison(): everything needed to finish is
+ * already on screen and needs no microphone, no audio and no storage. The
+ * recorder is the enhancement.
+ *
+ * Nothing here is disabled by the clock, and nothing here is disabled by not
+ * having recorded: FR-SPK-9 says speaking is never a hard gate, and a "you must
+ * record first" guard would be exactly that gate.
+ */
+function renderFreeSpeakControls(prompt) {
+    const host = document.getElementById('freeSpeakControls');
+    if (!host) return;
+    host.textContent = '';
+
+    const missing = !window.RecordingArchive || RecordingArchive.recorderMissing();
+
+    // --- group 1: the clock, and the recorder when there is one --------------
+    const doing = document.createElement('div');
+    doing.className = 'button-group free-speak-doing';
+    doing.setAttribute('role', 'group');
+    doing.setAttribute('aria-label', 'Start talking');
+
+    const stop = freeSpeakButton('freeSpeakStop', '⏹ Stop', 'btn-secondary',
+        'Stop the clock and the recording', () => stopFreeSpeaking());
+    stop.disabled = true;
+
+    if (!missing) {
+        doing.appendChild(freeSpeakButton('freeSpeakRecord', '🎤 Record and start the clock',
+            'btn-primary', 'Record yourself and start the clock',
+            () => startFreeSpeaking(prompt, true)));
+    }
+    doing.appendChild(freeSpeakButton('freeSpeakClockStart',
+        missing ? '▶ Start the clock' : '▶ Start the clock without recording', 'btn-secondary',
+        'Start the clock without recording anything', () => startFreeSpeaking(prompt, false)));
+    doing.appendChild(stop);
+    host.appendChild(doing);
+
+    if (missing) {
+        // FR-A11Y-4, said once and without an apology: the card is whole, and the
+        // task was never the recording. Same sentence pattern as
+        // appendPronunciationComparison() on a device with no microphone.
+        host.appendChild(freeSpeakParagraph(
+            'This device has no microphone the app can use, so there is nothing to record or play ' +
+            'back. Start the clock, say your answer — out loud or under your breath — and mark how ' +
+            'you did it below. That is the task, and it was never the recording.',
+            'free-speak-nomic'));
+    }
+
+    // --- group 2: how it was finished, and all three finish it ---------------
+    const heading = document.createElement('h4');
+    heading.className = 'free-speak-route-head';
+    heading.textContent = 'When you have finished, say how you did it';
+    host.appendChild(heading);
+
+    host.appendChild(freeSpeakParagraph(
+        'All three of these finish the task. The app records which one you pressed and never ' +
+        'reports one as another — it cannot hear you, so your word is the only evidence there is.',
+        'free-speak-route-note'));
+
+    const routes = document.createElement('div');
+    routes.className = 'button-group free-speak-routes';
+    routes.setAttribute('role', 'group');
+    routes.setAttribute('aria-label', 'How you did it');
+
+    // Neither speaking route is styled as the lesser one — same class, same
+    // one-press cost (js/core/session.js decision 2). In silent mode the silent
+    // route leads, which is the only thing that changes.
+    const silentFirst = freeSpeakPrefersSilent();
+    const aloud = () => freeSpeakButton('freeSpeakAloud', '🗣️ I said it out loud', 'btn-primary',
+        'I said it out loud, without recording', () => markFreeSpeakDone('aloud'));
+    const silent = () => freeSpeakButton('freeSpeakSilent', '🤫 I did it silently', 'btn-primary',
+        'I did it silently — whispered, under my breath, or in my head',
+        () => markFreeSpeakDone('silent'));
+    (silentFirst ? [silent, aloud] : [aloud, silent]).forEach(make => routes.appendChild(make()));
+    routes.appendChild(freeSpeakButton('freeSpeakSkip', '↷ Skip this one', 'btn-secondary',
+        'Skip this prompt', () => markFreeSpeakDone('skipped')));
+    host.appendChild(routes);
+}
+
+/**
+ * Start the clock, and the recorder if that is what was pressed.
+ *
+ * A refused microphone does NOT stop the clock: the learner has already decided
+ * to speak, and taking the task away because the permission dialog was declined
+ * is the dead end R-7 and FR-A11Y-4 are about.
+ */
+function startFreeSpeaking(prompt, withMicrophone) {
+    if (!freeSpeakSession) return;
+    startFreeSpeakClock();
+    const record = document.getElementById('freeSpeakRecord');
+    const clockBtn = document.getElementById('freeSpeakClockStart');
+    const stop = document.getElementById('freeSpeakStop');
+    if (clockBtn) clockBtn.disabled = true;
+    if (stop) stop.disabled = false;
+
+    if (!withMicrophone || !window.RecordingArchive) {
+        if (record) record.disabled = true;
+        freeSpeakStatus('The clock is running. Say your answer — nothing is being recorded, and ' +
+            'nothing is listening.');
+        return;
+    }
+
+    if (record) record.disabled = true;
+    RecordingArchive.startCapture(FREE_SPEAK_SURFACE, {
+        onstart: () => {
+            freeSpeakStatus('🔴 Recording, and the clock is running. Press Stop when you have ' +
+                'finished — nothing will cut you off.');
+        },
+        onstop: (blob, meta) => {
+            if (freeSpeakSession && freeSpeakSession.url) {
+                URL.revokeObjectURL(freeSpeakSession.url);
+                freeSpeakSession.url = null;
+            }
+            if (blob && blob.size > 0 && freeSpeakSession) {
+                // This page-session's url, ours to revoke. It is what makes
+                // playback work on a device that cannot keep anything.
+                freeSpeakSession.url = URL.createObjectURL(blob);
+            }
+            // The task is marked done BEFORE the archive is touched, and never
+            // inside the save's .then() — keeping a recording is an enhancement
+            // that may fail on any device, and finishing may not depend on it
+            // (NFR-8's principle, FR-A11Y-4).
+            markFreeSpeakDone(blob && blob.size > 0 ? 'recorded' : 'aloud');
+            keepFreeSpeakRecording(prompt, blob, meta);
+        },
+        onerror: (e) => {
+            AppErrorHandler.logError(e, 'free speaking recording');
+            if (record) record.disabled = true;
+            // The clock keeps running and the finishing buttons are already on
+            // screen, so this is a note beside a task that still works.
+            freeSpeakStatus('No microphone, so nothing is being recorded. The clock is still ' +
+                'running — say your answer anyway and mark how you did it below. ' +
+                'Nothing here is scored either way.');
+        }
+    });
+}
+
+/**
+ * Stop the clock and the recorder.
+ *
+ * When a recording was running, its `onstop` marks the task; when only the clock
+ * was running, the learner still has to say how they did it, because the app has
+ * no way to know and will not guess.
+ */
+function stopFreeSpeaking() {
+    const wasRecording = !!(window.RecordingArchive &&
+        RecordingArchive.isRecording(FREE_SPEAK_SURFACE));
+    stopFreeSpeakClock();
+    const stop = document.getElementById('freeSpeakStop');
+    if (stop) stop.disabled = true;
+    if (wasRecording) {
+        RecordingArchive.stopCapture();
+        return;
+    }
+    freeSpeakStatus('Clock stopped at ' + freeSpeakClockText(freeSpeakElapsed()) +
+        '. Nothing was recorded, so tell the app how you did it — out loud, or silently.');
+}
+
+/**
+ * True when the learner has said they cannot speak aloud right now.
+ *
+ * Read from the session's own control (#sessionSilent) and from a plan built with
+ * `silent: true`, rather than stored a second time here: two places holding
+ * "can this learner speak tonight" is two places to disagree, and the session
+ * checkbox is the one the learner already knows about.
+ */
+function freeSpeakPrefersSilent() {
+    const box = document.getElementById('sessionSilent');
+    if (box && box.checked === true) return true;
+    if (typeof Session !== 'undefined' && Session && typeof Session.plan === 'function') {
+        const plan = Session.plan();
+        if (plan && plan.silent) return true;
+    }
+    return false;
+}
+
+/**
+ * Record how this attempt was finished, and open the rubric.
+ *
+ * IDEMPOTENT PER ATTEMPT. The first route wins, which is what lets the recorder's
+ * `onstop` mark 'recorded' without being able to overwrite a route the learner
+ * pressed deliberately — and stops a double press counting twice.
+ *
+ * WHAT IS AND IS NOT WRITTEN. Four counters per prompt and a timestamp, and
+ * nothing else. In particular:
+ *   - NOT state.completedExercises.listening / dailyStats.listeningCompleted.
+ *     This card lives inside the Listening section for markup reasons; crediting
+ *     a listening item for a speaking task would be marking what the exercise
+ *     never asked for, which app.js already calls its own kind of dishonesty.
+ *     There is no `speaking` row in js/core/sections.js to count into, so this
+ *     card reports its own totals rather than borrowing somebody else's counter.
+ *   - NOT SRS, and NOT Mistakes. There is nothing to schedule: a free-production
+ *     prompt has no right answer, so there is no lapse to record and no success
+ *     to certify (FR-SRS-5 would ignore a self-reported success anyway).
+ *   - NOT a score, a total, a percentage or a streak. See the block header.
+ */
+function markFreeSpeakDone(route) {
+    if (!freeSpeakSession) return null;
+    if (freeSpeakSession.route) return freeSpeakSession.route;
+
+    stopFreeSpeakClock();
+    freeSpeakSession.route = route;
+
+    const elapsed = freeSpeakElapsed();
+    const promptId = freeSpeakSession.promptId;
+
+    if (promptId) {
+        if (!state.freeSpeaking) state.freeSpeaking = { prompts: {}, index: 0 };
+        if (!state.freeSpeaking.prompts) state.freeSpeaking.prompts = {};
+        const row = state.freeSpeaking.prompts[promptId] ||
+            { recorded: 0, aloud: 0, silent: 0, skipped: 0, lastAt: 0, lastRoute: null };
+        if (typeof row[route] === 'number') row[route]++;
+        row.lastAt = Date.now();
+        row.lastRoute = route;
+        // Seconds, not milliseconds, and only when the clock actually ran. It is
+        // the learner's own record of how long they managed, for their own
+        // comparison — NOT a words-per-minute number, which needs a word count
+        // this app does not have (FR-SPK-5 / US-603).
+        if (elapsed > 0) row.lastSeconds = Math.round(elapsed / 1000);
+        state.freeSpeaking.prompts[promptId] = row;
+        saveProgress();
+    }
+
+    const spoken = elapsed > 0 ? ' You kept going for ' + freeSpeakClockText(elapsed) + '.' : '';
+    if (route === 'recorded') {
+        freeSpeakStatus('Kept.' + spoken + ' That is your own English, stored on this device and ' +
+            'nowhere else. Nothing was scored: the app can play it back to you, and that is the ' +
+            'whole of what it can honestly do.', true);
+    } else if (route === 'aloud') {
+        freeSpeakStatus('Marked as done, on your word: you said it aloud and nothing was recorded, ' +
+            'so the app is not claiming anything about what you said.' + spoken);
+    } else if (route === 'silent') {
+        freeSpeakStatus('Marked as done, silently — and that counts as production, not as a skip. ' +
+            'Composing the sentence is the part that transfers to a real conversation. The app ' +
+            'records that you did it silently rather than pretending it heard you.' + spoken);
+    } else {
+        freeSpeakStatus('Skipped, and recorded as a skip rather than as a production. It costs you ' +
+            'nothing, and this prompt will be here next time.');
+    }
+
+    // The rubric is for checking something that happened. After a skip there is
+    // nothing to check, so the collapsed preview stays as it was.
+    renderFreeSpeakRubric(freeSpeakSession.prompt, route !== 'skipped');
+    // Redraw the prompt panel so the history and the route totals are true as of
+    // now rather than as of the last time the card was opened. Safe to redraw: it
+    // holds text only, and every interactive control lives elsewhere.
+    renderFreeSpeakPrompt(freeSpeakSession.prompt, freeSpeakSession.level);
+    appendFreeSpeakRetry();
+    return route;
+}
+
+/**
+ * "Answer it again", offered after every route including a skip.
+ *
+ * Two reasons it is not optional. Answering the same prompt a second time is the
+ * point of the archive — Strand E.7's month-one-against-month-three comparison
+ * needs more than one attempt to exist — and without this button a learner who
+ * pressed Skip by accident would have to leave the section and come back to get
+ * their prompt back, because markFreeSpeakDone() is deliberately idempotent.
+ *
+ * It is a full redraw: fresh clock, no route, nothing carried over. The previous
+ * recording stays in the archive, where blobstore.js keeps the pinned baseline
+ * plus the two most recent (FR-DATA-6).
+ */
+function appendFreeSpeakRetry() {
+    const host = document.getElementById('freeSpeakControls');
+    if (!host || document.getElementById('freeSpeakAgain')) return;
+    host.appendChild(freeSpeakButton('freeSpeakAgain', '🔄 Answer it again', 'btn-secondary',
+        'Answer this prompt again, with a fresh clock',
+        () => loadFreeSpeakingPrompt()));
+}
+
+// --------------------------------------------------------------------------
+// The rubric  (self-assessed, never scored)
+// --------------------------------------------------------------------------
+
+/**
+ * Draw the checklist.
+ *
+ * TWO STATES, and the difference is deliberate:
+ *
+ *   interactive = false   before the attempt. A collapsed <details>, so a learner
+ *                         who wants to know what they will be asked can look, and
+ *                         one who does not is not handed a list to read out. An
+ *                         open rubric above an unstarted task is a script, and
+ *                         §1.1 asks for speech that was not read off the screen.
+ *   interactive = true    after it. Checkboxes, and a "play it back" button when
+ *                         there is a recording, because half of these questions
+ *                         are easiest to answer by listening once.
+ *
+ * The ticks are not counted anywhere — not on screen, not in state, not in the
+ * export. There is no "3 of 4", because a fraction is a score, and BR-3 does not
+ * let the app produce one from free speech. Every item is the learner's own
+ * judgement about their own attempt (data.js rubricRefuses() is what keeps the
+ * unanswerable ones out).
+ */
+function renderFreeSpeakRubric(prompt, interactive) {
+    const host = document.getElementById('freeSpeakRubric');
+    if (!host) return;
+    host.textContent = '';
+    if (!prompt || !prompt.rubric || !prompt.rubric.length) return;
+
+    if (!interactive) {
+        const details = document.createElement('details');
+        details.className = 'free-speak-more';
+        const summary = document.createElement('summary');
+        summary.textContent = 'What you will check afterwards — open it now if you want to';
+        details.appendChild(summary);
+        details.appendChild(freeSpeakParagraph(
+            'You answer these yourself, about yourself. There is no answer key, nothing is counted ' +
+            'and nothing is marked right or wrong.', 'free-speak-rubric-note'));
+        const preview = document.createElement('ul');
+        preview.className = 'free-speak-rubric-preview';
+        prompt.rubric.forEach(item => {
+            const li = document.createElement('li');
+            appendGrammarText(li, item.ask);
+            preview.appendChild(li);
+        });
+        details.appendChild(preview);
+        host.appendChild(details);
+        return;
+    }
+
+    const heading = document.createElement('h4');
+    heading.textContent = 'Check yourself';
+    host.appendChild(heading);
+
+    host.appendChild(freeSpeakParagraph(
+        'Notes to yourself, and nothing else: nothing counts the ticks, nothing stores them and ' +
+        'there is no total. Every question is about what you did, which is the only thing you are ' +
+        'in a position to answer — and it is why none of them asks how you sounded.',
+        'free-speak-rubric-note'));
+
+    if (freeSpeakSession && (freeSpeakSession.url || freeSpeakSession.recordId)) {
+        host.appendChild(freeSpeakButton('freeSpeakPlayback', '▶ Play your recording back',
+            'btn-secondary', 'Play the recording you just made',
+            () => playFreeSpeakRecording()));
+    }
+
+    const ul = document.createElement('ul');
+    ul.className = 'free-speak-rubric';
+    prompt.rubric.forEach(item => {
+        const li = document.createElement('li');
+        const label = document.createElement('label');
+        label.className = 'free-speak-rubric-item';
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.className = 'free-speak-tick';
+        // An id per item so the label wraps a real control and nothing needs a
+        // click handler: this is a checkbox the learner ticks for themselves, and
+        // there is no listener anywhere in this file that reads it.
+        box.id = 'freeSpeakTick-' + item.id;
+        label.appendChild(box);
+        const text = document.createElement('span');
+        appendGrammarText(text, item.ask);
+        label.appendChild(text);
+        li.appendChild(label);
+        ul.appendChild(li);
+    });
+    host.appendChild(ul);
+
+    host.appendChild(freeSpeakParagraph(
+        'A "no" is the useful answer here — it is the thing to aim at next time you answer this ' +
+        'prompt, and answering it again is how the recording below becomes worth keeping. If you ' +
+        'want to know whether a stranger would understand you, the only honest test is to ask one: ' +
+        'send a recording to a friend and have them write down what they heard.',
+        'free-speak-rubric-close'));
+}
+
+/** Play this attempt back — this page-session's url first, then the archive. */
+function playFreeSpeakRecording() {
+    const listening = 'Playing your recording. Listen for the one thing the checklist asks about, ' +
+        'not for how you sound.';
+    if (freeSpeakSession && freeSpeakSession.url) {
+        freeSpeakStatus(listening);
+        try {
+            const audio = new Audio(freeSpeakSession.url);
+            audio.onended = () => freeSpeakStatus('That is the recording. Nothing about it was ' +
+                'scored, and nothing about it was sent anywhere.');
+            audio.onerror = () => freeSpeakStatus('That recording could not be played back.');
+            const started = audio.play();
+            if (started && typeof started.catch === 'function') {
+                started.catch(() => freeSpeakStatus('That recording could not be played back.'));
+            }
+        } catch (e) {
+            AppErrorHandler.logError(e, 'free speaking playback');
+            freeSpeakStatus('That recording could not be played back.');
+        }
+        return;
+    }
+    if (freeSpeakSession && freeSpeakSession.recordId && window.RecordingArchive) {
+        freeSpeakStatus(listening);
+        RecordingArchive.play(FREE_SPEAK_SURFACE, freeSpeakSession.recordId,
+            (text, ok) => freeSpeakStatus(text, ok));
+        return;
+    }
+    // Reachable on a browser that cannot keep anything and has already released
+    // this page-session's url (leaving the section revokes it). Saying so beats a
+    // button that does nothing.
+    freeSpeakStatus('There is no recording to play any more — this browser could not keep it, and ' +
+        'the copy in memory went when you left this section. The checklist still works from memory.');
+}
+
+// --------------------------------------------------------------------------
+// Keeping it, and the walk
+// --------------------------------------------------------------------------
+
+/**
+ * Keep the recording under the CONTENT-DERIVED promptId (FR-SPK-6, FR-DATA-6).
+ *
+ * Fire-and-forget, after markFreeSpeakDone() has already finished the task, and
+ * reporting BlobStore's own copy through the same reportArchiveSave() the
+ * listening card uses — so a quota message still names which OTHER prompt lost a
+ * recording (US-218 / BR-3).
+ */
+function keepFreeSpeakRecording(prompt, blob, meta) {
+    if (!window.RecordingArchive) return;
+    const promptId = freeSpeakSession ? freeSpeakSession.promptId : '';
+    if (!promptId || !blob || !blob.size) return;
+    RecordingArchive.save(promptId, blob, {
+        durationMs: meta && meta.durationMs,
+        mimeType: meta && meta.mimeType,
+        label: prompt ? prompt.prompt : null
+    }).then(result => {
+        // On SUCCESS the store's "Saved." adds nothing the route line above does
+        // not already say, and it would overwrite the one sentence that carries
+        // the BR-3 claim ("nothing was scored"). On any failure or eviction it
+        // replaces that line verbatim, because that is the case where BlobStore's
+        // own copy says what did NOT happen and which other prompt paid for it.
+        if (!result.ok || (result.elsewhere && result.elsewhere.length)) {
+            reportArchiveSave(result, 'freeSpeakStatus');
+        }
+        if (result.record && freeSpeakSession) freeSpeakSession.recordId = result.record.id;
+        refreshFreeSpeakArchive();
+    });
+}
+
+/** Redraw this prompt's archive, and adopt an older recording for playback. */
+function refreshFreeSpeakArchive() {
+    if (!window.RecordingArchive) return;
+    RecordingArchive.render({
+        hostId: 'freeSpeakArchive',
+        promptId: freeSpeakSession ? freeSpeakSession.promptId : '',
+        surface: FREE_SPEAK_SURFACE,
+        thing: 'prompt',
+        status: 'freeSpeakStatus'
+    }).then(drawn => {
+        // The month-one half of the comparison Strand E.7 exists for is almost
+        // never a recording made two minutes ago.
+        if (freeSpeakSession && !freeSpeakSession.recordId && drawn.records.length) {
+            freeSpeakSession.recordId = drawn.records[0].id;
+        }
+    });
+}
+
+/** Where the learner is in the walk of prompts, clamped to what is authored. */
+function freeSpeakIndex(total) {
+    const raw = Math.max(0, Math.floor(Number(state.freeSpeaking && state.freeSpeaking.index) || 0));
+    if (typeof total !== 'number' || total <= 0) return raw;
+    return Math.min(raw, total - 1);
+}
+
+/** Disable the ends of the walk rather than let Next look broken. */
+function updateFreeSpeakNavigation(total) {
+    const prev = document.getElementById('prevFreeSpeak');
+    const next = document.getElementById('nextFreeSpeak');
+    const index = freeSpeakIndex(total);
+    if (prev) prev.disabled = total === 0 || index <= 0;
+    if (next) next.disabled = total === 0 || index >= total - 1;
+}
+
+/**
+ * Draw the card from scratch: prompt, clock at zero, controls, collapsed rubric.
+ *
+ * A full redraw abandons the attempt on screen, which is why loadListeningExercise()
+ * calls ensureFreeSpeakingPrompt() instead — walking to the next SENTENCE must not
+ * wipe a recording the learner made against the PROMPT.
+ */
+function loadFreeSpeakingPrompt() {
+    const host = document.getElementById('freeSpeakPrompt');
+    if (!host) return;   // an older index.html served from cache: not an error.
+
+    releaseFreeSpeak();
+    host.textContent = '';
+
+    const prompts = freeSpeakingPromptsFor(state.currentDifficulty);
+    if (!prompts.length) {
+        // Loud and honest rather than an empty card: an honest empty space is a
+        // bug report, a hidden one is a lie (the rule the session panel states).
+        freeSpeakSession = null;
+        host.appendChild(freeSpeakParagraph(
+            'No speaking prompt could be loaded on this device. Everything else in this section ' +
+            'still works — try reloading the page.'));
+        ['freeSpeakControls', 'freeSpeakRubric'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = '';
+        });
+        const clock = document.getElementById('freeSpeakClock');
+        if (clock) clock.textContent = '';
+        const archive = document.getElementById('freeSpeakArchive');
+        if (archive) { archive.textContent = ''; archive.hidden = true; }
+        freeSpeakStatus('');
+        updateFreeSpeakNavigation(0);
+        return;
+    }
+
+    const index = freeSpeakIndex(prompts.length);
+    if (!state.freeSpeaking) state.freeSpeaking = { prompts: {}, index: 0 };
+    state.freeSpeaking.index = index;
+
+    const prompt = prompts[index];
+    freeSpeakSession = {
+        prompt: prompt,
+        promptId: window.RecordingArchive ? RecordingArchive.freeSpeakingPromptId(prompt) : '',
+        level: prompt.tier || null,
+        index: index,
+        total: prompts.length,
+        url: null,
+        recordId: null,
+        route: null,
+        clock: { startedAt: null, elapsedMs: 0, timer: null, passed: false }
+    };
+
+    renderFreeSpeakPrompt(prompt, prompt.tier);
+    freeSpeakTick();
+    renderFreeSpeakControls(prompt);
+    renderFreeSpeakRubric(prompt, false);
+    freeSpeakStatus('');
+    updateFreeSpeakNavigation(prompts.length);
+    refreshFreeSpeakArchive();
+}
+
+/**
+ * Draw the card only if it is not already showing this prompt.
+ *
+ * Called by loadListeningExercise(), which runs on every Previous/Next in the
+ * SENTENCE card and on the text-route switch. Without this guard, a learner who
+ * recorded a two-minute answer and then pressed Next → on the sentence above
+ * would watch their attempt disappear.
+ */
+function ensureFreeSpeakingPrompt() {
+    const host = document.getElementById('freeSpeakPrompt');
+    if (!host) return;
+    const prompts = freeSpeakingPromptsFor(state.currentDifficulty);
+    const wanted = prompts[freeSpeakIndex(prompts.length)];
+    const wantedId = (wanted && window.RecordingArchive)
+        ? RecordingArchive.freeSpeakingPromptId(wanted) : '';
+    if (freeSpeakSession && wantedId && freeSpeakSession.promptId === wantedId &&
+        host.childNodes.length > 0) {
+        return;
+    }
+    loadFreeSpeakingPrompt();
+}
+
+/** Move to a prompt by position, e.g. from the session router. */
+function openFreeSpeakingPrompt(index) {
+    if (!state.freeSpeaking) state.freeSpeaking = { prompts: {}, index: 0 };
+    state.freeSpeaking.index = Math.max(0, Math.floor(Number(index) || 0));
+    loadFreeSpeakingPrompt();
+    saveProgress();
+}
+
+/**
+ * The prompt the session should open on: the first one with no production yet,
+ * else wherever the learner was.
+ *
+ * "No production yet" and not "no attempt yet" — a prompt whose only history is a
+ * skip has not been produced, so it is still the one to offer.
+ */
+function freeSpeakSuggestedIndex() {
+    const prompts = freeSpeakingPromptsFor(state.currentDifficulty);
+    for (let i = 0; i < prompts.length; i++) {
+        const id = window.RecordingArchive ? RecordingArchive.freeSpeakingPromptId(prompts[i]) : '';
+        if (freeSpeakProductions(freeSpeakRecordFor(id)) === 0) return i;
+    }
+    return freeSpeakIndex(prompts.length);
+}
+
+/** Prev/Next over the prompts. Wired once, from the initialisation block. */
+function initializeFreeSpeakingButtons() {
+    const prev = document.getElementById('prevFreeSpeak');
+    const next = document.getElementById('nextFreeSpeak');
+    if (prev) {
+        prev.onclick = () => {
+            const total = freeSpeakingPromptsFor(state.currentDifficulty).length;
+            if (freeSpeakIndex(total) > 0) openFreeSpeakingPrompt(freeSpeakIndex(total) - 1);
+        };
+    }
+    if (next) {
+        next.onclick = () => {
+            const total = freeSpeakingPromptsFor(state.currentDifficulty).length;
+            if (freeSpeakIndex(total) < total - 1) openFreeSpeakingPrompt(freeSpeakIndex(total) + 1);
+        };
+    }
+}
+// ===== END FREE PRODUCTION (US-601) =====
 
 // ============================================
 // PUZZLES
@@ -8638,10 +9918,30 @@ function renderGrammarProduce(lesson) {
     const done = document.createElement('button');
     done.type = 'button';
     done.className = 'btn-primary';
-    done.textContent = 'I said it';
+    done.textContent = '🗣️ I said it';
     done.addEventListener('click', () => {
         status.className = 'grammar-feedback visible is-correct';
-        status.textContent = 'Noted. Saying it is the part that transfers to real conversation.';
+        status.textContent = 'Noted, on your word — nothing was recorded and nothing is scored. Saying it is the part that transfers to real conversation.';
+    });
+
+    // US-608 / FR-A11Y-4. The third route, and the reason it is a separate button
+    // rather than a footnote on "I said it": P2 practises at 10pm and cannot speak
+    // aloud without being overheard, so on any night she cannot make a sound, "I
+    // said it" is a lie she has to tell to finish the task. §9.1 Decision 2 says
+    // silent production IS production — sub-vocal, whispered, or typed — and that
+    // the ROUTE is reported rather than laundered. Same class and the same
+    // one-press cost as the button above it: neither is the lesser path.
+    const silently = document.createElement('button');
+    silently.type = 'button';
+    silently.className = 'btn-primary';
+    silently.textContent = '🤫 I did it silently';
+    silently.setAttribute('aria-label', 'I did it silently — whispered, under my breath, or in my head');
+    silently.addEventListener('click', () => {
+        // Not sent to SRS either, for exactly the reason "I said it" is not: a
+        // learner marking their own production right is not evidence, and
+        // FR-SRS-5 would refuse to certify it anyway.
+        status.className = 'grammar-feedback visible is-correct';
+        status.textContent = 'Noted as done silently, and that counts — building the sentence is the work; saying it out loud is how you would deliver it. Nothing was recorded and nothing is scored.';
     });
 
     const notYet = document.createElement('button');
@@ -8657,7 +9957,15 @@ function renderGrammarProduce(lesson) {
         status.textContent = 'Fine — skipping it costs you nothing. This point will come back sooner so you can try again.';
     });
 
-    buttons.appendChild(done);
+    // Silent leads when the learner has said they cannot speak aloud right now,
+    // which is the same signal the session panel's own three-way choice reads.
+    if (freeSpeakPrefersSilent()) {
+        buttons.appendChild(silently);
+        buttons.appendChild(done);
+    } else {
+        buttons.appendChild(done);
+        buttons.appendChild(silently);
+    }
     buttons.appendChild(notYet);
     host.appendChild(buttons);
     host.appendChild(status);
@@ -10358,6 +11666,21 @@ function renderPronunciationProduce(pair) {
         ' out loud, in front of a mirror if you can.', 'pron-task'
     ));
 
+    // US-608 / FR-A11Y-4. This task already needed no microphone — the self-check
+    // below is about what the learner FELT, and both its buttons complete the task
+    // — but "out loud, in front of a mirror" reads as a requirement to a learner
+    // who cannot make a sound tonight. The silent route is therefore stated rather
+    // than left to be inferred, and it is honest: the feel-checks are articulatory
+    // ("did your top teeth touch your bottom lip?"), so mouthing the word answers
+    // them exactly as well as saying it. What silence costs is the recording,
+    // which the comparison block below already says is not the task.
+    host.appendChild(pronParagraph(
+        'If you cannot speak out loud right now, mouth it or whisper it. The question below is ' +
+        'about what your mouth did, not about what came out, so a silent go answers it just as ' +
+        'well — this is one of the few things you can practise properly at midnight.',
+        'pron-silent-route'
+    ));
+
     // §6.aa rule 4: the model is offered at the same slow rate for both words, so
     // the learner is not comparing a fast clip against their own slow attempt.
     const row = document.createElement('div');
@@ -11573,7 +12896,7 @@ if (typeof Session !== 'undefined' && Session && typeof Session.registerSurfaces
             return withProduce.length
                 ? {
                     available: true,
-                    note: 'renderGrammarProduce() draws a "say it aloud" task with a self-check; both buttons complete it and neither needs a microphone (FR-SPK-9 / FR-A11Y-4).'
+                    note: 'renderGrammarProduce() draws a "say it aloud" task with a self-check; all three buttons complete it — "I said it", "I did it silently" (US-608: silent production is production) and "Skip for now" — and none of them needs a microphone (FR-SPK-9 / FR-A11Y-4).'
                 }
                 : {
                     available: false,
@@ -11643,10 +12966,29 @@ if (typeof Session !== 'undefined' && Session && typeof Session.registerSurfaces
             requirement: 'FR-SPK-8',
             note: 'No function in app.js renders a shadowing mode.'
         },
-        'speak.free': {
-            available: false,
-            requirement: 'FR-SPK-3',
-            note: 'No function in app.js renders a free-production prompt with a timer, a recording and a rubric.'
+        // US-601 / FR-SPK-3. This row said `available: false` and was right to
+        // until this build: nothing rendered a free-production prompt, so the
+        // speak step fell back to grammar.produce. It is a PREDICATE and not a
+        // bare `true`, because the answer is a fact about authored content that
+        // can change: renderFreeSpeakPrompt() needs a prompt, and
+        // freeSpeakingPromptsFor() is the same function loadFreeSpeakingPrompt()
+        // resolves the tier with — so this cannot claim a surface that would draw
+        // "no speaking prompt could be loaded".
+        'speak.free': function (ctx) {
+            const prompts = freeSpeakingPromptsFor(
+                (ctx && ctx.level) || state.currentDifficulty);
+            if (!prompts.length) {
+                return {
+                    available: false,
+                    requirement: 'FR-SPK-3',
+                    note: 'No free-production prompt is authored for any tier this build can resolve, so loadFreeSpeakingPrompt() would draw the "nothing could be loaded" card rather than a prompt.'
+                };
+            }
+            return {
+                available: true,
+                requirement: 'FR-SPK-3',
+                note: prompts.length + ' free-production prompt(s) are authored at this tier. loadFreeSpeakingPrompt() draws the prompt, an advisory count-UP clock (never a countdown — session.js decision 1), a recording kept per prompt by RecordingArchive/blobstore.js under a content-derived id, and a self-assessed rubric. Nothing is scored (FR-PRN-5 / BR-3) and all four completion routes — recorded / aloud / silent / skipped — finish it with no microphone (FR-SPK-9 / FR-A11Y-4).'
+            };
         },
 
         // updateDashboard() / updateStatisticsDisplay() already draw the streak
@@ -11892,6 +13234,30 @@ const SESSION_ROUTES = {
         return (typeof step.count === 'number' && step.count > 0)
             ? 'About ' + step.count + ' sentence(s): play each one, then say it back. Use Next → to move through them.'
             : 'Play the sentence, then say it back.';
+    },
+    /**
+     * US-601. The production step's best alternative, now that it exists.
+     *
+     * Opens the free-production card on the prompt the learner has not produced
+     * yet (freeSpeakSuggestedIndex), which is what stops the session handing them
+     * the same prompt every day — and it says the advisory length out loud rather
+     * than letting the step's own `targetSeconds` (minutes × 60) speak for a
+     * prompt that was authored with its own.
+     */
+    'speak.free': function (step) {
+        switchSection('listening');
+        openFreeSpeakingPrompt(freeSpeakSuggestedIndex());
+        sessionReveal(document.getElementById('freeSpeaking'));
+        const prompt = freeSpeakSession && freeSpeakSession.prompt;
+        if (!prompt) {
+            // The predicate said a prompt existed and by the time we got here
+            // there was none (a content file that failed to load). Say so; the
+            // step still completes through the session bar's own three-way choice.
+            return 'The speaking prompt could not be loaded, so there is nothing on screen to answer. That is a bug, not something you did.';
+        }
+        return 'Your prompt is in “Say something of your own”, at the bottom of this section: ' +
+            prompt.prompt + ' About ' + freeSpeakClockText(prompt.targetSeconds * 1000) +
+            ', and the clock does not stop you.';
     },
     'session.summary': function () {
         switchSection('dashboard');
@@ -12660,6 +14026,11 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeSentenceBuilderDragDrop();
     initializeReadingButtons();
     initializeListeningButtons();
+    // US-601. Prev/Next over the speaking prompts. Separate from
+    // initializeListeningButtons() even though the card is in that section: those
+    // controls walk sentences, these walk prompts, and one function wiring both
+    // would be the seam where a Next → starts meaning the wrong thing.
+    initializeFreeSpeakingButtons();
     initializeGrammarButtons();
     initializePronunciationButtons();
     initializePuzzleSelector();

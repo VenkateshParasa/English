@@ -39,7 +39,14 @@ const CACHE_NAME = 'english-portal-v1.0.2';
 // The previous bumps, for the record: v14 -> v15 -> v16 (US-177 / US-181,
 // #reviewCard and #mistakePanel) and v16 -> v17 (US-179, the pronunciation
 // group switcher).
-const STATIC_CACHE = 'english-portal-static-v20';
+//
+// v20 -> v21 (US-601 / US-608): the free-production card (#freeSpeaking) and the
+// silent route on Read Aloud (#readAloudSilent) are new markup in index.html
+// that new app.js draws into. index.html is network-first and app.js is
+// cache-first, so without a bump a returning learner gets the NEW index.html
+// with the OLD app.js: the two new cards would sit on screen empty, which is the
+// exact failure mode this comment block exists for.
+const STATIC_CACHE = 'english-portal-static-v21';
 const DYNAMIC_CACHE = 'english-portal-dynamic-v3';
 const API_CACHE = 'english-portal-api-v3';
 
@@ -88,6 +95,8 @@ const STATIC_ASSETS = [
     '/data/grammar/modals.js',
     '/data/grammar/present-perfect.js',
     '/data/grammar/register.js',
+    '/data/grammar/future-forms.js',
+    '/data/grammar/gerund-infinitive.js',
     '/data/pronunciation/vowels-stress.js',
     '/data/pronunciation/consonants.js',
     '/app.js',

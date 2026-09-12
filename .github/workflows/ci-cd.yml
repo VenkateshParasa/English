@@ -65,6 +65,58 @@ jobs:
         done
         echo "All tracked .js files parse."
 
+  # ---------------------------------------------------------------------------
+  # US-811 / NFR-13 / FR-CNT-1: content validation, and it actually runs.
+  #
+  # Deliberately NOT another commented-out block. It needs no browser, no jest
+  # and NO DEPENDENCIES AT ALL — `node tools/validate-content.js` loads the
+  # classic `data/*.js` scripts with the built-in `vm` module and asks
+  # js/core/mistakes.js and js/core/srs.js the questions it cannot answer alone.
+  #
+  # WHY THERE IS NO `npm ci` HERE, spelled out because it is the reason this job
+  # is safe to leave enabled while the test job is off: `npm ci` is the step that
+  # took the whole pipeline down once already (a gitignored lockfile), and the
+  # lockfile has just been hand-repaired because 48 of its `resolved` URLs
+  # pointed at hosts that only exist inside a corporate network — the failure
+  # .npmrc documents at length. A job that installs nothing cannot be broken by
+  # any of that, and cannot be broken by a future regeneration of the lockfile
+  # either. It only needs a Node binary, which setup-node provides. `cache: npm`
+  # is likewise omitted: there is nothing to cache.
+  #
+  # Discovery-based on purpose: it walks data/grammar/*.js and
+  # data/pronunciation/*.js rather than naming files, so a point authored next
+  # week is validated without anyone editing this workflow.
+  #
+  # NOT in the deploy job's `needs`, as of 2026-09-12, and this is a decision
+  # rather than an oversight. NFR-13 says a malformed content item should fail
+  # the build, and the mechanism to make it do so is one line — add `content` to
+  # `needs` below. It is left out for now because the validator is RED on arrival
+  # against pre-existing content: US-166 (`accept` entries absent from their own
+  # `options`) affects 7 items across data/grammar/countability.js and
+  # data/grammar/present-perfect.js, and two just-authored points are not yet in
+  # index.html or the precache list. Gating the GitHub Pages deploy on defects
+  # that predate this job would take the site down to report them. The job is
+  # loud instead: it runs on every push and PR, and its failure names every
+  # offending item. Add it to `needs` the moment those are closed.
+  content:
+    name: Content Validation
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+
+    - name: Validate authored content
+      # Exits non-zero on any error and prints a per-file, per-check report.
+      # The same module backs __tests__/unit/content.test.js, so this job and
+      # `npm test` can never disagree about what "valid content" means.
+      run: node tools/validate-content.js
+
   # No npm here: this project has no build step and no runtime dependencies
   # (CON-4 in docs/REQUIREMENTS.md). The check is kept so that adding a build
   # script later fails loudly rather than being silently ignored.
@@ -107,7 +159,10 @@ jobs:
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./
-        exclude_assets: 'node_modules,coverage,__tests__,.git,docs,jest.config.js,package.json,package-lock.json'
+        # `tools` holds Node-only developer scripts (tools/validate-content.js
+        # uses `fs` and `vm`). Nothing in index.html references it, so it is
+        # excluded rather than published as dead weight on the site.
+        exclude_assets: 'node_modules,coverage,__tests__,.git,docs,tools,jest.config.js,package.json,package-lock.json'
         cname: '' # Add your custom domain if needed
 
 # ---------------------------------------------------------------------------

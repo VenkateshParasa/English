@@ -91,15 +91,28 @@
  *                      ZERO_ARTICLE), while point 4 in
  *                      data/grammar/countability.js offers sets like ["advice",
  *                      "advices", "an advice", "some advices"] and ["much",
- *                      "many", "a lot of", "a"]. This is what is *offered*, not
- *                      the full set of right answers: `accept` may also list a
- *                      defensible answer nobody was shown (FR-GRM-5), and typed
- *                      input outside `options` is what `fallbackFeedback` is for.
+ *                      "many", "a lot of", "a"]. Until free text exists this is
+ *                      ALSO the full set of right answers: EVERY entry in
+ *                      `accept` must appear here (US-166). A `gap` item has no
+ *                      typed input — renderGrammarPracticeItem() builds one
+ *                      <button> per `options` entry and nothing else — so an
+ *                      accepted answer outside this array can never be
+ *                      submitted, and `fallbackFeedback` never fires for it
+ *                      either. It is dead content that also makes
+ *                      `showDifferenceOnCorrect` lie: the renderer announces two
+ *                      right answers and then names one nobody was shown. Six
+ *                      items shipped that way before tools/validate-content.js
+ *                      existed to catch it.
  *   accept             array of EVERY defensible answer, each
  *                      { answer, means }. `means` is what that choice makes the
- *                      sentence mean. FR-GRM-5 lives here: if a second reading
- *                      is defensible it goes in this array or the item is
- *                      rewritten — it is never "wrong".
+ *                      sentence mean. FR-GRM-5 lives here, and is honoured one of
+ *                      two ways: PROMOTE the second defensible answer into
+ *                      `options` so the learner can actually choose it, or name it
+ *                      as correct in `fallbackFeedback` and leave it out of
+ *                      `accept`. It is never "wrong". Before promoting, check the
+ *                      answer is licensed by THIS prompt — one shipped item
+ *                      accepted an emphatic "did see" whose own `means` had to
+ *                      invent a contradicting remark the sentence never made.
  *   showDifferenceOnCorrect
  *                      true only when accept.length > 1. Methodology §2 says a
  *                      right first answer should say nothing more; the one
@@ -131,9 +144,16 @@
  *                                    category, for authoring and analysis only.
  *                                    Never displayed: the mistake log shows one
  *                                    plain-language label per category.
- *   fallbackFeedback   { reason, contrast, retryCue } for a typed answer that is
- *                      not in `options` at all. Without it, free-text input
- *                      would produce a bare verdict, which FR-GRM-2 forbids.
+ *   fallbackFeedback   { reason, contrast, retryCue } for an answer that is not in
+ *                      `options` at all. NOTE, so it is not mistaken for a live
+ *                      path: no typed input exists in the grammar section today,
+ *                      so this fires only when an OFFERED option has no authored
+ *                      `feedback` entry. It is written properly on every item
+ *                      anyway, as the standing contract for the day free text
+ *                      arrives — and because it is where a defensible answer that
+ *                      is not offered gets named as correct rather than dropped.
+ *                      Without it, free-text input would produce a bare verdict,
+ *                      which FR-GRM-2 forbids.
  *   spoken             optional: how the answer is actually pronounced here.
  *   rendersAs          optional map { <answer>: <display form> }, for a gap that
  *                      falls at the start of a sentence. Grade against `answer`,

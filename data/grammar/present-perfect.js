@@ -62,8 +62,12 @@
  *     Accepting *completed* beside *finished* on p4, or *haven't read* beside
  *     *have not read* on p5, would make the app assert a difference that does
  *     not exist and then hand the learner two `means` strings saying it does
- *     not. Every multi-answer item below differs by aspect (p2), variety (p5) or
- *     emphasis (p1) — a real difference the sentence can carry.
+ *     not. Every multi-answer item below differs by aspect (p2) or variety (p5) —
+ *     a real difference the sentence can carry. p1 was listed here as differing by
+ *     emphasis and no longer is: its *did see* was never in `options`, so it was
+ *     unreachable (US-166), and the prompt supplies nothing for the emphasis to
+ *     contradict, so that answer now lives in `fallbackFeedback` and p1 has one
+ *     right answer with the flag cleared.
  *     The genuine near-equivalences are told the truth about where the
  *     methodology puts honest limits: in `caveats`.
  * =============================================================================
@@ -214,14 +218,25 @@ const GRAMMAR_PRESENT_PERFECT = {
             prompt: "I ___ him last week, at the airport — we had about ten minutes before his flight.",
             options: ["saw", "have seen", "have saw", "was seeing"],
             accept: [
-                { answer: "saw", means: "One occasion inside a frame that has closed. *Last week* shut the lid, so the past simple is the only tense available here." },
-                { answer: "did see", means: "The same thing with emphasis on it — what you would say if someone had just told you he was abroad all week. The *did* is contradicting them, not changing the tense." }
+                { answer: "saw", means: "One occasion inside a frame that has closed. *Last week* shut the lid, so the past simple is the only tense available here." }
             ],
-            // Two right answers. "did see" is not among the options, but a learner
-            // typing it is emphasising, not making an error (FR-GRM-5), and the
-            // difference between the two is worth stating even on a correct first
-            // answer.
-            showDifferenceOnCorrect: true,
+            // ONE right answer, so nothing extra is shown on a correct first try
+            // (US-188). *Did see* was accepted here and is not among the options, so
+            // it could never be submitted (US-166) — and while it was listed, app.js
+            // announced "Both answers here are right, and they do not mean the same
+            // thing" and then named the answer the learner was never shown.
+            //
+            // DEMOTED rather than promoted, and not only because emphasis is not
+            // this item's subject — the item isolates the finished-time word and the
+            // tense it forces. Emphatic *did* needs a claim to push back against,
+            // and this prompt gives it none: it is plain narration that goes on to
+            // describe the meeting. The `means` this entry used to carry had to
+            // invent the context itself ("if someone had just told you he was abroad
+            // all week"), which is a context the sentence does not supply. Offering
+            // it as a button would teach that emphatic *do* is freely available in
+            // neutral narration, and it is not. `fallbackFeedback` still names it as
+            // correct, with the condition attached.
+            showDifferenceOnCorrect: false,
             spoken: "*I saw him* runs together as /aɪ ˈsɔː rɪm/ — the /h/ of *him* drops and the /r/ links it to *saw*. Compare *I've seen him* /aɪv ˈsiːn ɪm/: the vowel in the verb is the part your listener actually hears.",
             feedback: [
                 {

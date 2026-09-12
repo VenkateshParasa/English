@@ -973,8 +973,25 @@
             label: cleanString(meta && meta.label, 200)
         };
 
+        // RESTORE-ONLY METADATA (US-138). js/core/portability.js re-inserts a
+        // recording that ALREADY EXISTED, so it supplies the original createdAt.
+        // Without this, every restored recording is stamped with the restore's own
+        // clock — and FR-SPK-6's whole point is hearing month one against month
+        // three, so rescuing the archive would be the act that destroys it.
+        //
+        // cleanNumber() rejects null, '' and non-numeric strings, so an ordinary
+        // caller passing no createdAt is unaffected and keeps now().
+        const restoredAt = cleanNumber(meta && meta.createdAt);
+        if (restoredAt !== null) row.createdAt = restoredAt;
+
+        // Kept OFF `row` on purpose: `row` is what gets persisted into STORE_META,
+        // and this is an instruction to commit(), not a field of the record.
+        const restoreBaseline = (typeof (meta && meta.baseline) === 'boolean')
+            ? meta.baseline
+            : null;
+
         return openDb().then(function (db) {
-            return commit(db, row, blob).catch(function (e) {
+            return commit(db, row, blob, 0, restoreBaseline).catch(function (e) {
                 if (!isQuotaError(e)) throw e;
 
                 // QuotaExceededError. The browser's quota is not our 50MB cap:
@@ -1012,7 +1029,7 @@
                 // Nothing has been lost at this point — the failed transaction
                 // rolled back its own eviction along with its write.
                 logError(e, 'blobstore quota on first write');
-                return commit(db, row, blob, size * QUOTA_EVICT_FACTOR).then(function (result) {
+                return commit(db, row, blob, size * QUOTA_EVICT_FACTOR, restoreBaseline).then(function (result) {
                     result.quotaRetry = true;
                     return result;
                 });
@@ -1079,7 +1096,7 @@
      *        multiple), but freeing NOTHING refuses before any payload is
      *        written, so a second quota failure is never provoked for nothing.
      */
-    function commit(db, row, blob, quotaHeadroom) {
+    function commit(db, row, blob, quotaHeadroom, restoreBaseline) {
         const headroom = cleanNumber(quotaHeadroom) || 0;
         return runTx(db, [STORE_META, STORE_AUDIO], 'readwrite', function (tx, ctx) {
             const metaStore = tx.objectStore(STORE_META);
@@ -1106,7 +1123,20 @@
                 // The first recording for a prompt is its pinned baseline, and
                 // the flag is persisted so later writes do not have to
                 // re-derive which row that was.
-                row.baseline = PIN_BASELINE && mine.length === 0;
+                //
+                // A RESTORE (US-138) supplies the original flag instead, because
+                // "first recording at this prompt" is a fact about the learner's
+                // history, not about the order rows happen to be re-inserted in.
+                // It is CLAMPED to false when this prompt already has a pinned
+                // baseline, and that clamp is load-bearing: two baselines at one
+                // prompt is US-222 one level down — planRetention() credits ONE
+                // retention slot to a baseline while evictionCandidates()
+                // protects every row carrying the flag, so the second would be
+                // named a victim by the plan and shielded by the filter, and
+                // commit() would end up deleting a pinned baseline.
+                row.baseline = (restoreBaseline !== null && restoreBaseline !== undefined)
+                    ? (PIN_BASELINE && restoreBaseline && !mine.some(isPinnedBaseline))
+                    : (PIN_BASELINE && mine.length === 0);
 
                 const projected = mine.concat([{
                     id: NEW_ID, createdAt: row.createdAt, size: row.size, baseline: row.baseline
