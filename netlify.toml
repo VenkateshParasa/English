@@ -5,6 +5,25 @@
   publish = "."
   command = ""
 
+  [build.environment]
+    # Netlify installs dependencies whenever it sees a package.json, even with an
+    # empty build command. This site needs NONE of them: `dependencies` in
+    # package.json is empty, and jest / jest-environment-jsdom / http-server are
+    # all devDependencies used only for local testing. So `--omit=dev` makes the
+    # install a no-op and fetches nothing at all.
+    #
+    # This is belt and braces, not the fix. The actual failure was 48 lockfile
+    # entries resolved to artifacts.apple.com and npm.apple.com — hosts that do
+    # not exist off the corporate network — which failed the deploy with
+    # ENOTFOUND; those URLs have been rewritten to the public registry and
+    # .npmrc pins it. But a deploy of a static site should not be able to break
+    # because of a test-only dependency tree at all, so it no longer downloads
+    # one. It also takes ~90 seconds off every build.
+    #
+    # If a real runtime dependency is ever added, this line must go, or it will
+    # be missing in production while working locally.
+    NPM_FLAGS = "--omit=dev"
+
 # Ignore folders that should never ship to production.
 # (node_modules / coverage are also covered by .gitignore.)
 
