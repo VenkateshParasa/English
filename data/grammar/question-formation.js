@@ -263,7 +263,7 @@ const GRAMMAR_QUESTION_FORMATION = {
                     ],
                     retryCue: "This clause IS the question, so something has to come in front of *you*. The verb *live* has no helper — so which word does English lend you?",
                     grammaticalButDifferent: false,
-                    logAs: "gram.word-order",
+                    logAs: "gram.auxiliary-omitted",
                     errorKind: "auxiliary-omitted-in-direct-question"
                 },
                 {

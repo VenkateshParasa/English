@@ -431,6 +431,63 @@
             drill: { strand: 'grammar', target: 'prepositions' }
         },
         {
+            // US-230. NOTHING IN THIS ROW CHANGED, AND THAT IS THE FINDING.
+            //
+            // The complaint was that this label narrows its own requirement:
+            // §3.2's T-G8 is "SOV residue in questions AND embedded clauses", and
+            // 'Question word order inside a longer sentence' is false of the
+            // direct-question half. It is — but the direct-question half does not
+            // route here, so no learner has ever been shown a false label from it.
+            // That was established before anything was touched, by enumerating
+            // both sides:
+            //
+            //   ROUTES HERE (all five, all embedded — label TRUE of every one):
+            //     question-formation-p3 "what time is it"  `inversion-in-embedded-clause`
+            //     question-formation-p3 "what is the time" `inversion-in-embedded-clause`
+            //     question-formation-p3 "what time it's"   `clause-final-contraction`
+            //     question-formation-p4 "where was the meeting"
+            //                          `inversion-in-embedded-clause-no-question`
+            //     question-formation-p4 "where is the meeting"
+            //                          `inversion-in-embedded-clause-plus-wrong-tense`
+            //   THE OTHER HALF OF T-G8 routes to `gram.word-order`, whose label
+            //   'Words in the wrong order' is TRUE of every one of them:
+            //     question-formation-p1 "you do live"  `auxiliary-after-subject-sov-residue`
+            //     question-formation-p2 "he is knowing" `no-inversion-plus-stative-progressive`
+            //     past-simple-p3        "they did ask"  `auxiliary-after-subject-sov-residue`
+            //
+            // So T-G8 is realised by TWO rows, and the defect was that no file
+            // said so — an author routing the next direct-question residue error
+            // had two plausible destinations and no rule. This comment is the rule:
+            // **the residue in an EMBEDDED clause comes here; the residue in a
+            // DIRECT question goes to `gram.word-order`.**
+            //
+            // The label was NOT widened to cover both, on three grounds:
+            //  1. The two halves are mirror images, not two shapes of one habit.
+            //     Embedded: English wants statement order and the learner used
+            //     question order (*You know where is the station?*) — too much
+            //     inversion. Direct: English wants question order and the learner
+            //     used statement order (*Where you are going?*) — too little. A
+            //     label true of both could only say "the inversion is in the wrong
+            //     place", which is the vague wording US-224 refused.
+            //  2. Widening here would mean re-pointing the two live
+            //     `gram.word-order` residue sites, which halves that row's count
+            //     for no gain and orphans the description of history that cannot
+            //     move: record() stores no `errorKind`, so the log physically
+            //     cannot say which past `gram.word-order` entries were residue.
+            //  3. A THIRD row was explicitly out of scope, and would have been
+            //     wrong anyway. US-224 minted `gram.auxiliary-omitted` because
+            //     "words in the wrong order" was FALSE of an omitted word. Here
+            //     both labels are TRUE of everything routed to them, so this is a
+            //     narrower-than-ideal NAME, not a false finding, and a name is not
+            //     worth a row that halves a count.
+            //
+            // `code` therefore stays 'T-G8' — this row is the half of T-G8 that
+            // has a Telugu-transfer label and an L1 filter to be found by, and
+            // `gram.word-order` cannot take the code: it is `l1: null` and its
+            // largest producer (app.js's sentence builder) is not T-G8 at all.
+            // Whoever owns REQUIREMENTS.md should consider splitting T-G8 into
+            // T-G8a / T-G8b to match; until then the mapping above is the
+            // authority and this row carries the code for both halves' sake.
             id: 'gram.embedded-question-order',
             code: 'T-G8',
             strand: 'grammar',
@@ -516,20 +573,102 @@
             // so the panel and the lesson it opens say the same thing. `auxiliary`
             // survives in the id and in the content's `errorKind`, which are
             // authoring data and are never displayed.
+            //
+            // ---------------------------------------------------------------
+            // US-229. ONE ROW COVERS QUESTIONS **AND** NEGATIVES, and this is the
+            // argument, because it is the one place in this class of defect where
+            // the US-159 merge test comes out the other way from US-182 and US-224.
+            //
+            // The gap was a negative built with no helper at all — *"I not got the
+            // message"*, *"I not know"*. It logged `gram.verb-form`, which is broad
+            // but not false; this row was the right DIAGNOSIS and the wrong LABEL,
+            // because 'A question with its helper word missing' is a finding about
+            // questions and that sentence is not one. Both options were open:
+            // widen this label, or mint a second row for the negative shape.
+            //
+            // ONE ROW. Four grounds, in the order they decided it:
+            //
+            //  1. It is ONE HABIT WITH ONE CAUSE, and this row's own explanation
+            //     already stated the cause before the negative case arrived:
+            //     Telugu borrows no word to ask a question or to say no, so there
+            //     is nothing for English "do" to correspond to and it does not come
+            //     to mind. That single fact produces *"Where you live?"* and *"I
+            //     not know"* identically. The learner has one thing to notice.
+            //  2. It is ONE REMEDIATION, and the CONTENT ALREADY SAYS SO.
+            //     past-simple.js's `past-simple-p2` feedback for *not got* reads
+            //     "It is the same borrowing you do to ask a question, working here
+            //     to carry a negative instead", and its p3 `alsoNotice` says "Two
+            //     jobs, one word". A taxonomy that split what the lesson teaches as
+            //     one move would contradict the lesson its own button opens.
+            //  3. THE PANEL — the decisive one, and the US-159 objection in its
+            //     strongest form. The question shape has ONE producer
+            //     (past-simple-p3 "they asked"; question-formation-p1 is pending
+            //     the re-point US-224 asked for) and the negative shape has ONE
+            //     (past-simple-p2 "not got"). Two rows of one producer each, ranked
+            //     by decayed count in a top FIVE, means a learner with this habit
+            //     plausibly sees NEITHER of them, while one row of two producers
+            //     ranks. Splitting would halve a count that is already small enough
+            //     for halving to be the difference between a diagnosis and silence.
+            //  4. AND THE VAGUE-LABEL OBJECTION DOES NOT BITE HERE, which is why
+            //     this is not US-182 or US-224 again. Those two split because no
+            //     wording could cover their cases and stay a diagnosis: "a word
+            //     missing from the front of the sentence" spanned a dropped subject
+            //     and a dropped copula, and "words in the wrong order, or a word
+            //     missing" spanned a scrambled adverb and an absent auxiliary — in
+            //     both, two DIFFERENT KINDS OF THING (presence vs identity,
+            //     position vs presence). Here both cases are the ABSENCE OF THE
+            //     SAME WORD. So the label can name the word, name the fact, and
+            //     name the two sentence types it happens in, in eight words, and
+            //     every one of them is specific: "A question or a negative with its
+            //     helper word missing". Nothing had to be blurred to fit.
+            //
+            // WHAT WOULD HAVE CHANGED THE ANSWER: if the two shapes needed
+            // different things noticed. They do not — *"Where do you live?"* and
+            // *"I didn't know"* are the same borrowing, the same word, the same
+            // lesson. Compare `gram.copula` / `gram.subject-dropped`, which share
+            // one drill precisely BECAUSE the learner has to be told which of two
+            // different words went missing. Here it is one word.
+            //
+            // The finer grain is not lost, exactly as `gram.uncountable-plural`
+            // established: content carries `errorKind`
+            // (`auxiliary-omitted-in-direct-question` /
+            // `bare-not-negation-without-auxiliary`), which is authoring and
+            // analysis data and is never displayed.
+            //
+            // THE ID DOES NOT CHANGE and nothing already logged moves. Widening is
+            // label-only, so every entry stored under this id since US-224 stays,
+            // stays ranked, and is still described truly. One CONTENT change is
+            // outstanding and belongs to whoever owns that file: past-simple.js's
+            // `past-simple-p2` *not got* option must move from
+            // `logAs: "gram.verb-form"` to `logAs: "gram.auxiliary-omitted"`,
+            // keeping its `errorKind`. Until it does, this row's wording is true of
+            // more than reaches it, which is the safe direction — a label that
+            // covers a case nothing sends costs the learner nothing, while the
+            // reverse is the whole defect.
             id: 'gram.auxiliary-omitted',
             code: null,
             strand: 'grammar',
             l1: 'telugu',
             priority: 'S',
-            label: 'A question with its helper word missing',
-            explanation: 'Telugu does not move words to ask something — a question word or a particle does the whole job — so there is no Telugu word for English "do" to correspond to, and it does not come to mind. English wants a helper in front of the subject of whichever clause is the question, and when the verb has no helper of its own it borrows "do", "does" or "did". English does leave the helper out in quick speech — "You coming?", "Seen it yet?" — so this is not always an error; inside a full question it is heard as learner English rather than misunderstood, and one short borrowed word puts it right.',
-            example: '"Where you live?" → "Where do you live?"; "You know him?" → "Do you know him?"',
+            label: 'A question or a negative with its helper word missing',
+            explanation: 'Telugu borrows no word to ask a question or to say no — a question word does the one job, and the single word kādu does the other — so there is no Telugu word for English "do" to correspond to, and it does not come to mind. English wants a helper for both: in front of the subject when the clause is the question, and carrying the "not" when the clause is a negative. Where the verb has no helper of its own, English lends it "do", "does" or "did" for either job. English does leave the helper out in quick speech — "You coming?", "Seen it yet?" — so this is not always an error; in a full sentence it is heard as learner English rather than misunderstood, and one short borrowed word puts it right.',
+            example: '"Where you live?" → "Where do you live?"; "You know him?" → "Do you know him?"; "I not got the message" → "I didn\'t get the message"',
             // Target `question-formation`, i.e. CURRICULUM.md §3 Strand B point 6,
             // giving srsKey `gram:question-formation`. Authored by US-215, and this
             // row is the reason the check added by US-187 matters: it reads as a
             // LIVE target rather than as an assumption, so the day someone renames
             // that point the button stops being drawn instead of quietly opening
             // nothing.
+            //
+            // US-229 left the destination alone. `question-formation` is where the
+            // borrowing is TAUGHT — "the helper moves in front of the subject",
+            // which is the idea both shapes need — and past-simple.js's p2, which
+            // is where the negative shape is drilled, points its own learners back
+            // at that framing rather than replacing it. Adding `past-simple` as an
+            // `alsoTargets` entry would change `targets` / `srsKeys` /
+            // `liveTargets` for a row that already ships, which is a drill decision
+            // and not a wording one; whoever makes it should read US-187's
+            // per-destination tests first.
             drill: { strand: 'grammar', target: 'question-formation' }
         },
         {
@@ -547,14 +686,90 @@
         // -- Grammar: not L1-specific ------------------------------------
 
         {
+            // US-185. THE LABEL MOVED; THE ID, THE DRILL AND EVERY PRODUCER
+            // STAYED. This row used to read 'Past tense not carried through the
+            // whole sentence', which describes a MULTI-CLAUSE error — the past
+            // established once and then dropped by a later verb. Not one thing
+            // that has ever routed here is that error, so every learner who has
+            // hit this row has been shown a finding about something they did not
+            // do. Same defect class as `gram.copula` (US-182) and
+            // `gram.word-order` (US-224); this is the last of the three.
+            //
+            // ALL SIX PRODUCERS, and what each one actually is. Every one is a
+            // single clause whose verb names a different time from the time the
+            // rest of the sentence has already named — in BOTH directions, which
+            // is the fact the old label got wrong:
+            //
+            //   data/grammar/be.js — a PAST form in a PRESENT context,
+            //   errorKind `past-be-in-present-context` on all three:
+            //     be-p1  "My sister was a doctor"  (asked what she does now)
+            //     be-p3  "My parents were both teachers — they still work there"
+            //     be-p4  "I was twenty-nine"       (introducing yourself now)
+            //   data/grammar/past-simple.js — a PRESENT form in a PAST context:
+            //     past-simple-p1  "We go … on Saturday"   `present-form-for-finished-past`
+            //     past-simple-p2  "I don't get the message"
+            //                                              `present-auxiliary-for-past-event`
+            //     past-simple-p5  "I send it … last night" `present-form-for-finished-past`
+            //
+            // WHY THE LABEL MOVED RATHER THAN THE PRODUCERS. The obvious
+            // alternative was to send all six to `gram.verb-form` and retire this
+            // row's routing. That row's label is 'Right tense, wrong form of the
+            // verb' — it makes an EXPLICIT claim that the tense chosen was
+            // correct, and all six of these chose the wrong tense. Routing them
+            // there would swap one false label for another, and would make
+            // `gram.verb-form` false of its own fifteen producers as well, every
+            // one of which really is a right-tense-wrong-shape error (*have
+            // went*, *didn't got*, *does he knows*, *was sending*, *catched*).
+            // Widening `gram.verb-form` to cover wrong-tense too would leave it
+            // saying "something is wrong with the verb", which is the vague-label
+            // failure this whole class of defect is about. So the two rows stay
+            // apart on exactly the line their labels draw: WHICH TIME (here) and
+            // WHICH SHAPE (there).
+            //
+            // Widening this row's wording rather than splitting it is the US-159
+            // call, and it passes that test where US-182 and US-224 failed it: the
+            // remediation is one and the same in both directions. Read what the
+            // rest of the sentence already says about time, and put the verb in
+            // that time. There is no second thing to notice, so a second row
+            // would buy two half-counts and one destination.
+            //
+            // THE ID IS NOT RENAMED. record() writes this string into
+            // `mistakeLog`, and an entry whose category has left the taxonomy is
+            // kept but not ranked, so a rename would silently stop describing a
+            // learner's history instead of moving it. `tense-agreement` also
+            // remains the phrase FR-SRS-3 uses ("past-tense agreement") and the
+            // widened label still says *agree*, so the id has not drifted from
+            // what the row means. Ids are opaque storage keys and are never
+            // shown; the label is what the learner reads, so the label is what
+            // widened — exactly as `gram.uncountable-plural` did.
+            //
+            // ALREADY-LOGGED ENTRIES: all of them stay, all of them stay ranked,
+            // and all of them are now described BETTER than they were, because
+            // every entry under this id was written by one of the six sites above
+            // and the new label is true of all six. Nothing needs migrating, which
+            // is the one comfortable case in this class — US-182 and US-224 both
+            // had to leave some history under a stale label because record()
+            // stores no `errorKind`.
+            //
+            // The drill stays `past-simple`, which US-226 authored on 2026-09-12,
+            // so this row is live rather than dead. `be` is the natural second
+            // destination for the three be.js producers and is deliberately NOT
+            // added here: `alsoTargets` would change `targets` / `srsKeys` /
+            // `liveTargets` for a row that already ships, which is a separate
+            // decision from the wording, and past-simple.js's own p2 teaches the
+            // be case in `alsoNotice` ("*be* is its own helper and never borrows
+            // *did*"). Whoever adds it should read US-187's per-destination tests.
+            //
+            // Finer grain stays in the content's `errorKind`, as everywhere else
+            // here: the six values above are authoring data and are never shown.
             id: 'gram.tense-agreement',
             code: null,
             strand: 'grammar',
             l1: null,
             priority: 'M',
-            label: 'Past tense not carried through the whole sentence',
-            explanation: 'Once a sentence is in the past, every verb in it goes to the past too. The marker is the first thing to slip when you are speaking under pressure.',
-            example: '"Yesterday I go and bought it" → "Yesterday I went and bought it"',
+            label: 'A verb in the wrong time for the rest of the sentence',
+            explanation: 'Something else in the sentence has usually already said when this is — "on Saturday", "last night", "until five", "they still work there" — and the verb has to agree with it. Telugu lets the time word carry that on its own, so a verb left in the other time feels finished; in English the two have to match, and the sentence itself tells you which time the verb needs.',
+            example: '"We go to my cousin\'s place on Saturday" → "We went to my cousin\'s place on Saturday"; "My sister was a doctor" (asked what she does now) → "My sister\'s a doctor"',
             drill: { strand: 'grammar', target: 'past-simple' }
         },
         {
@@ -569,6 +784,24 @@
             drill: { strand: 'grammar', target: 'present-simple-vs-continuous' }
         },
         {
+            // US-185 considered folding `gram.tense-agreement` into this row and
+            // rejected it. This label makes an explicit positive claim — the tense
+            // chosen was RIGHT — and it is true of all fifteen of its producers
+            // (past-simple.js: *have went*, *didn't got*, *did they asked*,
+            // *catched*, *was sending*, *had lived*; present-perfect.js's five
+            // participle sites; question-formation.js: *does he knows*). Every
+            // tense-agreement producer chose the wrong tense, so this label would
+            // be false of them, and a wording true of both would read "something
+            // is wrong with the verb", which stops being a diagnosis. The two rows
+            // divide on WHICH SHAPE (here) versus WHICH TIME (there), and both
+            // drill `past-simple` because one lesson fixes both.
+            //
+            // One producer here is a KNOWN MISFIT, reported rather than moved
+            // because this file cannot edit content: past-simple.js's
+            // `past-simple-p2` sends *"I not got the message"* here with errorKind
+            // `bare-not-negation-without-auxiliary`. Nothing about that answer is a
+            // verb-form error — the shape is a missing helper — and US-229 widened
+            // `gram.auxiliary-omitted` to be its true destination. See that row.
             id: 'gram.verb-form',
             code: null,
             strand: 'grammar',
@@ -596,6 +829,17 @@
             // question-shaped producer since US-215 and taught only the
             // sentence-builder shape, so a learner meeting the finding after a
             // question exercise saw an example from a different exercise.
+            //
+            // US-230 added ONE fact and changed nothing here: this row is the
+            // DIRECT-QUESTION half of §3.2's T-G8 ("SOV residue in questions and
+            // embedded clauses"), and `gram.embedded-question-order` is the
+            // embedded half. Three of its producers are that residue —
+            // question-formation-p1 "you do live", question-formation-p2 "he is
+            // knowing", past-simple-p3 "they did ask" — and this label is true of
+            // all three, as it is of the sentence builder. The routing rule is
+            // written out beside the T-G8 code, on that other row. This row keeps
+            // `code: null`, because it is `l1: null` and its largest producer is
+            // not T-G8 at all.
             id: 'gram.word-order',
             code: null,
             strand: 'grammar',

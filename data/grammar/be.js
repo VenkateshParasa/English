@@ -11,7 +11,7 @@
  * already carries the matching row, `gram.copula`, whose drill target is
  * `be` — i.e. this point. That is the default `mistakeCategory` here.
  *
- * ⚠️ TWO AUTHORING NOTES
+ * ⚠️ THREE AUTHORING NOTES
  *
  * 1. TESTING AN ABSENCE. The error this point fixes is a *missing word*, and a
  *    plain gap-fill hands the learner the one thing they do not have: the
@@ -37,15 +37,77 @@
  *    contracted form, which is what is left to learn once the absence is
  *    audible.
  *
- * 2. SUBJECT OMISSION HAS NO CATEGORY. `js/core/mistakes.js` has no id for a
- *    dropped *subject* ("Am in a meeting", "Is very good"), which is a real and
- *    common Indian-English form and a near neighbour of this point. Nothing here
- *    needed it — the distractors are all be-forms, so every wrong answer routes
- *    honestly to `gram.copula` (be missing or wrong) or
- *    `gram.subject-verb-agreement` (be present, wrong person) or
- *    `gram.tense-agreement` (be present, wrong time). Do not invent an id: that
- *    file owns the taxonomy, and an unknown id lands everything in
- *    'general.uncategorised'.
+ * 2. WHERE EVERY WRONG ANSWER HERE GOES, AND WHY NONE OF THEM MOVED (US-185).
+ *    Three ids carry the thirteen authored `logAs` entries in this file, and the
+ *    routing is by WHAT IS WRONG rather than by which item it happened in:
+ *
+ *      gram.copula (T-G2, the point default) — a be word is MISSING.
+ *        be-p1 "my sister"  `zero-copula-noun-complement`
+ *        be-p2 "i"          `zero-copula-place-complement`
+ *        be-p4 ""           `zero-copula-not-noticed`
+ *        be-p5 "he not"     `not-without-be`
+ *        be-p6 "she"        `zero-copula-adjective-complement`
+ *      gram.subject-verb-agreement — the be word is PRESENT, wrong person.
+ *        be-p2 "i is", be-p3 "is", be-p3 "am", be-p4 "is", be-p6 "she are"
+ *      gram.tense-agreement — the be word is PRESENT, wrong TIME.
+ *        be-p1 "my sister was", be-p3 "were", be-p4 "was"
+ *        all three `past-be-in-present-context`
+ *
+ *    That third id used to be labelled 'Past tense not carried through the whole
+ *    sentence' — a multi-clause error, and the OPPOSITE of what these three
+ *    sites produce, so a learner who chose *was* here was shown a finding about
+ *    something they had not done. US-185 fixed it in js/core/mistakes.js by
+ *    moving the LABEL, not the routing: the row now reads "A verb in the wrong
+ *    time for the rest of the sentence", which is true of a past form in a
+ *    present context (here) and of a present form in a past context
+ *    (data/grammar/past-simple.js's three sites). All three `logAs` above are
+ *    therefore correct as written and were left alone. `gram.verb-form` was
+ *    considered and rejected as their destination: its label asserts that the
+ *    tense chosen was RIGHT, which is false of every one of these.
+ *
+ *    If you add an item here, note the line the two present-tense ids draw.
+ *    Wrong PERSON is `gram.subject-verb-agreement`; wrong TIME is
+ *    `gram.tense-agreement`. An answer that is wrong in both would be a new
+ *    decision, not a coin toss — say which one it is and why, in a comment.
+ *
+ *    ONE BOUNDARY THAT MOVED UNDER `be-p5` AND MUST NOT BE CROSSED. US-229
+ *    widened `gram.auxiliary-omitted` from "A question with its helper word
+ *    missing" to cover NEGATIVES built with no helper — *"I not got the
+ *    message"*, *"I not know"*. `be-p5`'s *"he not"* is a helperless negative
+ *    too, and it stays on `gram.copula`, because the word that is missing here is
+ *    the BE ITSELF and not a borrowed *do*: *He not ready* is repaired by putting
+ *    *is* back (*he isn't* / *he's not*), never by lending it *does*. That is the
+ *    fact past-simple.js's own `past-simple-p2` `alsoNotice` states from the other
+ *    side — "*be* is its own helper and never borrows *did*", which is why *Did
+ *    you be there?* is not a sentence. `gram.copula`'s label — 'Dropped "am",
+ *    "is" or "are"' — is true of *"he not"* and `gram.auxiliary-omitted`'s is
+ *    not, so do not re-point it.
+ *
+ * 3. SUBJECT OMISSION NOW HAS A CATEGORY, AND NOTHING HERE PRODUCES IT.
+ *    This header used to report that `js/core/mistakes.js` had no id for a
+ *    dropped *subject* ("Am in a meeting", "Is very good"), and to say "do not
+ *    invent one". US-182 added `gram.subject-dropped` — label "A sentence that
+ *    starts without its subject", drill `gram:be`, i.e. this point — so the gap
+ *    is closed and that instruction is spent.
+ *
+ *    NOTHING IN THIS FILE EMITS IT, on purpose and not by oversight: every
+ *    distractor authored here has its subject present, so every wrong answer
+ *    still routes honestly to one of the three ids above. The row exists with no
+ *    producer, which is an ordinary state (see that file's note on unused versus
+ *    unusable rows), and the one-line edit that would give it one is recorded in
+ *    __tests__/unit/mistakes.test.js's US-182 block: add the bare be form `"am"`
+ *    to `be-p2`'s options and give it a feedback entry with
+ *    `logAs: "gram.subject-dropped"`. That is a content decision about whether
+ *    to offer the learner "Am in a meeting until five" as a choosable sentence,
+ *    and it is deliberately NOT taken here. An option with no authored feedback
+ *    entry falls through to `fallbackFeedback`, which carries no `logAs` and so
+ *    would be logged as the point default `gram.copula` — the false label that
+ *    row exists to avoid — so the option and its feedback entry must land in the
+ *    same edit.
+ *
+ *    Still true, and still the rule: do not invent an id. That file owns the
+ *    taxonomy, and record() REJECTS an unknown id outright, so a typo loses the
+ *    mistake rather than misfiling it.
  * =============================================================================
  */
 

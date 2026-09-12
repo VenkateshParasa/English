@@ -1049,7 +1049,7 @@ describe('US-224 — an omitted helper word is its own row, and gram.word-order 
 
         const top = Mistakes.topCategories();
         expect(top.map(r => r.id)).toEqual(['gram.auxiliary-omitted', 'gram.word-order']);
-        expect(top[0].label).toBe('A question with its helper word missing');
+        expect(top[0].label).toBe('A question or a negative with its helper word missing');
         expect(top[0].count).toBe(4);
         expect(top[1].label).toBe('Words in the wrong order');
         expect(top[1].count).toBe(2);
@@ -1105,6 +1105,449 @@ describe('US-224 — an omitted helper word is its own row, and gram.word-order 
         // Whatever the omission is logged as, its row's label must be true of it.
         expect(Mistakes.getCategory(omission.logAs).label)
             .toMatch(omission.logAs === 'gram.auxiliary-omitted' ? /helper/ : /order/);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// The label-truth wave: US-185, US-230, US-229.
+//
+// One rule, applied three times: a row's LABEL has to be true of everything that
+// routes to it, because the label is shown to a learner as a diagnosis of their
+// own English. A label that misdescribes what they did tells them they have a
+// habit they do not have, which this file's subject module argues costs more than
+// no finding at all. `gram.copula` (US-182) and `gram.word-order` (US-224) were
+// fixed for exactly this; these three finish the class.
+//
+// Every one of these blocks ENUMERATES the producers off the content rather than
+// asserting the label is fine. The helper below reads `logAs` / `mistakeCategory`
+// out of every authored grammar point, so a new routing that the label does not
+// cover fails a test here instead of reaching a learner.
+// ---------------------------------------------------------------------------
+
+/** Every authored grammar point, whatever its export is called. */
+const grammarPoints = () => {
+    const files = [
+        '../../data/grammar/be.js',
+        '../../data/grammar/countability.js',
+        '../../data/grammar/past-simple.js',
+        '../../data/grammar/prepositions.js',
+        '../../data/grammar/present-perfect.js',
+        '../../data/grammar/present-simple-continuous.js',
+        '../../data/grammar/question-formation.js'
+    ];
+    const out = [];
+    files.forEach(f => Object.keys(require(f)).forEach(k => {
+        const point = require(f)[k];
+        if (point && typeof point === 'object' && Array.isArray(point.practice)) out.push(point);
+    }));
+    // Plus the points that live inline in data/grammar.js.
+    const inline = require('../../data/grammar.js').grammarLessons || {};
+    Object.keys(inline).forEach(tier => (inline[tier] || []).forEach(p => {
+        if (p && Array.isArray(p.practice) && !out.some(q => q.id === p.id)) out.push(p);
+    }));
+    return out;
+};
+
+/**
+ * Every authored routing to `categoryId`, as
+ * `{ point, item, answer, errorKind }` — read off the content, never restated.
+ *
+ * `fallbackFeedback` is not a routing: it carries no `logAs`, so an answer that
+ * reaches it is logged as the point's own `mistakeCategory`, which is reported
+ * separately by defaultingPoints() below.
+ */
+const producersOf = categoryId => {
+    const out = [];
+    grammarPoints().forEach(point => (point.practice || []).forEach(item =>
+        (item.feedback || []).forEach(f => {
+            if (f && (f.logAs || point.mistakeCategory) === categoryId && f.logAs) {
+                out.push({
+                    point: point.id, item: item.id,
+                    answer: f.forAnswer, errorKind: f.errorKind
+                });
+            }
+        })));
+    return out;
+};
+
+/** The points whose UNROUTED wrong answers land on `categoryId`. */
+const defaultingPoints = categoryId =>
+    grammarPoints().filter(p => p.mistakeCategory === categoryId).map(p => p.id);
+
+/** The distinct errorKinds routed to `categoryId`, sorted. */
+const errorKindsOf = categoryId =>
+    Array.from(new Set(producersOf(categoryId).map(p => p.errorKind))).sort();
+
+describe('US-185 — gram.tense-agreement\'s label moved to match its producers', () => {
+    // The row read 'Past tense not carried through the whole sentence' — a
+    // MULTI-CLAUSE error, the past established once and then dropped by a later
+    // verb. Not one thing that has ever routed there is that error, so the label
+    // was false for 100% of what reached it. The fix moved the LABEL and left the
+    // id, the drill and all six producers alone.
+
+    it('no longer claims a multi-clause error, and names what the six producers are', () => {
+        const cat = Mistakes.getCategory('gram.tense-agreement');
+        expect(cat.label).toBe('A verb in the wrong time for the rest of the sentence');
+        // The defect being fixed: the label must not describe the past being
+        // dropped part-way through a sentence, because no producer does that.
+        expect(cat.label).not.toMatch(/carried through|whole sentence/i);
+        // ...and it must name the thing every producer actually got wrong.
+        expect(cat.label).toMatch(/\btime\b/i);
+        expect(cat.label).toMatch(/\bverb\b/i);
+    });
+
+    it('is TRUE of every one of its producers, enumerated off the content', () => {
+        const producers = producersOf('gram.tense-agreement');
+        // Six sites in two files, and NOTHING falls through to this id by default.
+        expect(producers).toHaveLength(6);
+        expect(Array.from(new Set(producers.map(p => p.point))).sort())
+            .toEqual(['be', 'past-simple']);
+        expect(defaultingPoints('gram.tense-agreement')).toEqual([]);
+
+        // The two directions, which is the fact the old label got wrong: be.js
+        // chose a PAST form in a PRESENT context, past-simple.js a PRESENT form in
+        // a PAST context. Both are "a verb in the wrong time for the sentence";
+        // neither is "the past not carried through".
+        expect(errorKindsOf('gram.tense-agreement')).toEqual([
+            'past-be-in-present-context',
+            'present-auxiliary-for-past-event',
+            'present-form-for-finished-past'
+        ]);
+        expect(producers.filter(p => p.point === 'be')
+            .every(p => p.errorKind === 'past-be-in-present-context')).toBe(true);
+        expect(producers.filter(p => p.point === 'be').map(p => p.item).sort())
+            .toEqual(['be-p1', 'be-p3', 'be-p4']);
+        expect(producers.filter(p => p.point === 'past-simple').map(p => p.item).sort())
+            .toEqual(['past-simple-p1', 'past-simple-p2', 'past-simple-p5']);
+    });
+
+    it('did NOT move the producers to gram.verb-form, whose label excludes them', () => {
+        // The alternative fix, and why it was refused: this label asserts that the
+        // tense chosen was RIGHT, and all six tense-agreement producers chose the
+        // wrong tense — so routing them here would swap one false label for
+        // another, and widening this one to cover both would leave it saying
+        // "something is wrong with the verb".
+        const verbForm = Mistakes.getCategory('gram.verb-form');
+        expect(verbForm.label).toBe('Right tense, wrong form of the verb');
+        expect(verbForm.label).toMatch(/right tense/i);
+        // Both rows still exist and still divide the work.
+        expect(Mistakes.isKnownCategory('gram.tense-agreement')).toBe(true);
+        expect(Mistakes.isKnownCategory('gram.verb-form')).toBe(true);
+        // ...and every gram.tense-agreement site is still a gram.tense-agreement
+        // site: none of the six was re-pointed.
+        expect(producersOf('gram.verb-form').map(p => p.errorKind))
+            .not.toContain('past-be-in-present-context');
+    });
+
+    it('keeps the shipped id, so nothing already logged is orphaned', () => {
+        // record() writes this string into `mistakeLog`, and an entry whose
+        // category has left the taxonomy is kept but NOT ranked — so a rename
+        // would silently stop describing a learner's history instead of moving it.
+        // Widening the wording moves nothing and orphans nothing: every entry under
+        // this id was written by one of the six sites above, and the new label is
+        // true of all six.
+        expect(Mistakes.isKnownCategory('gram.tense-agreement')).toBe(true);
+        expect(Mistakes.getCategory('gram.tense-agreement').code).toBeNull();
+        expect(Mistakes.getCategory('gram.tense-agreement').priority).toBe('M');
+        // FR-SRS-3 names "past-tense agreement" as one of its examples; the id
+        // still carries that phrase and the label still says *agree*.
+        expect(Mistakes.getCategory('gram.tense-agreement').explanation)
+            .toMatch(/agree/);
+        const stored = Mistakes.record('gram.tense-agreement', { at: daysAgo(1) });
+        expect(stored.category).toBe('gram.tense-agreement');
+        expect(Mistakes.topCategories()[0].label)
+            .toBe('A verb in the wrong time for the rest of the sentence');
+    });
+
+    it('teaches both directions in the example, drawn from real items', () => {
+        const cat = Mistakes.getCategory('gram.tense-agreement');
+        // A present form in a past context (past-simple-p1)...
+        expect(cat.example).toMatch(/We went to my cousin's place on Saturday/);
+        // ...and a past form in a present context (be-p1), which the old example
+        // did not cover at all.
+        expect(cat.example).toMatch(/My sister was a doctor/);
+    });
+
+    it('keeps its drill, which US-226 made live rather than dead', () => {
+        // The row is no longer dead, which is what made the wrong label expensive:
+        // it sent the learner to a REAL lesson about the wrong thing.
+        const pastSimple = require('../../data/grammar/past-simple.js').GRAMMAR_PAST_SIMPLE;
+        expect(pastSimple.id).toBe('past-simple');
+        const t = Mistakes.drillTarget('gram.tense-agreement');
+        expect(t).toMatchObject({
+            strand: 'grammar', target: 'past-simple', srsKey: 'gram:past-simple',
+            targets: ['past-simple'], srsKeys: ['gram:past-simple']
+        });
+        expect(t.srsKey).toBe(pastSimple.srsKey);
+        Mistakes.registerDrillTargets('grammar', [pastSimple]);
+        expect(Mistakes.drillTarget('gram.tense-agreement').authored).toBe(true);
+        // `be` is deliberately NOT a second destination: adding it would change
+        // `targets` / `srsKeys` for a row that already ships, which is a drill
+        // decision rather than a wording one.
+        expect(t.targets).not.toContain('be');
+    });
+
+    it('follows §5 tone: second person, no blame, no exclamation marks', () => {
+        const cat = Mistakes.getCategory('gram.tense-agreement');
+        expect(cat.explanation).toMatch(/\byou\b/i);
+        expect(cat.label + cat.explanation + cat.example).not.toMatch(/!/);
+        expect(cat.explanation).not.toMatch(/careless|lazy|wrong of you|bad/i);
+        expect(cat.explanation.length).toBeGreaterThan(20);
+        expect(cat.reportable).toBe(true);
+    });
+});
+
+describe('US-230 — T-G8 is realised by TWO rows, and both labels are true', () => {
+    // §3.2 states T-G8 as "SOV residue in questions AND embedded clauses", and
+    // `gram.embedded-question-order`'s label — 'Question word order inside a
+    // longer sentence' — is false of the direct-question half. The direct half
+    // does not route there, though: it goes to `gram.word-order`, where the label
+    // IS true. So nothing was broken and nothing was changed. The defect was that
+    // no file said which half goes where, leaving the next author two plausible
+    // destinations and no rule.
+
+    it('establishes first that nothing is broken today', () => {
+        // Every one of the five routings to the embedded row IS embedded, so the
+        // label is true of all of them.
+        const producers = producersOf('gram.embedded-question-order');
+        expect(producers).toHaveLength(5);
+        expect(Array.from(new Set(producers.map(p => p.point)))).toEqual(['question-formation']);
+        expect(producers.map(p => p.item).sort()).toEqual([
+            'question-formation-p3', 'question-formation-p3', 'question-formation-p3',
+            'question-formation-p4', 'question-formation-p4'
+        ]);
+        expect(errorKindsOf('gram.embedded-question-order')).toEqual([
+            'clause-final-contraction',
+            'inversion-in-embedded-clause',
+            'inversion-in-embedded-clause-no-question',
+            'inversion-in-embedded-clause-plus-wrong-tense'
+        ]);
+        // Nothing falls through to it by default either.
+        expect(defaultingPoints('gram.embedded-question-order')).toEqual([]);
+    });
+
+    it('sends the DIRECT-question residue to gram.word-order, where the label is true', () => {
+        // The other half of T-G8. "Words in the wrong order" is true of each of
+        // these: the helper is present and standing on the wrong side of the
+        // subject, or no inversion happened at all.
+        const residue = producersOf('gram.word-order')
+            .filter(p => p.errorKind !== 'auxiliary-omitted-in-direct-question');
+        expect(residue.length).toBeGreaterThanOrEqual(3);
+        residue.forEach(p => expect(p.errorKind)
+            .toMatch(/sov-residue|no-inversion/));
+        expect(residue.map(p => p.item).sort()).toEqual([
+            'past-simple-p3', 'question-formation-p1', 'question-formation-p2'
+        ]);
+        expect(Mistakes.getCategory('gram.word-order').label).toBe('Words in the wrong order');
+    });
+
+    it('leaves BOTH rows exactly as they shipped — no label drift', () => {
+        const embedded = Mistakes.getCategory('gram.embedded-question-order');
+        expect(embedded.label).toBe('Question word order inside a longer sentence');
+        expect(embedded.code).toBe('T-G8');
+        expect(embedded.priority).toBe('S');
+        expect(embedded.l1).toBe('telugu');
+        expect(embedded.example).toBe('"You know where is the station?" → "Do you know where the station is?"');
+        const order = Mistakes.getCategory('gram.word-order');
+        expect(order.label).toBe('Words in the wrong order');
+        // gram.word-order cannot take the T-G8 code: it is not L1-specific and its
+        // largest producer (app.js's sentence builder) is not T-G8 at all.
+        expect(order.code).toBeNull();
+        expect(order.l1).toBeNull();
+    });
+
+    it('mints NO third row for a distinction the learner does not need', () => {
+        // US-224 added a row because "words in the wrong order" was FALSE of an
+        // omitted word. Here both labels are TRUE of everything routed to them, so
+        // this is a narrower-than-ideal NAME, not a false finding — and a name is
+        // not worth a row that halves a count.
+        expect(Mistakes.categoryIds()).toHaveLength(36);
+        ['gram.question-order', 'gram.direct-question-order', 'gram.sov-residue',
+            'gram.inversion'].forEach(id =>
+            expect(Mistakes.isKnownCategory(id)).toBe(false));
+        // Exactly one row carries T-G8, and it is the embedded half.
+        expect(Mistakes.categories().filter(c => c.code === 'T-G8').map(c => c.id))
+            .toEqual(['gram.embedded-question-order']);
+    });
+
+    it('covers the whole of T-G8 between the two rows, with one drill', () => {
+        const qf = require('../../data/grammar/question-formation.js').GRAMMAR_QUESTION_FORMATION;
+        expect(Mistakes.drillTarget('gram.embedded-question-order').srsKey)
+            .toBe('gram:' + qf.id);
+        expect(Mistakes.drillTarget('gram.word-order').srsKey).toBe('gram:' + qf.id);
+        // One lesson teaches both halves, which is why the split costs the learner
+        // nothing: whichever row ranks, the button opens the same point.
+        expect(Mistakes.drillTarget('gram.embedded-question-order').srsKey)
+            .toBe(Mistakes.drillTarget('gram.word-order').srsKey);
+    });
+});
+
+describe('US-229 — ONE row covers a missing helper in a question AND in a negative', () => {
+    // There was no id for a negative built with no auxiliary — *"I not got the
+    // message"*, *"I not know"*. It logged `gram.verb-form`: broad, not false.
+    // `gram.auxiliary-omitted` was the right diagnosis and the wrong label,
+    // because its wording was about questions specifically.
+    //
+    // ONE ROW, not two. The habit and its cause are single (Telugu borrows no word
+    // for either job, so English "do" does not come to mind), the remediation is
+    // single, and the content already teaches them as one move. The panel decides
+    // it: each shape has ONE producer, so two rows of one producer each would rank
+    // in a top FIVE roughly never, while one row of two producers ranks. And the
+    // vague-label objection that split US-182 and US-224 does not bite, because
+    // both cases are the ABSENCE OF THE SAME WORD rather than two different kinds
+    // of thing — so the label can name the word, the fact and the two sentence
+    // types and stay specific.
+
+    it('has a label true of BOTH shapes, and still says nothing about order', () => {
+        const cat = Mistakes.getCategory('gram.auxiliary-omitted');
+        expect(cat.label).toBe('A question or a negative with its helper word missing');
+        // US-224's guarantees survive the widening.
+        expect(cat.label).not.toMatch(/order/i);
+        expect(cat.label).toMatch(/question/i);
+        expect(cat.label).toMatch(/missing|left out|no helper/i);
+        // ...and US-229's addition: the negative shape is now named, so a learner
+        // who wrote *"I not got the message"* is not shown a finding about
+        // questions.
+        expect(cat.label).toMatch(/negative/i);
+        expect(cat.example).toMatch(/I not got the message/);
+        expect(cat.example).toMatch(/I didn't get the message/);
+        // Both halves are still taught by the example, not just the new one.
+        expect(cat.example).toMatch(/Where you live\?/);
+        expect(cat.example).toMatch(/Do you know him\?/);
+    });
+
+    it('explains both jobs of the borrowed word, in the lesson\'s own vocabulary', () => {
+        const cat = Mistakes.getCategory('gram.auxiliary-omitted');
+        const qf = require('../../data/grammar/question-formation.js').GRAMMAR_QUESTION_FORMATION;
+        // "helper", never "auxiliary", in anything the learner reads — the panel
+        // and the lesson its button opens have to say the same word.
+        expect(cat.label + cat.explanation).toMatch(/helper/);
+        expect(cat.label + cat.explanation).not.toMatch(/auxiliar/i);
+        expect(qf.review.rulePrompt).toMatch(/helper/);
+        // The two jobs, both named: in front of the subject, and carrying the not.
+        expect(cat.explanation).toMatch(/in front of the subject/);
+        expect(cat.explanation).toMatch(/"not"|negative/);
+        expect(cat.explanation).toMatch(/"do", "does" or "did"/);
+        // US-224's honesty commitments are unchanged.
+        expect(cat.explanation).toMatch(/not always an error/);
+        expect(cat.explanation).toMatch(/You coming\?/);
+        expect(cat.explanation).toMatch(/rather than misunderstood/);
+        expect(cat.explanation).toMatch(/\byou\b/i);
+        expect(cat.label + cat.explanation + cat.example).not.toMatch(/!/);
+    });
+
+    it('is ONE row, not two: no second id was minted for the negative', () => {
+        // The US-159 objection in its strongest form. Splitting halves both counts,
+        // and both counts are already one producer each.
+        expect(Mistakes.categoryIds()).toHaveLength(36);
+        ['gram.negative-helper-omitted', 'gram.auxiliary-omitted-negative',
+            'gram.bare-negation', 'gram.not-without-helper'].forEach(id =>
+            expect(Mistakes.isKnownCategory(id)).toBe(false));
+        // One habit, one count, one drill, one destination — unchanged by the
+        // widening.
+        expect(Mistakes.drillTarget('gram.auxiliary-omitted')).toMatchObject({
+            strand: 'grammar', target: 'question-formation',
+            srsKey: 'gram:question-formation', targets: ['question-formation']
+        });
+        expect(Mistakes.getCategory('gram.auxiliary-omitted').code).toBeNull();
+        expect(Mistakes.getCategory('gram.auxiliary-omitted').priority).toBe('S');
+        expect(Mistakes.getCategory('gram.auxiliary-omitted').l1).toBe('telugu');
+    });
+
+    it('reports ONE finding when both shapes arrive, which is the whole argument', () => {
+        // A learner who omits the helper in a question twice and in a negative
+        // twice has one habit and sees one row with four occurrences. Split across
+        // two rows it would be two rows of two, either of which can fall out of a
+        // top five behind an unrelated four.
+        seed('gram.auxiliary-omitted', [1, 2], { given: 'you live', source: 'grammarPractice' });
+        seed('gram.auxiliary-omitted', [3, 4], { given: 'not got', source: 'grammarPractice' });
+        const top = Mistakes.topCategories();
+        expect(top).toHaveLength(1);
+        expect(top[0].id).toBe('gram.auxiliary-omitted');
+        expect(top[0].count).toBe(4);
+        expect(top[0].share).toBe(1);
+        expect(top[0].label).toMatch(/question or a negative/);
+    });
+
+    it('is TRUE of every producer, and ready for the one that has not moved yet', () => {
+        // The question shape already routes here.
+        const producers = producersOf('gram.auxiliary-omitted');
+        expect(producers.length).toBeGreaterThan(0);
+        producers.forEach(p => expect(p.errorKind)
+            .toMatch(/auxiliary-omitted-in-direct-question|bare-not-negation-without-auxiliary/));
+
+        // The negative shape is past-simple-p2's *not got* option, and re-pointing
+        // it is a one-line edit to a file this suite does not own. Written to hold
+        // BOTH BEFORE AND AFTER that edit, in the style of the US-224 block: it
+        // pins that wherever the helperless negative is logged, that row's label is
+        // true of it — not which row currently has it.
+        const pastSimple = require('../../data/grammar/past-simple.js').GRAMMAR_PAST_SIMPLE;
+        const notGot = pastSimple.practice
+            .find(i => i.id === 'past-simple-p2').feedback
+            .find(f => f.forAnswer === 'not got');
+        expect(notGot.errorKind).toBe('bare-not-negation-without-auxiliary');
+        expect(['gram.verb-form', 'gram.auxiliary-omitted']).toContain(notGot.logAs);
+        // Whichever it is, it must be loggable and its label must not be a claim
+        // about questions alone.
+        expect(Mistakes.unknownCategories([notGot.logAs])).toEqual([]);
+        expect(Mistakes.getCategory(notGot.logAs).label).not.toBe(
+            'A question with its helper word missing');
+        // ...and this row is ready for it: the label already covers negatives, so
+        // the content edit needs no further change here.
+        expect(Mistakes.getCategory('gram.auxiliary-omitted').label).toMatch(/negative/i);
+    });
+
+    it('does NOT sweep up be-p5, where the missing word is the be and not a helper', () => {
+        // The boundary the widening created. *"He not ready"* is a helperless
+        // negative too, and it stays on `gram.copula`: the word missing there is
+        // the be itself, repaired by putting *is* back, never by lending it *does*.
+        // `gram.copula`'s label is true of it and this row's is not.
+        const be = require('../../data/grammar/be.js').GRAMMAR_BE;
+        const heNot = be.practice.find(i => i.id === 'be-p5').feedback
+            .find(f => f.forAnswer === 'he not');
+        expect(heNot.errorKind).toBe('not-without-be');
+        expect(heNot.logAs).toBe('gram.copula');
+        expect(Mistakes.getCategory('gram.copula').label).toBe('Dropped "am", "is" or "are"');
+        // So no `not-without-be` routing leaks into this row.
+        expect(errorKindsOf('gram.auxiliary-omitted')).not.toContain('not-without-be');
+    });
+});
+
+describe('the whole taxonomy: every producer\'s label is checked, not asserted', () => {
+    // The invariant behind all three stories, as one test. Any authored routing to
+    // a row must resolve, and the row it resolves to must be reportable — because
+    // an unreportable row silently swallows a diagnosis, and an unknown id makes
+    // record() drop the mistake entirely.
+
+    it('routes every authored grammar mistake to a registered, reportable row', () => {
+        const declared = [];
+        grammarPoints().forEach(point => {
+            if (point.mistakeCategory) declared.push(point.mistakeCategory);
+            (point.practice || []).forEach(item => (item.feedback || []).forEach(f => {
+                if (f && f.logAs) declared.push(f.logAs);
+            }));
+        });
+        expect(declared.length).toBeGreaterThan(30);
+        expect(Mistakes.unknownCategories(declared)).toEqual([]);
+        Array.from(new Set(declared)).forEach(id =>
+            expect(Mistakes.getCategory(id).reportable).toBe(true));
+    });
+
+    it('leaves no row whose label contradicts the errorKinds routed to it', () => {
+        // A spot check with teeth, over the four rows this wave touched or argued
+        // about. Each pairs a row with a pattern its errorKinds must NOT match.
+        [
+            // Nothing misordered may be filed as an omission...
+            ['gram.auxiliary-omitted', /residue|inversion|order/],
+            // ...and nothing omitted may be filed as a wrong TIME.
+            ['gram.tense-agreement', /omitted|without-auxiliary|residue/],
+            // The embedded row takes only embedded routings.
+            ['gram.embedded-question-order', /direct-question/],
+            // And the copula row takes only missing-be routings.
+            ['gram.copula', /wrong-person|past-be/]
+        ].forEach(([id, forbidden]) => {
+            errorKindsOf(id).forEach(kind => expect(kind).not.toMatch(forbidden));
+        });
     });
 });
 

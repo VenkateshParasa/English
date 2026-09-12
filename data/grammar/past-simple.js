@@ -145,16 +145,21 @@
  *                         `auxiliary-after-subject-sov-residue` as one of its two
  *                         producers, so the errorKind here matches point 6's.
  *
- * ONE MISSING ID, reported and not invented: there is no category for a NEGATIVE
- * built with no helper at all — *"I not got the message"*, *"I not know"*.
- * `gram.auxiliary-omitted` is the right diagnosis but the wrong label: its label
- * and explanation are about questions specifically ("A question with its helper
- * word missing"), so a learner who wrote a helperless negative would be shown a
- * finding about questions. That option (`past-simple-p2`, *not got*) logs
- * `gram.verb-form` instead — broad but not false, and it drills the point the
- * learner is already in. Widening `gram.auxiliary-omitted` to cover negatives is
- * a one-line change to that row's label and explanation, and it belongs to
- * whoever owns that file.
+ * THE HELPERLESS NEGATIVE NOW HAS ITS OWN ROW (US-229, resolved 2026-09-12).
+ * When this point was authored there was no category for a NEGATIVE built with
+ * no helper at all — *"I not got the message"*, *"I not know"* — so that option
+ * (`past-simple-p2`, *not got*) logged `gram.verb-form`: broad, not false, and it
+ * drilled the point the learner was already in. `gram.auxiliary-omitted` existed
+ * but its label named questions only, so a learner who wrote a helperless
+ * negative would have been shown a finding about questions.
+ *
+ * That row has since been widened to "A question or a negative with its helper
+ * word missing", on the argument that both shapes are the absence of the SAME
+ * word from the same cause — Telugu borrows no word to ask or to negate, so
+ * there is no Telugu word for English *do* and it does not come to mind. Two
+ * rows of one producer each would also both have failed to rank in a top five.
+ * So `not got` now logs `gram.auxiliary-omitted`, and `errorKind` keeps the
+ * finer grain.
  *
  * -----------------------------------------------------------------------------
  * FOUR RENDERER CONSTRAINTS THE CONTENT BELOW IS SHAPED BY
@@ -430,7 +435,7 @@ const GRAMMAR_PAST_SIMPLE = {
                     ],
                     retryCue: "*Not* needs a helper to sit on. Which helper does English lend a plain verb in the past?",
                     grammaticalButDifferent: false,
-                    logAs: "gram.verb-form",
+                    logAs: "gram.auxiliary-omitted",
                     errorKind: "bare-not-negation-without-auxiliary"
                 },
                 {
