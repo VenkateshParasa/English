@@ -659,3 +659,527 @@ describe('reading feedback and mistake producers (US-140 / US-141 / US-186)', ()
             .forEach(source => expect(appSource).toContain(source));
     });
 });
+
+/**
+ * Listening items: the string[] -> object[] conversion (US-701 / FR-LSN-1).
+ *
+ * This is the one block in this file that tests BEHAVIOUR rather than structure,
+ * and it is here because data.js now carries a normaliser and exports it under a
+ * `typeof module` guard. That guard exists for this suite: "a bare string still
+ * works" is the whole promise of US-701, and a regex over source text cannot check
+ * it. The promise is not hypothetical — service-worker.js serves app.js cache-first
+ * and index.html network-first, so a returning learner really can hold one shape in
+ * one file and the other shape in the other.
+ *
+ * THE ZERO-LOSS PROOF lives here too. The 30 sentences are written out below
+ * exactly as they were authored as strings, so a conversion that drops, reorders or
+ * silently edits one fails a test rather than quietly costing a learner an item.
+ */
+describe('listening items (US-701 / FR-LSN-1)', () => {
+    const Data = require(path.join(ROOT, 'data.js'));
+    const { normaliseListeningItem, normaliseListeningList, listeningExercises } = Data;
+
+    // The pre-US-701 content, verbatim. Do not "tidy" this list: it is the
+    // before-image half of the proof, not a copy of the current data.
+    const AUTHORED = {
+        foundation: [
+            "Hello, how are you today?",
+            "I am learning English every day.",
+            "The weather is beautiful outside.",
+            "My favorite color is blue.",
+            "I like to read books.",
+            "She is my best friend.",
+            "We go to school together.",
+            "The cat is sleeping on the sofa.",
+            "I love my family very much.",
+            "Today is a wonderful day."
+        ],
+        everyday: [
+            "Practice makes perfect in everything you do.",
+            "Learning a new language opens many opportunities.",
+            "Success comes to those who work hard.",
+            "Understanding different cultures is important.",
+            "Knowledge is the key to success.",
+            "Every challenge is an opportunity to grow.",
+            "Reading helps improve your vocabulary.",
+            "Communication skills are essential in life.",
+            "Dedication and persistence lead to achievement.",
+            "Education is the foundation of progress."
+        ],
+        confident: [
+            "Collaboration enhances productivity and innovation.",
+            "Implementing effective strategies requires careful planning.",
+            "Understanding different perspectives broadens your worldview.",
+            "Demonstrating your skills builds confidence and credibility.",
+            "Fundamental principles guide successful decision-making.",
+            "Versatile individuals adapt well to changing circumstances.",
+            "Significant achievements require consistent effort and determination.",
+            "Beneficial habits contribute to long-term success.",
+            "Accomplishing goals demands focus and perseverance.",
+            "Efficient time management maximizes productivity and results."
+        ]
+    };
+
+    describe('the normaliser accepts both authored shapes', () => {
+        it('normalises the OLD bare-string shape', () => {
+            // The shape every item had before US-701, and the one a stale cached
+            // data.js still holds. Not a legacy case to be swept up later: a
+            // string is a valid shorthand for `{ text: <string> }`, for good.
+            expect(normaliseListeningItem('Hello, how are you today?', 'foundation')).toEqual({
+                text: 'Hello, how are you today?',
+                // FR-A11Y-2 needs a transcript for EVERY audio item, so it
+                // defaults to the text rather than to ''. For a TTS-read sentence
+                // that is the truth, not a placeholder.
+                transcript: 'Hello, how are you today?',
+                tier: 'foundation',
+                rate: null,
+                seconds: null,
+                situation: null,
+                focus: null,
+                notes: null,
+                shadow: false,
+                // US-702's room, and always an array so a consumer can loop
+                // without a guard.
+                questions: []
+            });
+        });
+
+        it('normalises the NEW object shape and keeps every field', () => {
+            const q = { question: 'Can the speaker come?', options: ['Yes', 'No'], correct: 1 };
+            expect(normaliseListeningItem({
+                text: 'Sorry, I can\'t make it.',
+                transcript: 'Sorry, I can’t make it — something\'s come up.',
+                tier: 'everyday',
+                rate: 0.75,
+                seconds: 62,
+                situation: 'cancelling plans',
+                focus: 'connected-speech',
+                notes: 'Note the linking in "make it".',
+                shadow: true,
+                questions: [q]
+            }, 'foundation')).toEqual({
+                text: 'Sorry, I can\'t make it.',
+                transcript: 'Sorry, I can’t make it — something\'s come up.',
+                // The item's own tier wins over the map key it was found under.
+                tier: 'everyday',
+                rate: 0.75,
+                seconds: 62,
+                situation: 'cancelling plans',
+                focus: 'connected-speech',
+                notes: 'Note the linking in "make it".',
+                shadow: true,
+                questions: [q]
+            });
+        });
+
+        it('copies the questions array rather than aliasing it', () => {
+            const authored = { text: 'x', questions: [{ question: 'a' }] };
+            const item = normaliseListeningItem(authored, 'foundation');
+            item.questions.push({ question: 'b' });
+            expect(authored.questions).toHaveLength(1);
+        });
+
+        it('accepts only the three speeds FR-LSN-2 names', () => {
+            expect(Data.LISTENING_RATES).toEqual([0.75, 1, 1.25]);
+            [0.75, 1, 1.25].forEach(rate => {
+                expect(normaliseListeningItem({ text: 'x', rate }).rate).toBe(rate);
+            });
+            // Not snapped to the nearest allowed value: silently changing an
+            // authored number is worse than ignoring it, because the author never
+            // finds out. null means "no authored default", and the learner's
+            // selection decides.
+            [0, 2, 1.1, '1', null, NaN].forEach(rate => {
+                expect(normaliseListeningItem({ text: 'x', rate }).rate).toBeNull();
+            });
+        });
+    });
+
+    describe('the normaliser refuses what it cannot render', () => {
+        // null, not a placeholder item. An item with no text renders an empty card
+        // and plays silence, and a learner cannot tell that apart from a broken
+        // phone — so the caller drops it and loadListeningExercise() says so.
+        it.each([
+            ['a number', 42],
+            ['null', null],
+            ['undefined', undefined],
+            ['an array', ['Hello']],
+            ['an object with no text', { transcript: 'Hello', questions: [] }],
+            ['an empty string', ''],
+            ['whitespace only', '   '],
+            ['text that is whitespace only', { text: '\n\t ' }],
+            ['text that is not a string', { text: 42 }]
+        ])('drops %s', (_label, raw) => {
+            expect(normaliseListeningItem(raw, 'foundation')).toBeNull();
+        });
+
+        it('reads a non-array `questions` as no questions, not as one question', () => {
+            // `questions: {}` is an authoring slip. Array.isArray, not truthiness,
+            // so it cannot become a single unusable question object.
+            expect(normaliseListeningItem({ text: 'x', questions: {} }).questions).toEqual([]);
+            expect(normaliseListeningItem({ text: 'x', questions: 'two' }).questions).toEqual([]);
+        });
+
+        it('trims, and never returns an empty transcript for a playable item', () => {
+            const item = normaliseListeningItem({ text: '  Spaced out  ', transcript: '   ' });
+            expect(item.text).toBe('Spaced out');
+            // FR-A11Y-2: a whitespace transcript is not a transcript.
+            expect(item.transcript).toBe('Spaced out');
+        });
+
+        it('drops the unrenderable entries from a list and keeps the rest in order', () => {
+            expect(normaliseListeningList(['a', { text: 'b' }, null, { text: '' }, 'c'], 'foundation')
+                .map(i => i.text)).toEqual(['a', 'b', 'c']);
+            expect(normaliseListeningList('not a list', 'foundation')).toEqual([]);
+            expect(normaliseListeningList(undefined)).toEqual([]);
+        });
+    });
+
+    describe('zero content loss', () => {
+        it('keeps the same three tiers', () => {
+            expect(Object.keys(listeningExercises)).toEqual(Object.keys(AUTHORED));
+        });
+
+        it('keeps 30 items — 10 per tier, the count before the conversion', () => {
+            const count = map => Object.keys(map).reduce((n, tier) => n + map[tier].length, 0);
+            expect(count(listeningExercises)).toBe(30);
+            expect(count(AUTHORED)).toBe(30);
+            expect(count(listeningExercises)).toBe(count(AUTHORED));
+            Object.keys(AUTHORED).forEach(tier => {
+                expect(listeningExercises[tier]).toHaveLength(AUTHORED[tier].length);
+            });
+        });
+
+        it('preserves every sentence, character for character, in its original position', () => {
+            // Position matters as much as content: state.completedExercises holds
+            // `listening_<tier>_<index>` stamps, so reordering the array would
+            // re-point every stamp a learner has already earned at a different
+            // sentence. That is why this compares index by index.
+            Object.keys(AUTHORED).forEach(tier => {
+                const now = listeningExercises[tier].map(
+                    (raw, i) => normaliseListeningItem(raw, tier));
+                expect(now.map(item => item && item.text)).toEqual(AUTHORED[tier]);
+                // And the transcript half of the promise: every item can answer
+                // FR-A11Y-2 without any content being authored for it.
+                expect(now.map(item => item && item.transcript)).toEqual(AUTHORED[tier]);
+            });
+        });
+
+        it('has no authored item the normaliser refuses', () => {
+            Object.keys(listeningExercises).forEach(tier => {
+                listeningExercises[tier].forEach((raw, i) => {
+                    expect(normaliseListeningItem(raw, tier)).not.toBeNull();
+                });
+            });
+        });
+
+        it('authors no comprehension question yet, and says so here (US-702)', () => {
+            // Deliberate. US-701 makes the FIELD exist; authoring the questions is
+            // US-702's 5 points and a content-review job. If this ever fails
+            // because questions have arrived, the `lsn.gist` producer note in
+            // app.js (drillDestinations, and the 'listen.comprehend' surface
+            // predicate) has to be revisited in the same commit — a question with
+            // no renderer is a step the session planner would promise and no
+            // screen could honour.
+            const all = Object.keys(listeningExercises)
+                .flatMap(tier => listeningExercises[tier].map(raw => normaliseListeningItem(raw, tier)));
+            expect(all).toHaveLength(30);
+            expect(all.every(item => item.questions.length === 0)).toBe(true);
+        });
+    });
+});
+
+/**
+ * The listening surface: transcript gating, speed control and the text route
+ * (US-703 / US-704 / US-711 — FR-LSN-2, FR-LSN-3, FR-LSN-4, FR-A11Y-2).
+ *
+ * Half markup contract, half static source check, for the same reason as the
+ * pronunciation block above: app.js cannot be required, and the failure these
+ * guard against is silent. A transcript that leaks before the attempt does not
+ * throw — it renders perfectly and quietly turns a listening exercise into a
+ * reading exercise, which is exactly what this section did before US-703.
+ */
+describe('listening transcript gate, speed and text route (US-703 / US-704 / US-711)', () => {
+    const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+    const section = () => doc.getElementById('listening');
+
+    /** The body of one top-level function, by brace matching. */
+    function functionBody(header) {
+        const start = appSource.indexOf(header);
+        expect(start).toBeGreaterThan(-1);
+        let depth = 0;
+        for (let i = appSource.indexOf('{', start); i < appSource.length; i++) {
+            if (appSource[i] === '{') depth++;
+            else if (appSource[i] === '}' && --depth === 0) return appSource.slice(start, i + 1);
+        }
+        throw new Error('unbalanced braces after ' + header);
+    }
+
+    describe('the markup starts with the transcript unreachable (FR-LSN-3)', () => {
+        it('ships #listenSentence empty and masked', () => {
+            // No JS has run yet. A sentence in the markup would be the leak in its
+            // purest form: visible in "view source" before the learner has heard
+            // anything at all.
+            const el = doc.getElementById('listenSentence');
+            expect(el).not.toBeNull();
+            expect(el.textContent.trim()).toBe('');
+            expect(el.classList.contains('is-masked')).toBe(true);
+        });
+
+        it('ships #revealTranscript hidden', () => {
+            const btn = doc.getElementById('revealTranscript');
+            expect(btn).not.toBeNull();
+            expect(btn.tagName).toBe('BUTTON');
+            // `hidden`, not display:none in a style attribute — app.js toggles the
+            // attribute, and a screen reader must not reach a control that is not
+            // available yet.
+            expect(btn.hasAttribute('hidden')).toBe(true);
+            expect(btn.closest('#listening')).not.toBeNull();
+        });
+
+        it('ships the Read Aloud card locked, with the reason on screen', () => {
+            // #targetWord IS the transcript. An open Read Aloud card before the
+            // attempt is not a second exercise, it is the same leak one card down.
+            const target = doc.getElementById('targetWord');
+            expect(target.textContent.trim()).toBe('');
+            expect(doc.getElementById('startSpeech').hasAttribute('disabled')).toBe(true);
+            const lock = doc.getElementById('readAloudLock');
+            expect(lock).not.toBeNull();
+            expect(lock.closest('#listening')).not.toBeNull();
+            // FR-A11Y-5's cousin: a disabled control with no explanation is its own
+            // small dishonesty.
+            expect(lock.textContent.trim().length).toBeGreaterThan(0);
+        });
+
+        it('has a no-microphone attempt route (FR-A11Y-4)', () => {
+            // Recording was the only way to finish an item, so a refused
+            // microphone ended the section — and after US-703 would also have made
+            // the transcript unreachable for good. R-7 says learners do refuse.
+            const btn = doc.getElementById('listeningRepeated');
+            expect(btn).not.toBeNull();
+            expect(btn.tagName).toBe('BUTTON');
+            expect(btn.hasAttribute('disabled')).toBe(false);
+            expect(btn.closest('#listening')).not.toBeNull();
+        });
+
+        it('has the FR-A11Y-2 text route as an unchecked checkbox with a note', () => {
+            const box = doc.getElementById('listeningTextRoute');
+            expect(box).not.toBeNull();
+            expect(box.type).toBe('checkbox');
+            // Default OFF: FR-LSN-3 is the rule and this is the exception, so the
+            // markup may not ship with the exception already applied.
+            expect(box.checked).toBe(false);
+            // A real <label for>, so the 44px target and the screen-reader name
+            // come from the markup rather than from JS.
+            expect(doc.querySelector('label[for="listeningTextRoute"]')).not.toBeNull();
+            expect(doc.getElementById('listeningTextRouteNote')).not.toBeNull();
+        });
+    });
+
+    describe('the speed control (US-704 / FR-LSN-2)', () => {
+        it('offers exactly 0.75x, 1x and 1.25x, as toggle buttons', () => {
+            const buttons = Array.from(
+                section().querySelectorAll('#listeningSpeed .lsn-speed-btn'));
+            expect(buttons.map(b => b.getAttribute('data-rate'))).toEqual(['0.75', '1', '1.25']);
+            buttons.forEach(b => {
+                expect(b.tagName).toBe('BUTTON');
+                expect(['true', 'false']).toContain(b.getAttribute('aria-pressed'));
+            });
+            // One pressed in the markup, so the control reads correctly before any
+            // JS runs — and exactly one, or it reads as two speeds at once.
+            expect(buttons.filter(b => b.getAttribute('aria-pressed') === 'true')).toHaveLength(1);
+            expect(buttons.filter(b => b.classList.contains('active'))).toHaveLength(1);
+        });
+
+        it('never uses .diff-btn for the speed buttons', () => {
+            // Same reasoning as the pronunciation group switcher: these pick a
+            // SPEED, and a learner must not read them as the app-wide tier control.
+            // The registry-driven assertion above already requires this section to
+            // have no .diff-btn at all; this states the intent.
+            expect(section().querySelectorAll('.diff-btn')).toHaveLength(0);
+            expect(Sections.get('listening').hasDifficulty).toBe(false);
+        });
+
+        it('applies the chosen rate to speechAPI.speak', () => {
+            // The whole of US-704's single point: the parameter has always been
+            // there and was never varied. `speechAPI.speak(this.dataset.text)` with
+            // no second argument was the old call.
+            const play = functionBody('function playListeningItem(');
+            expect(play).toMatch(/speechAPI\.speak\(\s*listeningSession\.item\.text,\s*listeningRateFor\(listeningSession\.item\)\s*\)/);
+            const rate = functionBody('function listeningRateFor(');
+            // Learner's choice first, the item's authored default second, 1 last.
+            expect(rate).toMatch(/if \(listeningRate !== null\) return listeningRate;/);
+            expect(rate).toMatch(/item\.rate/);
+        });
+
+        it('keeps the chosen rate out of saved progress, deliberately', () => {
+            // The decision, pinned: the speed is a page-session variable, so a
+            // learner who slows one hard clip down is not still hearing everything
+            // at 0.75x next month without knowing why. If someone moves it into
+            // `state` it will be written by saveProgress()'s `...state` spread on
+            // the very next tick, so this has to be a test and not a comment.
+            expect(appSource).toMatch(/^let listeningRate = null;$/m);
+            expect(appSource).not.toMatch(/state\.listeningRate/);
+            expect(functionBody('function loadProgress(')).not.toContain('listeningRate');
+        });
+
+        it('persists the text route, which is a fact about the learner', () => {
+            // The other half of that decision, and the reason the asymmetry is not
+            // an oversight: a learner who cannot hear should say so once.
+            expect(appSource).toMatch(/listeningTextRoute: false/);
+            expect(functionBody('function loadProgress('))
+                .toContain('state.listeningTextRoute = loaded.listeningTextRoute === true;');
+            // `=== true`, so a corrupt record cannot switch FR-LSN-3 off for a
+            // learner who never asked.
+            expect(functionBody('function listeningTextRouteOn('))
+                .toContain('state.listeningTextRoute === true');
+        });
+    });
+
+    describe('app.js keeps the transcript out of the document until the reveal', () => {
+        it('no longer parks the sentence on #playListening.dataset.text', () => {
+            // The old leak, exactly: loadListeningExercise() wrote the sentence to
+            // a data attribute on the Play button and the read-aloud handler read
+            // it back, so the transcript was in the markup from the moment the
+            // section opened. Both are gone; the mentions that remain are the
+            // comments explaining why.
+            expect(appSource).not.toMatch(/playListening'\)\.dataset\.text\s*=/);
+            expect(appSource).not.toMatch(/getElementById\('playListening'\)\.dataset\.text \|\|/);
+            // Playback and the read-aloud target both come from the session object.
+            expect(functionBody('function playListeningItem('))
+                .toContain('listeningSession.item.text');
+        });
+
+        it('writes the transcript from exactly one function', () => {
+            // Two functions touch #listenSentence / #targetWord: the loader (which
+            // masks them) and the reveal (which fills them). A third write site is
+            // how a gate like this comes undone.
+            const writers = ['function loadListeningExercise(', 'function revealListeningTranscript(']
+                .map(header => functionBody(header));
+            const bodies = writers.join('\n');
+            const occurrences = (appSource.match(/getElementById\('listenSentence'\)/g) || []).length;
+            expect(occurrences).toBe(2);
+            expect((bodies.match(/getElementById\('listenSentence'\)/g) || []).length).toBe(2);
+            // Only the reveal puts item.transcript on screen.
+            expect(functionBody('function revealListeningTranscript('))
+                .toMatch(/host\.textContent = listeningSession\.item\.transcript;/);
+            expect(functionBody('function loadListeningExercise('))
+                .not.toContain('item.transcript');
+        });
+
+        it('re-masks on every load, so Next -> closes the gate again', () => {
+            const body = functionBody('function loadListeningExercise(');
+            expect(body).toMatch(/listeningSession = \{ item: item, attempted: false, revealed: false/);
+            expect(body).toContain("host.classList.add('is-masked')");
+            expect(body).toContain('if (reveal) reveal.hidden = true;');
+            expect(body).toContain('if (speak) speak.disabled = true;');
+            expect(body).toContain('if (lock) lock.hidden = false;');
+            // The one exception, and it is last: the learner's own declaration.
+            expect(body).toContain("if (listeningTextRouteOn()) revealListeningTranscript('no-audio');");
+        });
+
+        it('shows the reveal button only after an attempt, and only on demand', () => {
+            // FR-A11Y-2 says "on demand"; FR-LSN-4 says replay precedes transcript,
+            // always. So an attempt UNHIDES the button and does not press it.
+            const body = functionBody('function markListeningAttempt(');
+            expect(body).toContain('listeningSession.attempted = true;');
+            expect(body).toMatch(/if \(reveal && !listeningSession\.revealed\) reveal\.hidden = false;/);
+            expect(body).not.toContain('revealListeningTranscript(');
+        });
+
+        it('says what has no sentence in it rather than drawing an empty card', () => {
+            // normaliseListeningItem() returns null for an unrenderable entry. An
+            // empty card is indistinguishable from a broken device.
+            const body = functionBody('function loadListeningExercise(');
+            expect(body).toMatch(/if \(!item\) \{/);
+            expect(body).toMatch(/no sentence in it/);
+        });
+    });
+
+    describe('completion, and what the routes are allowed to claim (BR-3)', () => {
+        it('counts a listening exercise from exactly one place', () => {
+            // Was two inline copies — the recording handler and the read-aloud
+            // handler — and a third route was about to make it three. One call
+            // site means a route cannot count without opening the transcript gate,
+            // or open it without counting.
+            expect((appSource.match(/markExerciseComplete\('listening'/g) || [])).toHaveLength(1);
+            expect((appSource.match(/updateStatistics\('listening'/g) || [])).toHaveLength(1);
+            expect(functionBody('function markListeningAttempt('))
+                .toContain("markExerciseComplete('listening', state.currentListeningIndex);");
+            ["markListeningAttempt('recorded', true)",
+             "markListeningAttempt('self-report', true)",
+             "markListeningAttempt('read-aloud', true)"]
+                .forEach(call => expect(appSource).toContain(call));
+        });
+
+        it('never credits an item for revealing the transcript', () => {
+            // I-8 is the crossword granting the daily puzzle goal for an untouched
+            // grid. Revealing a sentence and being credited for it would be the
+            // same defect in this section, and the FR-A11Y-2 route is exactly
+            // where it would land.
+            const reveal = functionBody('function revealListeningTranscript(');
+            expect(reveal).not.toContain('markExerciseComplete');
+            expect(reveal).not.toContain('updateStatistics');
+            expect(reveal).not.toContain('markListeningAttempt');
+            expect(reveal).not.toContain('dailyGoals');
+        });
+
+        it('refuses a self-reported attempt on an item that was never played', () => {
+            // "I said it" has to be true about something. The text route is exempt
+            // because it has nothing to play.
+            const handler = appSource.slice(
+                appSource.indexOf("wireListening('listeningRepeated'"),
+                appSource.indexOf("wireListening('listeningTextRoute'"));
+            expect(handler).toMatch(/if \(!listeningTextRouteOn\(\) && listeningSession && listeningSession\.plays === 0\)/);
+            expect(handler.indexOf('return;')).toBeLessThan(handler.indexOf('markListeningAttempt('));
+        });
+
+        it('gives a wrong read-aloud a reason, a slowed replay and a retry', () => {
+            // TEACHING_METHODOLOGY.md principle 2 and FR-LSN-4. renderSpeechDiff()
+            // was the contrast and the whole of the feedback; a marked-up sentence
+            // with no idea what to do about it is the "Wrong" that principle exists
+            // to forbid.
+            const body = functionBody('function appendReadAloudRetry(');
+            expect(body).toContain('question-reason');
+            expect(body).toContain('question-retry');
+            // The replay is the FR-LSN-4 "replay the relevant clip", slowed as
+            // TEACHING_METHODOLOGY.md §2 asks.
+            expect(body).toMatch(/speechAPI\.speak\(listeningSession\.item\.text, 0\.75\)/);
+            // Principle 3: a recogniser miss is not proof of a mispronunciation,
+            // and the copy has to say so.
+            expect(body).toMatch(/sometimes it is the recogniser rather than you/);
+            // Called on the miss branch, after the diff is drawn.
+            const handler = functionBody('function initializeListeningButtons(');
+            expect(handler).toContain("appendReadAloudRetry('speechFeedback', diff)");
+            expect(handler.indexOf("renderSpeechDiff('speechFeedback', diff)"))
+                .toBeLessThan(handler.indexOf("appendReadAloudRetry('speechFeedback', diff)"));
+        });
+
+        it('replaces the microphone-denied dead end with the other route', () => {
+            // Was `alert('Microphone access denied')` and nothing else: recording
+            // was the only attempt route, so the section ended there (R-7).
+            // Scoped to the handler, not the file: the comment above the new catch
+            // block quotes the old line on purpose.
+            const handler = appSource.slice(
+                appSource.indexOf("document.getElementById('startRecording').onclick"),
+                appSource.indexOf("document.getElementById('stopRecording').onclick"));
+            // Comment lines stripped: the new catch block quotes the old `alert`
+            // line on purpose, and a test that cannot tell code from a comment
+            // about the code would forbid explaining the fix.
+            const code = handler.split('\n').filter(line => !/^\s*\/\//.test(line)).join('\n');
+            expect(code).not.toMatch(/\balert\(/);
+            expect(code).toMatch(/I said it/);
+            expect(code).toContain("AppErrorHandler.logError(e, 'listening recording')");
+        });
+
+        it('leaves lsn.gist without a producer, and says where that is recorded', () => {
+            // US-701 makes a gist question POSSIBLE — every item carries a
+            // `questions` array now — and does not make one exist. Both places that
+            // claim this must keep claiming it until US-702 lands, or the session
+            // planner will offer a comprehension step no screen can draw.
+            expect(appSource).not.toContain("Mistakes.record('lsn.gist'");
+            expect(appSource).toMatch(/'listen\.comprehend': \{\s*\n\s*available: false,/);
+            const Mistakes = require(path.join(ROOT, 'js', 'core', 'mistakes.js'));
+            expect(Mistakes.unknownCategories(['lsn.gist'])).toEqual([]);
+        });
+    });
+});

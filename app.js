@@ -73,6 +73,24 @@ const state = {
     currentStressIndex: 0,
     currentNoticingIndex: 0,
     currentPuzzle: 'wordsearch',
+    /**
+     * "I cannot use the audio" — US-711 / FR-A11Y-2.
+     *
+     * When true, the Listening transcript is shown before the attempt instead of
+     * after it, for every item, until the learner turns it off.
+     *
+     * PERSISTED, unlike the playback rate (see `listeningRate`, which is
+     * deliberately a page-session variable). The asymmetry is the point: a speed
+     * is a reaction to one hard clip and must not harden into a handicap the
+     * learner cannot see, whereas whether they can hear the audio at all is a fact
+     * about them and their device, and making them re-declare it every session is
+     * the kind of friction that makes an accessibility route not worth using.
+     *
+     * Absent on every save written before this story, which reads as false —
+     * correct, and the reason this needed no SCHEMA_VERSION bump: an absent
+     * boolean preference has an honest default, so there is nothing to migrate.
+     */
+    listeningTextRoute: false,
     vocabProgress: 0,
     // Legacy counters kept for backwards-compatible loading of old saves only.
     // Not authoritative: see state.dailyStats / state.overallStats.
@@ -465,6 +483,13 @@ function loadProgress() {
             state.currentStressIndex = Math.max(0, Math.floor(Number(loaded.currentStressIndex) || 0));
             state.currentNoticingIndex = Math.max(0, Math.floor(Number(loaded.currentNoticingIndex) || 0));
             state.exerciseHistory = loaded.exerciseHistory || [];
+
+            // The FR-A11Y-2 text route (US-711). `=== true` rather than a
+            // truthiness check, so a corrupt or hand-edited record cannot turn the
+            // transcript on before the attempt for a learner who never asked for
+            // it — that would silently convert their listening practice into
+            // reading practice, which is the thing FR-LSN-3 exists to prevent.
+            state.listeningTextRoute = loaded.listeningTextRoute === true;
 
             // Per-pair discrimination accuracy (FR-PRN-2). Sanitised rather than
             // trusted: it is the input to the FR-PRN-6 production gate, so a
@@ -2224,6 +2249,58 @@ function getComparisonBadge(current, average) {
 // author's own words from the taxonomy rather than anything written at this layer.
 
 /**
+ * Tell js/core/mistakes.js which drill destinations content actually authored
+ * (US-187).
+ *
+ * `drillTarget()` composes `gram:<slug>` from the taxonomy alone, with no way to
+ * know whether anything was written under that slug. Four targets were dead for
+ * several waves — `past-simple` twice, `prepositions`, `register` — and
+ * `question-formation` was a fifth until it was authored. A dead target draws a
+ * "Practise this" button that does nothing, and worse, js/core/session.js puts
+ * the same unchecked `srsKey` into a session plan.
+ *
+ * READ OFF THE CONTENT, NEVER LISTED HERE. Every source below is a function or a
+ * global that content registers itself into, so authoring a new grammar point or
+ * pair set needs no second edit in this file. A hardcoded list here would be the
+ * US-160 defect again: a copy of a fact that goes stale the moment someone adds
+ * content and forgets.
+ *
+ * THE REGISTRY IS ALL-OR-NOTHING PER STRAND, which is the trap to understand
+ * before editing this. Before any call, `isAuthoredTarget()` answers `null` — "no
+ * claim" — and every button is drawn. After the first call for a strand, anything
+ * NOT registered answers `false` and its button is withheld. So a partial
+ * registration is worse than none: registering one grammar point would blank the
+ * buttons of the other six. Register the whole strand or leave it alone.
+ *
+ * The filtering helpers are deliberately the authority. `pronunciationPairs()`
+ * drops a pair with no `minimalPairs`, and `pronStressItems()` drops an item with
+ * no answerable drill — content that cannot be drilled honestly is content a
+ * button must not promise, so "dropped by the renderer" and "not a live drill
+ * target" should be the same answer, from the same code.
+ */
+function registerAuthoredDrillTargets() {
+    if (typeof Mistakes === 'undefined' || !Mistakes ||
+        typeof Mistakes.registerDrillTargets !== 'function') return;
+
+    // Every tier, not just the learner's. This registry answers "did anyone write
+    // this?"; whether THIS build can open it at the current tier stays
+    // mistakeDrillDestinations()'s question, which is stricter and tier-aware.
+    if (typeof grammarLessons !== 'undefined' && grammarLessons) {
+        Object.keys(grammarLessons).forEach(tier => {
+            Mistakes.registerDrillTargets('grammar', grammarLessons[tier] || []);
+        });
+    }
+
+    // Pair sets, plus the four `phon:` keys that have no section of their own and
+    // are drawn by the typed review cards.
+    Mistakes.registerDrillTargets('pronunciation', pronunciationPairs());
+    const prosody = pronStressItems().concat(pronNoticingItems())
+        .map(item => item && item.srsKey)
+        .filter(Boolean);
+    Mistakes.registerDrillTargets('pronunciation', prosody);
+}
+
+/**
  * Where "practise this" can actually go, per strand.
  *
  * A category is `drillable` when the taxonomy names a strand, which is a claim
@@ -2244,6 +2321,13 @@ function getComparisonBadge(current, average) {
  */
 function mistakeDrillDestinations(drill) {
     if (!drill || !drill.strand) return [];
+    // US-187. `false` means content has registered its destinations and this one
+    // is not among them, so no route below can possibly resolve it — skip the
+    // work. `null` is NOT that claim: it means nothing has registered yet, which
+    // is the state at first load and throughout the unit suite, so fall through
+    // and let each route decide exactly as before. Absence of a claim must never
+    // be reported as a claim of absence.
+    if (drill.authored === false) return [];
 
     if (drill.strand === 'grammar') {
         // The target is a data/grammar.js lesson id. Only offered when that point
@@ -2297,6 +2381,9 @@ function mistakeDrillDestinations(drill) {
     // collocation  no content exists (data/collocations.js is not written).
     // listening    FR-LSN-1: nothing in this build asks a comprehension question,
     //              so neither `lsn.gist` nor `lsn.detail` has a destination.
+    //              US-701 made one POSSIBLE — every listening item now carries a
+    //              `questions` array — but an empty array is not a question, so
+    //              this stays as it is until US-702 authors them and draws them.
     // reading      the reading section has comprehension questions, but nothing
     //              in it targets inference, so `rdw.inference` would land on an
     //              unrelated passage.
@@ -5898,45 +5985,255 @@ function initializeReadingButtons() {
 // LISTENING SECTION
 // ============================================
 
-// The one place a listening sentence is chosen. Pure in (index, difficulty) and
+// The one place a listening item is chosen. Pure in (index, difficulty) and
 // free of Math.random, which is what makes the exercise retryable: a learner who
 // fails, navigates away and comes back gets the same sentence, not a new one.
-// Use hybrid approach: curated sentences + generated sentences.
-function getListeningSentence(index, difficulty) {
+// Use hybrid approach: curated items + generated sentences.
+//
+// US-701: returns a NORMALISED ITEM OBJECT, never a bare string. Both authored
+// shapes go through data.js's normaliseListeningItem(), so a stale cached data.js
+// full of strings and a fresh one full of objects produce the same thing here —
+// which matters because service-worker.js serves app.js cache-first.
+function getListeningItem(index, difficulty) {
     const level = difficulty || state.currentDifficulty;
     const curatedExercises = listeningExercises[level] || [];
     const curatedCount = curatedExercises.length;
 
     // Strategy: Use curated for first N, then alternate between curated and generated
     if (index < curatedCount) {
-        return curatedExercises[index];
+        return normaliseListeningItem(curatedExercises[index], level);
     }
 
     const adjustedIndex = index - curatedCount;
     const shouldUseCurated = adjustedIndex % 3 === 0;
 
     if (shouldUseCurated && curatedCount > 0) {
-        return curatedExercises[adjustedIndex % curatedCount];
+        return normaliseListeningItem(curatedExercises[adjustedIndex % curatedCount], level);
     }
 
     // Generated listening sentence. generateAlgorithmicSentence picks its template
     // and its slot words from the index alone, so `.correct` is stable for a given
     // (index, difficulty); only its unused fillBlank.options shuffles.
-    return generateAlgorithmicSentence(index, level).correct;
+    //
+    // Normalised through the same function as the curated content: a generated
+    // sentence is a listening item with no transcript of its own and no questions,
+    // and saying that once beats a second shape nothing else understands.
+    return normaliseListeningItem(generateAlgorithmicSentence(index, level).correct, level);
+}
+
+// Kept as the text-only view of the above, because "what sentence is at this
+// index" is still a question worth being able to ask in one call. Returns '' for
+// an unrenderable item rather than throwing.
+function getListeningSentence(index, difficulty) {
+    const item = getListeningItem(index, difficulty);
+    return item ? item.text : '';
+}
+
+/**
+ * PLAYBACK SPEED — US-704 / FR-LSN-2.
+ *
+ * Deliberately NOT in `state`, and therefore never written to localStorage.
+ *
+ * The choice persists for as long as the app is open — pressing 0.75× and then
+ * walking twenty sentences does not mean pressing it twenty times — and resets to
+ * the item's own default on the next load. A learner who slows one hard clip down
+ * and forgets has been quietly held back for a month if this crosses sessions,
+ * and they would have no way to know: the control is two screens deep and the
+ * audio just sounds like the app. Re-asking per item is the friction that would
+ * make the control not worth having; re-asking per session is one press.
+ *
+ * `null` means "not chosen this session", which is a different fact from "chose
+ * 1×" — it is what lets an authored `item.rate` still apply (FR-LSN-2 makes the
+ * learner's selection win; the authored rate is a default, not an override).
+ */
+let listeningRate = null;
+
+/** The rate the next Play will actually use: learner's choice, else the item's. */
+function listeningRateFor(item) {
+    if (listeningRate !== null) return listeningRate;
+    if (item && typeof item.rate === 'number') return item.rate;
+    return 1;
+}
+
+/**
+ * Per-item listening state, rebuilt by loadListeningExercise() so nothing carries
+ * from one sentence to the next.
+ *
+ *   item       the normalised item on screen (see data.js for the shape)
+ *   attempted  the learner has attempted THIS item — the FR-LSN-3 gate
+ *   revealed   the transcript is on screen
+ *   route      how the transcript was reached: 'attempt' | 'no-audio' | null
+ *   plays      how many times this item has been played (FR-LSN-1 wants "once
+ *              for gist, twice for detail"; counted now, unused until US-702)
+ */
+let listeningSession = null;
+
+/** True when the learner has declared they cannot use the audio (FR-A11Y-2). */
+function listeningTextRouteOn() {
+    return state.listeningTextRoute === true;
+}
+
+/** Paint the three speed buttons from `listeningRate` / the item's default. */
+function paintListeningSpeedButtons() {
+    const host = document.getElementById('listeningSpeed');
+    if (!host) return;
+    const active = listeningRateFor(listeningSession && listeningSession.item);
+    host.querySelectorAll('.lsn-speed-btn').forEach(btn => {
+        const on = Number(btn.dataset.rate) === active;
+        btn.classList.toggle('active', on);
+        // aria-pressed, like the pronunciation group buttons: these are toggles,
+        // so a screen reader should say "pressed", not "current page".
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+}
+
+/**
+ * Play the item on screen at the chosen rate.
+ *
+ * The text comes from `listeningSession`, NOT from the DOM. That is the FR-LSN-3
+ * mechanism, not a style choice: while the transcript is hidden, the sentence must
+ * not be in the document at all — the old code wrote it to
+ * `#playListening.dataset.text`, where "view source" and any curious learner with
+ * developer tools reads it straight off the play button.
+ *
+ * @returns {boolean} whether anything was actually spoken.
+ */
+function playListeningItem() {
+    if (!listeningSession || !listeningSession.item) return false;
+    if (!pronAudioUsable()) return false;
+    listeningSession.plays++;
+    speechAPI.speak(listeningSession.item.text, listeningRateFor(listeningSession.item));
+    return true;
+}
+
+/**
+ * Show the transcript, and unlock the Read Aloud card that needs it.
+ *
+ * FR-LSN-3 / FR-LSN-4 / FR-A11Y-2. Two routes reach this, and the difference is
+ * reported rather than laundered (BR-3):
+ *
+ *   'attempt'   the learner has attempted this item. The plain case.
+ *   'no-audio'  the learner has declared they cannot use the audio. The
+ *               transcript is theirs immediately — "after the attempt" is a
+ *               challenge for a hearing learner and a locked door for a deaf one,
+ *               and FR-A11Y-4's floor is that every item stays completable. What
+ *               this route does NOT do is mark anything done: completion still
+ *               needs a spoken or self-reported attempt, so a revealed sentence
+ *               is never a credited one (cf. I-8, the crossword that credits an
+ *               untouched grid).
+ */
+function revealListeningTranscript(route) {
+    if (!listeningSession || !listeningSession.item) return;
+
+    const host = document.getElementById('listenSentence');
+    const target = document.getElementById('targetWord');
+    const speak = document.getElementById('startSpeech');
+    const lock = document.getElementById('readAloudLock');
+    const reveal = document.getElementById('revealTranscript');
+
+    listeningSession.revealed = true;
+    if (!listeningSession.route) listeningSession.route = route;
+
+    if (host) {
+        host.textContent = listeningSession.item.transcript;
+        host.classList.remove('is-masked');
+    }
+    // Read Aloud is a READING task: its target is the transcript, so the card
+    // cannot be open before the reveal without being the leak. Unlocked here,
+    // from the same place, rather than by a second rule somewhere else.
+    if (target) target.textContent = listeningSession.item.transcript;
+    if (speak) speak.disabled = false;
+    if (lock) lock.hidden = true;
+    if (reveal) reveal.hidden = true;
+}
+
+/**
+ * Mark an attempt on this item: the FR-LSN-3 gate opens and the item counts.
+ *
+ * @param {string} route  'recorded' — a recording was made
+ *                        'self-report' — the learner says they repeated it, which
+ *                        is the FR-A11Y-4 no-microphone path
+ *                        'read-aloud' — the recogniser matched every word
+ * @param {boolean} complete  whether this attempt finishes the exercise
+ */
+function markListeningAttempt(route, complete) {
+    if (!listeningSession) return;
+    listeningSession.attempted = true;
+
+    // On demand, not automatic (FR-A11Y-2, and FR-LSN-4's "replay precedes
+    // transcript, always"): the button appears, the learner presses it when they
+    // have finished replaying. Nothing reveals the sentence for them.
+    const reveal = document.getElementById('revealTranscript');
+    if (reveal && !listeningSession.revealed) reveal.hidden = false;
+
+    if (!complete) return;
+
+    state.dailyGoals.listening = true;
+    if (!isExerciseCompleted('listening', state.currentListeningIndex)) {
+        markExerciseComplete('listening', state.currentListeningIndex);
+        updateStatistics('listening');
+    }
+    updateDashboard();
+    saveProgress();
+    updateNavigationButtons('listening');
 }
 
 function loadListeningExercise() {
-    const sentence = getListeningSentence(state.currentListeningIndex, state.currentDifficulty);
+    const item = getListeningItem(state.currentListeningIndex, state.currentDifficulty);
 
-    // One string drives all three: what is shown, what is spoken, and what the
-    // learner is asked to say back. Read-aloud means reading *this* sentence, so
-    // the target cannot drift from the audio. It used to be a random vocabulary
-    // word, which made the task "say an unrelated word" and made a full match
-    // trivial — a one-word target is matched by any sentence containing it.
-    document.getElementById('listenSentence').textContent = sentence;
-    document.getElementById('playListening').dataset.text = sentence;
-    document.getElementById('targetWord').textContent = sentence;
+    listeningSession = { item: item, attempted: false, revealed: false, route: null, plays: 0 };
+
+    const host = document.getElementById('listenSentence');
+    const target = document.getElementById('targetWord');
+    const speak = document.getElementById('startSpeech');
+    const lock = document.getElementById('readAloudLock');
+    const reveal = document.getElementById('revealTranscript');
+    const recognized = document.getElementById('recognizedText');
+
+    // Reset every per-item surface here, in one place, rather than in the two nav
+    // handlers that used to clear a different subset each.
+    if (recognized) recognized.textContent = '';
+    if (reveal) reveal.hidden = true;
+    if (target) target.textContent = '';
+    if (speak) speak.disabled = true;
+    if (lock) lock.hidden = false;
+    paintListeningSpeedButtons();
     updateNavigationButtons('listening');
+
+    if (!item) {
+        // normaliseListeningItem() returned null: an authored entry with no text.
+        // Said out loud rather than rendered as an empty card, which a learner
+        // cannot tell apart from a broken device.
+        if (host) {
+            host.textContent = 'This item has no sentence in it, so there is nothing to play. Use Next → to move on; this is a content bug, not something you did.';
+            host.classList.remove('is-masked');
+        }
+        if (lock) lock.hidden = true;
+        return;
+    }
+
+    if (host) {
+        // FR-LSN-3. The sentence is NOT in the document until the attempt is
+        // made — revealing it early converts a listening exercise into a reading
+        // exercise, which is what this section has been doing since it shipped.
+        host.textContent = 'Press ▶ Play and listen. The words appear once you have had a go at repeating them.';
+        host.classList.add('is-masked');
+    }
+
+    // The one exception, declared by the learner and remembered: see
+    // state.listeningTextRoute.
+    if (listeningTextRouteOn()) revealListeningTranscript('no-audio');
+}
+
+/** The honest note under the "I can't use the audio" switch, in both states. */
+function paintListeningTextRouteNote() {
+    const box = document.getElementById('listeningTextRoute');
+    const note = document.getElementById('listeningTextRouteNote');
+    if (box) box.checked = listeningTextRouteOn();
+    if (!note) return;
+    note.textContent = listeningTextRouteOn()
+        ? 'The words are shown straight away, and they stay shown until you turn this off. Nothing is taken away from you for using it — but the app will not claim you heard anything, because it has no way to know.'
+        : 'Turn this on if you cannot hear the audio, or your device cannot play it. The words then appear before you attempt each sentence, for as long as you leave it on.';
 }
 
 // Vocabulary items for the current level that the recogniser failed to match in a
@@ -5998,9 +6295,93 @@ function initializeListeningButtons() {
     let mediaRecorder = null;
     let recordedAudioBlob = null;
     let recordedAudioURL = null;
-    
-    document.getElementById('playListening').onclick = function() { speechAPI.speak(this.dataset.text); };
-    
+
+    /**
+     * Wire a click handler, tolerating an element that is not there.
+     *
+     * Only the FOUR CONTROLS ADDED BY THIS STORY go through this, and the reason is
+     * the cache split in service-worker.js: index.html is network-first and app.js
+     * is cache-first, so the pair a learner runs is normally new/new but offline
+     * can be new-app-old-markup. The pre-existing controls are wired unguarded,
+     * exactly as before — a missing #playListening was always a broken build and
+     * should stay loud. A missing #revealTranscript, by contrast, would throw
+     * before initializeGrammarButtons() and take four other sections down with it,
+     * which is a much worse outcome than a listening section with no speed buttons.
+     */
+    const wireListening = (id, handler, event) => {
+        const el = document.getElementById(id);
+        if (!el) {
+            console.warn('initializeListeningButtons: #' + id + ' is missing — stale index.html?');
+            return;
+        }
+        el[event || 'onclick'] = handler;
+    };
+
+    // US-704 / FR-LSN-2. The rate parameter has always existed on
+    // speechAPI.speak(text, rate) and was never varied here; these three buttons
+    // are the whole of the story, and playListeningItem() applies the choice.
+    document.querySelectorAll('#listeningSpeed .lsn-speed-btn').forEach(btn => {
+        btn.onclick = () => {
+            listeningRate = Number(btn.dataset.rate);
+            paintListeningSpeedButtons();
+            // Speak immediately: a speed control that takes effect on the NEXT
+            // press makes the learner compare two clips from memory, which is the
+            // thing they came here unable to do.
+            if (!playListeningItem()) {
+                Toast.warning('This device could not play that. Turn on "I can\'t use the audio" below to work from the words instead.');
+            }
+        };
+    });
+
+    document.getElementById('playListening').onclick = function() {
+        if (!playListeningItem()) {
+            Toast.warning('This device could not play that. Turn on "I can\'t use the audio" below to work from the words instead.');
+        }
+    };
+
+    // FR-LSN-3 / FR-A11Y-2: on demand, and only after the attempt. The button is
+    // hidden until markListeningAttempt() shows it, so pressing it early is not
+    // something the markup allows.
+    wireListening('revealTranscript', () => {
+        revealListeningTranscript('attempt');
+        showFeedback('listeningFeedback',
+            'These are the words. Play it once more while you read them — the point is to hear what you could not hear the first time.',
+            'info');
+    });
+
+    // FR-A11Y-4, and the microphone-refusal dead end below it: recording is the
+    // only attempt route this section had, so a learner who cannot or will not
+    // grant the microphone could never finish an item — and after US-701 could
+    // never reach the transcript either. Self-reported, and labelled as such.
+    wireListening('listeningRepeated', () => {
+        // Not creditable before the item has been played at all: that is I-8, the
+        // crossword that grants the daily goal for an untouched grid, in a
+        // different section. A learner on the text route has nothing to play and
+        // is exempt.
+        if (!listeningTextRouteOn() && listeningSession && listeningSession.plays === 0) {
+            showFeedback('listeningFeedback',
+                'Play it first — this button means "I heard that and said it back", and there is nothing yet for it to be true about.',
+                'info');
+            return;
+        }
+        markListeningAttempt('self-report', true);
+        showFeedback('listeningFeedback',
+            'Marked as done, on your word — nothing was recorded, so the app is not claiming anything about how it sounded. Show the transcript and compare what you said with what was said.',
+            'info');
+    });
+
+    // The FR-A11Y-2 route. A switch rather than a per-item "show it anyway",
+    // because a learner who cannot hear would otherwise re-declare that thirty
+    // times, and because the app needs to know which route an item was done by.
+    wireListening('listeningTextRoute', function () {
+        state.listeningTextRoute = this.checked === true;
+        paintListeningTextRouteNote();
+        saveProgress();
+        // Re-render: turning it on reveals the current item, turning it off
+        // re-masks it and starts this item again.
+        loadListeningExercise();
+    }, 'onchange');
+
     document.getElementById('startRecording').onclick = async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -6035,13 +6416,12 @@ function initializeListeningButtons() {
                     replayBtn.style.display = 'inline-block';
                 }
                 
-                state.dailyGoals.listening = true;
-                if (!isExerciseCompleted('listening', state.currentListeningIndex)) {
-                    markExerciseComplete('listening', state.currentListeningIndex);
-                    updateStatistics('listening');
-                }
-                updateDashboard();
-                saveProgress();
+                // US-701: this used to inline the four completion lines. It now
+                // goes through markListeningAttempt(), which does the same
+                // counting AND opens the FR-LSN-3 transcript gate — one call site
+                // for "the learner attempted this", so a route cannot count and
+                // fail to unlock, or unlock and fail to count.
+                markListeningAttempt('recorded', true);
             };
 
             mediaRecorder.start();
@@ -6056,7 +6436,16 @@ function initializeListeningButtons() {
                 replayBtn.style.display = 'none';
             }
         } catch (e) {
-            alert('Microphone access denied');
+            // Was `alert('Microphone access denied')` and nothing else, which was
+            // a dead end: recording was the only way to finish an item, so a
+            // refused microphone ended the section (R-7, FR-A11Y-4). Say what the
+            // other route is, in the place the learner is looking.
+            AppErrorHandler.logError(e, 'listening recording');
+            document.getElementById('recordingStatus').textContent =
+                'No microphone, so nothing was recorded. Say the sentence out loud anyway, then press "✓ I said it" — that finishes this item, and the transcript follows.';
+            document.getElementById('recordingStatus').className = 'recording-status info';
+            document.getElementById('startRecording').disabled = false;
+            document.getElementById('stopRecording').disabled = true;
         }
     };
     
@@ -6134,10 +6523,13 @@ function initializeListeningButtons() {
     };
     
     document.getElementById('startSpeech').onclick = () => {
-        // The target is the sentence that gets played, read from the same element
-        // that feeds speechAPI.speak. Anything else could go stale against the
-        // audio; this is the audio.
-        const target = document.getElementById('playListening').dataset.text || '';
+        // The target is the sentence that was played, read from listeningSession —
+        // the same object playListeningItem() speaks from, so the two cannot drift.
+        // It used to be read off `#playListening.dataset.text`, which is exactly
+        // the leak FR-LSN-3 forbids: the sentence was sitting in the markup before
+        // the learner had heard anything.
+        const item = listeningSession && listeningSession.item;
+        const target = item ? item.transcript : '';
         speechAPI.startRecognition((transcript) => {
             // textContent, not innerHTML: the transcript is user-derived.
             document.getElementById('recognizedText').textContent = `The recogniser heard: "${transcript}"`;
@@ -6155,16 +6547,65 @@ function initializeListeningButtons() {
             // contain the word counted as done; a partial match now leaves the
             // exercise open so the learner can try it again.
             if (diff.allMatched) {
-                state.dailyGoals.listening = true;
-                if (!isExerciseCompleted('listening', state.currentListeningIndex)) {
-                    markExerciseComplete('listening', state.currentListeningIndex);
-                    updateStatistics('listening');
-                }
-                updateDashboard();
-                saveProgress();
+                markListeningAttempt('read-aloud', true);
+                return;
             }
+
+            // TEACHING_METHODOLOGY.md principle 2 and FR-LSN-4. renderSpeechDiff()
+            // above is the CONTRAST — word by word, the misses marked. What was
+            // missing was the reason, the replay and the retry, so a miss was a
+            // marked-up sentence and no idea what to do about it.
+            appendReadAloudRetry('speechFeedback', diff);
         });
     };
+
+    // After loadProgress(), so the switch and its note show the learner's own
+    // saved answer rather than the markup default.
+    paintListeningTextRouteNote();
+}
+
+/**
+ * The reason / replay / retry that follows a read-aloud miss.
+ *
+ * FR-LSN-4 orders these: "replay precedes transcript, always". The transcript is
+ * already on screen by the time a read-aloud can run — Read Aloud is a reading
+ * task and cannot be otherwise — so what this adds is the replay of the model at
+ * 0.75×, which is the "slowed" replay TEACHING_METHODOLOGY.md §2 asks for on a
+ * pronunciation miss, next to the words that were missed.
+ *
+ * The reason is deliberately about the recogniser as well as the learner
+ * (principle 3): a miss here is not proof of a mispronunciation, and saying so is
+ * not softening it, it is the only claim the evidence supports.
+ */
+function appendReadAloudRetry(hostId, diff) {
+    const host = document.getElementById(hostId);
+    if (!host) return;
+
+    const missed = diff.words.filter(entry => !entry.matched).map(entry => entry.word);
+
+    host.appendChild(readingParagraph(
+        missed.length
+            ? `The recogniser did not match ${quotedList(missed)}. That is usually a consonant cluster or an unstressed syllable — and sometimes it is the recogniser rather than you, which is why nothing about your pronunciation is being recorded here.`
+            : 'The recogniser did not match every word. Sometimes that is the recogniser rather than you, which is why nothing about your pronunciation is being recorded here.',
+        'question-reason'));
+
+    if (pronAudioUsable()) {
+        const replay = document.createElement('button');
+        replay.type = 'button';
+        replay.className = 'btn-secondary pron-play';
+        replay.textContent = '🔊 Hear it again, slower (0.75×)';
+        replay.setAttribute('aria-label', 'Play the sentence again at 0.75 speed');
+        replay.onclick = () => {
+            if (listeningSession && listeningSession.item) {
+                speechAPI.speak(listeningSession.item.text, 0.75);
+            }
+        };
+        host.appendChild(replay);
+    }
+
+    host.appendChild(readingParagraph(
+        'Listen to the slow version, then press 🎤 Start Speaking again and read the marked words a little more deliberately.',
+        'question-retry'));
 }
 
 // ============================================
@@ -7798,8 +8239,9 @@ function pronPhonemeBlock(pair) {
 
 /**
  * FR-PRN-2's other half: "learner can see per-pair accuracy". The number for the
- * pair on screen, plus all three pairs, because the whole point of tracking per
- * pair is that it is the learner's own profile — which contrast is their problem.
+ * pair on screen, plus every authored pair, because the whole point of tracking
+ * per pair is that it is the learner's own profile — which contrast is their
+ * problem.
  *
  * Says "not tried yet" rather than "0%" when there are no attempts: those are
  * different facts and printing the second for the first is a small lie.
@@ -7819,7 +8261,13 @@ function pronAccuracyBlock(pair) {
 
     const pairs = pronunciationPairs();
     if (pairs.length > 1) {
-        host.appendChild(pronDisclosure('Your accuracy on all three pairs', body => {
+        // US-234. The count is DERIVED, never written here. This label said "all
+        // three pairs" while the loop below walked pronunciationPairs() — true when
+        // only the 3 vowel sets existed, false the moment consonants.js added 5
+        // more, and false in the one view FR-PRN-2 exists to provide. A literal
+        // count beside a list it does not control is a lie waiting for the next
+        // content file.
+        host.appendChild(pronDisclosure('Your accuracy on all ' + pairs.length + ' pairs', body => {
             const ul = document.createElement('ul');
             ul.className = 'pron-accuracy-list';
             pairs.forEach(p => {
@@ -9736,15 +10184,18 @@ if (typeof Session !== 'undefined' && Session && typeof Session.registerSurfaces
             };
         },
 
-        // loadListeningExercise() puts the sentence on screen and hands it to
-        // #playListening, which speaks it through speechAPI. A predicate on
-        // feature detection, not `true`: this section has no written fallback, so
-        // on a device with no speech synthesis the step would be "listen to the
-        // model" with nothing to listen to.
+        // loadListeningExercise() puts the item on screen and playListeningItem()
+        // speaks it through speechAPI at the learner's chosen rate (US-704). A
+        // predicate on feature detection, not `true`: FR-LSN-3 now keeps the
+        // sentence out of the document until the attempt, so on a device with no
+        // speech synthesis this step would be "listen to the model" with nothing to
+        // listen to and nothing to read either — the FR-A11Y-2 text route exists
+        // for exactly that learner, but it is theirs to turn on, not something the
+        // planner may assume.
         'listen.model': function () {
             return pronAudioUsable()
-                ? { available: true, note: 'loadListeningExercise() shows the sentence and #playListening speaks it through the Web Speech API.' }
-                : { available: false, note: 'This device has no speech synthesis, so there is no model sentence to hear and the listening section has no written fallback.' };
+                ? { available: true, note: 'loadListeningExercise() shows the item and playListeningItem() speaks it through the Web Speech API at 0.75x / 1x / 1.25x.' }
+                : { available: false, note: 'This device has no speech synthesis, so there is no model sentence to hear. The learner can still work from the transcript by turning on "I can\'t use the audio" in the Listening section, but that is their choice to make and not a model to listen to.' };
         },
 
         // The three the module named as unbuilt, confirmed from the render side.
@@ -9754,8 +10205,9 @@ if (typeof Session !== 'undefined' && Session && typeof Session.registerSurfaces
         'listen.comprehend': {
             available: false,
             requirement: 'FR-LSN-1',
-            note: 'No function in app.js renders a listening comprehension question; the listening section is listen-and-repeat plus read-aloud only.'
+            note: 'No function in app.js renders a listening comprehension question. US-701 gave every listening item a `questions` array (data.js normaliseListeningItem), so the SHAPE now exists and is always an array — but nothing authors questions and nothing draws them, which is US-702. Still `false`: the field existing is not a surface.'
         },
+
         'speak.shadow': {
             available: false,
             requirement: 'FR-SPK-8',
@@ -10770,6 +11222,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // migrations.js having been loaded first, which is a <script> ordering
     // assumption that breaks silently. Idempotent, so calling both is safe.
     if (window.SRS && typeof SRS.init === 'function') SRS.init();
+    registerAuthoredDrillTargets();
     initializeNavigation();
     initializeDifficultySelectors();
     initializeVocabularyButtons();

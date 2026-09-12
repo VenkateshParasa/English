@@ -943,42 +943,160 @@ const readingPassages = {
     ]
 };
 
+// ============================================
+// LISTENING ITEMS  (US-701 / FR-LSN-1)
+// ============================================
+//
+// WHAT CHANGED AND WHY
+// Every listening item used to be a bare string — the sentence TTS reads aloud.
+// A string can carry exactly one fact, so the section could only ever be
+// listen-and-repeat: there was nowhere to put a transcript that differs from the
+// prompt (FR-LSN-3), nowhere for the gist-then-detail questions FR-LSN-1 needs,
+// no per-item speed (FR-LSN-2) and no duration for the 60s+ items FR-LSN-5 asks
+// for. docs/PRODUCT_BACKLOG.md §12 flags this conversion as the riskiest single
+// step of Phase 8 and gates the rest of Sprint 7 behind it, which is why it
+// ships on its own, with no new content authored alongside it.
+//
+// THE SHAPE  (normaliseListeningItem() below is the only definition that binds)
+//   text        REQUIRED. What is spoken. An item without it is not renderable.
+//   transcript  What the learner is shown AFTER the attempt. Defaults to `text`,
+//               which is the truth for a TTS-read sentence; a bundled recording
+//               of real speech (FR-LSN-5) will differ and needs its own field.
+//   tier        Authored tier hint. Defaults to the map key this item was found
+//               under, so it is never wrong and never has to be repeated.
+//   rate        Authored default speed, one of 0.75 / 1 / 1.25. A HINT only: the
+//               learner's selection wins (FR-LSN-2).
+//   seconds     Authored duration. Room for FR-LSN-5; nothing authors it today.
+//   questions   Gist-then-detail comprehension questions. ALWAYS an array, empty
+//               when none are authored, so a consumer can loop without a guard.
+//               US-702 authors these; this story only makes the field exist.
+//   situation / focus / notes / shadow
+//               The remaining fields of the schema sketched in
+//               docs/CONTENT_AUTHORING_GUIDE.md §5, carried so that authoring
+//               against that document does not need a second conversion.
+//
+// WHY NO SCHEMA_VERSION BUMP
+// js/core/migrations.js versions LEARNER data — the `learningProgress` record.
+// This is AUTHORED CONTENT: it ships with the app, no learner owns a copy, and
+// nothing in localStorage points into it by shape. What a learner does store is
+// `completedExercises.listening`, whose entries are `listening_<tier>_<index>`
+// stamps; the conversion below preserves order and count exactly, so every
+// existing stamp still names the same sentence. A bump would announce a
+// migration that has nothing to migrate.
+//
+// WHAT DOES NEED HANDLING is the cache, not the schema: app.js is cache-first in
+// service-worker.js while index.html is network-first, so a returning learner can
+// hold old JS. normaliseListeningItem() therefore accepts BOTH shapes for good —
+// a string is not a legacy case to be swept up later, it is a valid authored
+// shorthand for `{ text: <string> }`.
+
+/** The three speeds FR-LSN-2 names. Nothing else is a valid authored `rate`. */
+const LISTENING_RATES = [0.75, 1, 1.25];
+
+/** A trimmed non-empty string, or null. Used for every optional text field. */
+function listeningText(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * One listening item, normalised — or `null` when there is no speakable text.
+ *
+ * Null rather than a placeholder item on purpose. An item with no text renders an
+ * empty card and plays silence, and the learner cannot tell that from a broken
+ * device; the caller drops it instead, which is the loud-at-author-time behaviour
+ * FR-CNT-1 asks for.
+ *
+ * Accepts:
+ *   "Hello, how are you today?"        the pre-US-701 shape
+ *   { text: "...", questions: [...] }  the shape above
+ *   anything else                      -> null
+ *
+ * @param {*} raw    the authored entry
+ * @param {string} [tier] the map key it was found under, used when the item does
+ *                        not name its own tier
+ */
+function normaliseListeningItem(raw, tier) {
+    const item = (typeof raw === 'string') ? { text: raw } : raw;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+
+    const text = listeningText(item.text);
+    if (!text) return null;
+
+    const rate = LISTENING_RATES.indexOf(item.rate) > -1 ? item.rate : null;
+    const seconds = (typeof item.seconds === 'number' && isFinite(item.seconds) && item.seconds > 0)
+        ? item.seconds
+        : null;
+
+    return {
+        text: text,
+        // Defaults to `text`, never to '' — FR-A11Y-2 requires a transcript for
+        // EVERY audio item, so this field may not be empty for any item that has
+        // something to play.
+        transcript: listeningText(item.transcript) || text,
+        tier: listeningText(item.tier) || listeningText(tier),
+        rate: rate,
+        seconds: seconds,
+        situation: listeningText(item.situation),
+        focus: listeningText(item.focus),
+        notes: listeningText(item.notes),
+        shadow: item.shadow === true,
+        // Array.isArray, not truthiness: `questions: {}` is an authoring mistake
+        // and must read as "no questions", not as one unusable question.
+        questions: Array.isArray(item.questions) ? item.questions.slice() : []
+    };
+}
+
+/** Normalise a whole authored list, dropping the entries that cannot render. */
+function normaliseListeningList(list, tier) {
+    if (!Array.isArray(list)) return [];
+    return list
+        .map(function (raw) { return normaliseListeningItem(raw, tier); })
+        .filter(function (item) { return item !== null; });
+}
+
+// The 30 curated sentences, converted one-for-one from the string array they were
+// authored as. Nothing is added: no invented transcript (it equals `text` for a
+// TTS-read sentence and the normaliser fills it), no invented tier (the map key
+// supplies it), and no questions — US-702 authors those, and inventing them here
+// would be content review smuggled into a data-shape change.
 const listeningExercises = {
     foundation: [
-        "Hello, how are you today?",
-        "I am learning English every day.",
-        "The weather is beautiful outside.",
-        "My favorite color is blue.",
-        "I like to read books.",
-        "She is my best friend.",
-        "We go to school together.",
-        "The cat is sleeping on the sofa.",
-        "I love my family very much.",
-        "Today is a wonderful day."
+        { text: "Hello, how are you today?" },
+        { text: "I am learning English every day." },
+        { text: "The weather is beautiful outside." },
+        { text: "My favorite color is blue." },
+        { text: "I like to read books." },
+        { text: "She is my best friend." },
+        { text: "We go to school together." },
+        { text: "The cat is sleeping on the sofa." },
+        { text: "I love my family very much." },
+        { text: "Today is a wonderful day." }
     ],
     everyday: [
-        "Practice makes perfect in everything you do.",
-        "Learning a new language opens many opportunities.",
-        "Success comes to those who work hard.",
-        "Understanding different cultures is important.",
-        "Knowledge is the key to success.",
-        "Every challenge is an opportunity to grow.",
-        "Reading helps improve your vocabulary.",
-        "Communication skills are essential in life.",
-        "Dedication and persistence lead to achievement.",
-        "Education is the foundation of progress."
+        { text: "Practice makes perfect in everything you do." },
+        { text: "Learning a new language opens many opportunities." },
+        { text: "Success comes to those who work hard." },
+        { text: "Understanding different cultures is important." },
+        { text: "Knowledge is the key to success." },
+        { text: "Every challenge is an opportunity to grow." },
+        { text: "Reading helps improve your vocabulary." },
+        { text: "Communication skills are essential in life." },
+        { text: "Dedication and persistence lead to achievement." },
+        { text: "Education is the foundation of progress." }
     ],
     confident: [
-        "Collaboration enhances productivity and innovation.",
-        "Implementing effective strategies requires careful planning.",
-        "Understanding different perspectives broadens your worldview.",
-        "Demonstrating your skills builds confidence and credibility.",
-        "Fundamental principles guide successful decision-making.",
-        "Versatile individuals adapt well to changing circumstances.",
-        "Significant achievements require consistent effort and determination.",
-        "Beneficial habits contribute to long-term success.",
-        "Accomplishing goals demands focus and perseverance.",
-        "Efficient time management maximizes productivity and results."
+        { text: "Collaboration enhances productivity and innovation." },
+        { text: "Implementing effective strategies requires careful planning." },
+        { text: "Understanding different perspectives broadens your worldview." },
+        { text: "Demonstrating your skills builds confidence and credibility." },
+        { text: "Fundamental principles guide successful decision-making." },
+        { text: "Versatile individuals adapt well to changing circumstances." },
+        { text: "Significant achievements require consistent effort and determination." },
+        { text: "Beneficial habits contribute to long-term success." },
+        { text: "Accomplishing goals demands focus and perseverance." },
+        { text: "Efficient time management maximizes productivity and results." }
     ]
 };
 
@@ -1074,3 +1192,31 @@ const puzzleData = {
         ]
     }
 };
+
+// ============================================
+// NODE EXPORT  (US-701)
+// ============================================
+//
+// In the browser this file is a classic <script>: every `const` above is a
+// LEXICAL global that app.js reads directly, `module` does not exist, and this
+// block is skipped. There is no bundler and no `import` anywhere in the project
+// (see the header of jest.config.js), and nothing below adds one.
+//
+// It exists so normaliseListeningItem() can be unit tested. The alternative was
+// to put the normaliser in app.js, which __tests__/README.md explains cannot be
+// required at all — a shape that accepts two input forms and drops malformed
+// entries needs real assertions, not a regex over source text, because "a bare
+// string still works" is the whole promise of US-701 and the one that a stale
+// service-worker cache will actually cash in.
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        vocabularyData: vocabularyData,
+        sentenceExercises: sentenceExercises,
+        readingPassages: readingPassages,
+        listeningExercises: listeningExercises,
+        puzzleData: puzzleData,
+        LISTENING_RATES: LISTENING_RATES,
+        normaliseListeningItem: normaliseListeningItem,
+        normaliseListeningList: normaliseListeningList
+    };
+}

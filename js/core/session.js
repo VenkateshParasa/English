@@ -694,6 +694,13 @@
             const row = rows[i];
             const drill = row.drill || (typeof M.drillTarget === 'function' ? M.drillTarget(row.id) : null);
             if (!drill || !drill.strand) continue;
+            // US-187. Skip a target content has said it did not author, or the
+            // plan promises "Targeting your most frequent recent error" and then
+            // points the step at a lesson nobody wrote. `false` is that claim;
+            // `null` is only "nothing has registered yet" — which is this
+            // module's normal state in the unit suite and at first load — so it
+            // must fall through and behave exactly as before.
+            if (drill.authored === false) continue;
             const strand = STRAND_BY_KEY[drill.strand];
             if (!strand) continue;                       // e.g. `collocation`: no §3 strand
             const step = _stepForStrand(strand.id, steps);

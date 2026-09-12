@@ -25,17 +25,19 @@ on:
 #      FIXED: jest@30 and jest-environment-jsdom are declared and installed.
 #
 # So the reason it stays off is no longer technical: the owner asked for it off
-# while the suites were still churning. `npm test` passes locally — 9 suites,
-# 1046 tests, 77.4% statement coverage — so re-enabling it should now be a
-# one-line change rather than a project.
+# while the suites were still churning. `npm test` passes locally, so re-enabling
+# it should now be a one-line change rather than a project.
 #
+# Deliberately no test count or coverage figure here. The first version of this
+# comment quoted "112 unit assertions"; the second quoted "1046 tests, 77.4%".
+# Both were stale within a wave. Run `npm test` for the current number.
 # TO RESTORE:
 #   - uncomment the test job below
 #   - add `needs: test` back to the build job
 #
-# Until then those 1046 assertions exist but nothing runs them on push, so a
-# regression reaches main unchallenged. The syntax-check job below is a
-# deliberately minimal stand-in, not a replacement.
+# Until then the unit suites exist but nothing runs them on push, so a regression
+# reaches main unchallenged. The syntax-check job below is a deliberately minimal
+# stand-in, not a replacement.
 # ---------------------------------------------------------------------------
 
 jobs:

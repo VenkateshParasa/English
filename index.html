@@ -433,14 +433,44 @@
             <div class="listening-container">
                 <div class="exercise-card" role="form" aria-labelledby="listen-repeat-title">
                     <h3 id="listen-repeat-title">Listen and Repeat</h3>
-                    <p class="instruction">Click to hear the sentence, then repeat it:</p>
-                    <div class="sentence-display" id="listenSentence" aria-live="polite"></div>
+                    <p class="instruction">Play the sentence, then say it back. The words appear after you have had a go — hearing it first is the exercise.</p>
+                    <!-- FR-LSN-3: starts EMPTY and `.is-masked`. app.js fills it with
+                         an instruction before the attempt and with the transcript
+                         after it, so the sentence is not in the document — or in the
+                         page source — until the attempt has been made. -->
+                    <div class="sentence-display is-masked" id="listenSentence" aria-live="polite"></div>
+                    <!-- US-704 / FR-LSN-2. Toggle buttons, `aria-pressed` like the
+                         pronunciation group switcher; 1x is pressed in the markup so
+                         no JS is needed for the control to read correctly. -->
+                    <div class="listening-speed" id="listeningSpeed" role="group" aria-label="Playback speed">
+                        <span class="listening-speed-label">Speed</span>
+                        <button type="button" class="lsn-speed-btn" data-rate="0.75" aria-pressed="false" aria-label="Play at 0.75 times speed">0.75×</button>
+                        <button type="button" class="lsn-speed-btn active" data-rate="1" aria-pressed="true" aria-label="Play at normal speed">1×</button>
+                        <button type="button" class="lsn-speed-btn" data-rate="1.25" aria-pressed="false" aria-label="Play at 1.25 times speed">1.25×</button>
+                    </div>
                     <button class="btn-primary" id="playListening" aria-label="Play listening sentence">🔊 Play</button>
                     <button class="btn-primary" id="startRecording" aria-label="Start recording your voice">🎤 Record Your Voice</button>
                     <button class="btn-secondary" id="stopRecording" disabled aria-label="Stop recording">⏹️ Stop</button>
                     <button class="btn-primary" id="replayRecording" style="display:none;" aria-label="Replay your recording">🔄 Replay Recording</button>
+                    <!-- FR-A11Y-4: the no-microphone attempt route. Without it,
+                         recording was the only way to finish an item and a refused
+                         microphone ended the section. -->
+                    <button class="btn-secondary" id="listeningRepeated" aria-label="I said the sentence out loud">✓ I said it</button>
+                    <!-- FR-LSN-3 / FR-A11Y-2: on demand, and hidden until an attempt
+                         has been made. app.js unhides it; nothing else does. -->
+                    <button class="btn-secondary" id="revealTranscript" hidden aria-controls="listenSentence" aria-label="Show the transcript of this sentence">📄 Show the transcript</button>
                     <div class="recording-status" id="recordingStatus" role="status" aria-live="polite"></div>
                     <div class="feedback" id="listeningFeedback" role="status" aria-live="polite"></div>
+                    <!-- FR-A11Y-2 / US-711. A switch, not a per-item "show it
+                         anyway": a learner who cannot hear should say so once, not
+                         thirty times. app.js writes the note in both states. -->
+                    <div class="listening-route">
+                        <label class="listening-route-label" for="listeningTextRoute">
+                            <input type="checkbox" id="listeningTextRoute">
+                            I can’t use the audio — show me the words
+                        </label>
+                        <p class="listening-route-note" id="listeningTextRouteNote" aria-live="polite"></p>
+                    </div>
                     <div class="navigation-buttons" role="navigation" aria-label="Listening exercise navigation">
                         <button class="btn-secondary" id="prevListening" aria-label="Previous listening exercise">← Previous</button>
                         <button class="btn-primary" id="nextListening" aria-label="Next listening exercise">Next →</button>
@@ -449,8 +479,12 @@
                 <div class="exercise-card" role="form" aria-labelledby="speech-recognition-title">
                     <h3 id="speech-recognition-title">Read Aloud</h3>
                     <p class="instruction">Read the sentence below aloud. We will show you which words the recogniser matched:</p>
+                    <!-- This card's target IS the transcript, so it is locked until
+                         the reveal — an open Read Aloud card before the attempt is
+                         the FR-LSN-3 leak, not a second exercise. -->
+                    <p class="read-aloud-lock" id="readAloudLock" role="status">This opens once you have attempted the sentence above. Reading it first would hand you the answer to the listening task.</p>
                     <div class="sentence-display" id="targetWord" aria-live="polite" aria-label="Sentence to read aloud"></div>
-                    <button class="btn-primary" id="startSpeech" aria-label="Start speech recognition">🎤 Start Speaking</button>
+                    <button class="btn-primary" id="startSpeech" disabled aria-label="Start speech recognition">🎤 Start Speaking</button>
                     <div class="recognized-text" id="recognizedText" role="status" aria-live="polite"></div>
                     <div class="feedback" id="speechFeedback" role="status" aria-live="polite"></div>
                 </div>
@@ -686,6 +720,17 @@
          mistake categories in js/core/mistakes.js already point at, so without
          this file those dashboard drill buttons open nothing (US-215). -->
     <script src="data/grammar/question-formation.js"></script>
+    <!-- T-G7 postposition/preposition mismatch. Its id `prepositions` is the
+         drill target `gram.preposition-transfer` already points at, so this file
+         is what makes that dashboard button open something (US-225). -->
+    <script src="data/grammar/prepositions.js"></script>
+    <!-- T-G6 perfective aspect mismatch ("I have gone yesterday"). Its id
+         `past-simple` is the drill target BOTH `gram.tense-agreement` and
+         `gram.verb-form` point at, so this file closes the last two dead grammar
+         drill buttons except `register` (US-226). Loads before present-perfect.js
+         because point 9 teaches when NOT to use the perfect and defers the tense
+         itself to this point — the reverse order is unteachable. -->
+    <script src="data/grammar/past-simple.js"></script>
     <!-- First `everyday`-tier content: until this, a learner above foundation got no
          grammar step and no speaking step at all (US-178). -->
     <script src="data/grammar/present-perfect.js"></script>

@@ -2,21 +2,29 @@
 // Provides offline functionality and caching
 
 const CACHE_NAME = 'english-portal-v1.0.2';
-// v17 -> v18 (US-140 / US-141 / US-186). No file was ADDED, so STATIC_ASSETS
-// below is unchanged — but app.js and styles.css changed together and both go
+// v18 -> v19 (US-701 / US-703 / US-704 / US-711, plus US-225 / US-226). Two
+// content files WERE added to STATIC_ASSETS below — the prepositions and
+// past-simple grammar points; question-formation.js was already precached in v18.
+// Beyond that, data.js, app.js and styles.css changed together and all three go
 // through cacheFirstStrategy(STATIC_CACHE), while index.html goes network-first.
-// Without a new cache name a returning learner keeps the OLD app.js, and here
-// that is specifically: the dictation check still grading with the fake
-// `sim > 0.8` and printing an unmarked answer; the comprehension checker still
-// painting questions red with no fix beside them; and every new Mistakes.record()
-// call missing, so the dashboard's "what keeps coming back" panel stays
-// grammar/pronunciation-only. The new .question-feedback / .word-miss rules would
-// also be unstyled, since old styles.css has neither.
+// That combination is the whole reason this line must move: a returning learner
+// would fetch the NEW index.html — which has the speed buttons, the "✓ I said it"
+// button, the "Show the transcript" button, the "I can't use the audio" switch
+// and the Read Aloud lock note in it — and run the OLD app.js, which wires none
+// of them. The result would be five dead controls, a permanently locked Read
+// Aloud card (old app.js never enables #startSpeech) and a listening section with
+// an empty sentence box, because old loadListeningExercise() writes `sentence`
+// straight from a data.js that now holds objects and would print
+// "[object Object]" or nothing at all.
+//
+// v17 -> v18 (US-140 / US-141 / US-186): the dictation check still grading with
+// the fake `sim > 0.8`; comprehension questions painted red with no fix beside
+// them; every new Mistakes.record() call missing.
 //
 // The previous bumps, for the record: v14 -> v15 -> v16 (US-177 / US-181,
 // #reviewCard and #mistakePanel) and v16 -> v17 (US-179, the pronunciation
 // group switcher).
-const STATIC_CACHE = 'english-portal-static-v18';
+const STATIC_CACHE = 'english-portal-static-v19';
 const DYNAMIC_CACHE = 'english-portal-dynamic-v3';
 const API_CACHE = 'english-portal-api-v3';
 
@@ -60,6 +68,8 @@ const STATIC_ASSETS = [
     '/data/grammar/countability.js',
     '/data/grammar/present-simple-continuous.js',
     '/data/grammar/question-formation.js',
+    '/data/grammar/prepositions.js',
+    '/data/grammar/past-simple.js',
     '/data/grammar/present-perfect.js',
     '/data/pronunciation/vowels-stress.js',
     '/data/pronunciation/consonants.js',

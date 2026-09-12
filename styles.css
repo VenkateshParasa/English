@@ -1286,11 +1286,103 @@ header h1 {
 .sentence-display {
     font-size: 1.5em;
     padding: 30px;
-    background: white;
+    /* Was a hardcoded `white`, which in dark mode put --text-primary (gray-100)
+       on a white box — the transcript, which is the payoff of the whole listening
+       exercise, was the least readable thing on the screen. Both surfaces that
+       use this class hold text the learner has to read closely. */
+    background: var(--background-card, white);
+    color: var(--text-primary, inherit);
     border-radius: 10px;
     text-align: center;
     margin: 20px 0;
     border: 2px solid #667eea;
+}
+
+/* FR-LSN-3 (US-701 / US-703). Before the attempt this element holds an
+   INSTRUCTION, not the sentence, and it must not look like the sentence: same box,
+   quieter type, so a learner reads "press play" rather than mistaking a prompt for
+   the thing they were meant to hear. Nothing here hides text — the transcript is
+   genuinely absent from the DOM until the reveal, because a CSS-hidden transcript
+   is one "inspect element" (or one screen reader) away from being visible. */
+.sentence-display.is-masked {
+    font-size: 1.05em;
+    font-style: italic;
+    color: var(--text-secondary, #555);
+    border-style: dashed;
+    background: var(--panel-neutral, #f8fafc);
+}
+
+/* US-704 / FR-LSN-2 — the 0.75x / 1x / 1.25x control. */
+.listening-speed {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2, 0.5rem);
+    margin: 0 0 var(--space-3, 0.75rem);
+}
+
+.listening-speed-label {
+    font-weight: var(--font-weight-medium, 500);
+    color: var(--text-secondary, #555);
+}
+
+/* Same three-difference active state as .pron-group-btn: weight, border and
+   background, because colour alone is not a cue — and aria-pressed carries it for
+   a screen reader (app.js paintListeningSpeedButtons). 44px minimum target. */
+.lsn-speed-btn {
+    min-height: 44px;
+    min-width: 64px;
+    padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
+    border: 2px solid var(--border-color, #e5e7eb);
+    border-radius: var(--radius-full, 999px);
+    background: var(--background-card, #fff);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    transition: background var(--transition-base, 0.2s), border-color var(--transition-base, 0.2s);
+}
+
+.lsn-speed-btn:hover:not(.active) {
+    border-color: var(--primary-400, #818cf8);
+}
+
+.lsn-speed-btn.active {
+    border-color: var(--primary-500, #4f46e5);
+    background: var(--panel-neutral, #f1f5f9);
+    font-weight: 700;
+}
+
+/* FR-A11Y-2 / US-711 — "I can't use the audio". Set apart from the exercise
+   buttons: it is a statement about the learner, not a step in the drill. */
+.listening-route {
+    margin: var(--space-4, 1rem) 0 0;
+    padding: var(--space-3, 0.75rem);
+    border-top: 1px solid var(--border-color, #e5e7eb);
+}
+
+.listening-route-label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2, 0.5rem);
+    min-height: 44px;
+    cursor: pointer;
+    font-weight: var(--font-weight-medium, 500);
+}
+
+.listening-route-note {
+    margin: var(--space-1, 0.25rem) 0 0;
+    font-size: 0.9em;
+    color: var(--text-secondary, #555);
+}
+
+/* The Read Aloud card before the reveal. Its target is the transcript, so the
+   card is locked rather than pre-filled (FR-LSN-3). */
+.read-aloud-lock {
+    margin: 0 0 var(--space-3, 0.75rem);
+    padding: var(--space-3, 0.75rem);
+    border-left: 4px solid var(--primary-400, #818cf8);
+    background: var(--panel-neutral, #f8fafc);
+    font-style: italic;
 }
 
 .recording-status {
