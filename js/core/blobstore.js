@@ -32,7 +32,12 @@
  *   2. A FAILED WRITE LOSES NOTHING. Every write is one IndexedDB transaction:
  *      eviction, the metadata row and the audio payload commit together or not
  *      at all. Space is refused before anything is deleted, so "there is no
- *      room" can never cost a learner a recording they already had.
+ *      room" can never cost a learner a recording they already had. That
+ *      includes the QuotaExceededError retry: the retry's extra eviction is
+ *      issued INSIDE the retrying transaction (see put() and commit()), so a
+ *      retry that hits quota again rolls its own eviction back and the refusal
+ *      is honest. Nothing is ever deleted by a transaction that does not go on
+ *      to write the recording it deleted it for.
  *
  * Public API (window.BlobStore) — see the README block above each method:
  *   isSupported()                        -> boolean, synchronous, cheap
@@ -110,7 +115,12 @@
     // roughly an hour: far past any prompt in this app. A blob bigger than this
     // is a recorder that was never stopped, and accepting it would spend a
     // fifth of the whole archive on one accident.
-    const MAX_RECORDING_BYTES = 10 * 1024 * 1024;
+    //
+    // Clamped to MAX_TOTAL_BYTES so "one recording may never be more than the
+    // whole archive" is true by construction rather than by a second runtime
+    // check that the 10MB rule always beat to it (US-221). Whichever cap is
+    // smaller is the one put() reports, and there is only ever one branch.
+    const MAX_RECORDING_BYTES = Math.min(10 * 1024 * 1024, MAX_TOTAL_BYTES);
 
     // On QuotaExceededError we free space and retry exactly ONCE, asking for a
     // multiple of what we need so the retry is not defeated by the next
@@ -138,7 +148,16 @@
         otherTab: 'This app is open in another tab, which is holding on to your recordings. Close the other tab and try again.',
 
         saved: 'Saved. You can play it back and compare it with your earlier tries.',
+        // Retention at THIS prompt: the learner's fourth try here pushed out the
+        // in-between one. Only ever used when the deleted recording belonged to
+        // the prompt just recorded at.
         savedEvicted: 'Saved. This prompt keeps your first recording and your two most recent, so an in-between one was removed.',
+        // The 50MB cap or the browser's quota, which frees space from OTHER
+        // prompts. Saying "this prompt" here would name the wrong prompt
+        // entirely (US-218), so this copy says where the space came from and
+        // what is still protected. `evictedPrompts` on the result names them.
+        savedFreedSpace: 'Saved. There was no room left on this device, so in-between recordings at your other prompts were deleted to make space. Every prompt still keeps its first recording and its most recent one.',
+        savedEvictedAndFreedSpace: 'Saved. An in-between recording at this prompt was removed, and so were in-between recordings at your other prompts, because there was no room left. Every prompt still keeps its first recording and its most recent one.',
 
         empty: 'Nothing was recorded, so there is nothing to keep.',
         tooLong: 'That recording is too long to keep. Stop the recording when you have finished speaking and try again — nothing else has changed.',
@@ -273,7 +292,22 @@
         return trimmed.slice(0, max || 200);
     }
 
+    /**
+     * A non-negative finite number, or null.
+     *
+     * Deliberately NOT `Number(value)` alone: `Number(null)` is 0, `Number(false)`
+     * is 0, `Number('')` is 0 and `Number([])` is 0, all of which pass isFinite
+     * and `>= 0`. That is how a recording saved with no duration came back as
+     * `null` from put() and `0` from list()/get() — the same recording, two
+     * different answers, and a UI showing "0:00" for a length nobody measured
+     * (US-220). Only numbers and non-blank numeric strings are accepted; every
+     * other type means "not a number", which is what null says.
+     */
     function cleanNumber(value) {
+        if (typeof value === 'number') {
+            return (isFinite(value) && value >= 0) ? value : null;
+        }
+        if (typeof value !== 'string' || value.trim() === '') return null;
         const n = Number(value);
         return (isFinite(n) && n >= 0) ? n : null;
     }
@@ -288,7 +322,26 @@
         return (a.createdAt - b.createdAt) || (a.id - b.id);
     }
 
-    /** Rows we can trust: anything else in the store is ignored, never thrown on. */
+    /**
+     * Rows we can trust: anything else in the store is ignored, never thrown on.
+     *
+     * "Trust" includes being FINDABLE. A row whose createdAt is not a number is
+     * absent from IDX_PROMPT_TIME — a compound key containing null or undefined
+     * is not a valid key, so IndexedDB skips the record entirely — and list()
+     * reads through that index. Coercing such a row to the epoch here would have
+     * usage() and prompts() count a recording, and eviction act on it, while the
+     * archive screen could never show it and the learner could never play it
+     * (US-220). So it is rejected on the same footing as a row with no promptId:
+     * one answer everywhere, rather than two answers depending on which method
+     * was asked.
+     *
+     * Consequence, stated rather than hidden: bytes held by such a row are not
+     * counted by usage() and cannot be reclaimed by eviction. Only clear(), which
+     * empties the stores wholesale, removes it. put() can never create one (see
+     * the createdAt guard there), so this is a foreign-write / corruption case,
+     * and under-reporting a row we refuse to manage is safer than acting on one
+     * we cannot show.
+     */
     function usableRows(rows) {
         if (!rows || typeof rows.length !== 'number') return [];
         const out = [];
@@ -297,6 +350,10 @@
             if (!r || typeof r !== 'object') continue;
             if (typeof r.id !== 'number' || r.id === PROBE_ID) continue;
             if (typeof r.promptId !== 'string' || !r.promptId) continue;
+            // Any value the index can hold is fine, including a garbage string
+            // that cleanNumber turns into 0 — such a row IS indexed, just dated
+            // to the epoch. Only "no key at all" is unusable.
+            if (r.createdAt === null || r.createdAt === undefined) continue;
             out.push({
                 id: r.id,
                 promptId: r.promptId,
@@ -538,9 +595,34 @@
     const NEW_ID = Infinity;
 
     /**
+     * The ONE definition of "this row is the prompt's pinned baseline".
+     *
+     * planRetention() used to pin `ordered[0]` — the oldest row it could see —
+     * while evictionCandidates() protected `r.baseline`, the flag commit()
+     * persists for the first recording ever made at a prompt. Those agree until
+     * a learner deletes their real baseline (remove() deliberately allows it):
+     * from then on the next-oldest row was protected by one function and offered
+     * up as expendable by the other, so "is this row safe?" depended on which
+     * function you asked (US-222).
+     *
+     * The persisted flag wins, because it is the only one of the two that can be
+     * TRUE: it means "the first recording ever made here", it is what
+     * publicRecord() reports to the UI, and re-deriving it from position would
+     * make a later recording claim to be the learner's month-one. A prompt whose
+     * baseline the learner deleted therefore has no pinned row at all and keeps
+     * its MAX_PER_PROMPT most recent — which is what "I deleted my first try"
+     * honestly means. It is not silently promoted, in either function.
+     */
+    function isPinnedBaseline(row) {
+        return PIN_BASELINE && !!row && row.baseline === true;
+    }
+
+    /**
      * Which of ONE prompt's rows to drop, given the projected list including
      * the row about to be written. Oldest first, keeping:
-     *   - the pinned baseline (the prompt's first recording), and
+     *   - the pinned baseline, by isPinnedBaseline() — the same definition
+     *     evictionCandidates() protects, so the two can never disagree about
+     *     whether a given row is safe (US-222), and
      *   - the most recent, up to MAX_PER_PROMPT slots in total.
      */
     function planRetention(projected) {
@@ -555,7 +637,11 @@
             kept += 1;
         }
 
-        if (PIN_BASELINE) keepRow(ordered[0]);
+        // The pinned baseline, by the shared definition — not "whatever is
+        // oldest", which is a different row once the real baseline is gone.
+        for (let i = 0; i < ordered.length; i++) {
+            if (isPinnedBaseline(ordered[i])) { keepRow(ordered[i]); break; }
+        }
         for (let i = ordered.length - 1; i >= 0 && kept < MAX_PER_PROMPT; i--) keepRow(ordered[i]);
 
         const victims = [];
@@ -590,7 +676,7 @@
         return rows
             .filter(function (r) {
                 if (skip[r.id]) return false;
-                if (PIN_BASELINE && r.baseline) return false;
+                if (isPinnedBaseline(r)) return false;
                 const newest = newestPerPrompt[r.promptId];
                 return !(newest && newest.id === r.id);
             })
@@ -654,6 +740,14 @@
      * deliberately NOT cached.
      */
     const PERMANENT_FAILURES = ['no-indexeddb', 'no-blob', 'no-blob-storage', 'blob-roundtrip-failed'];
+
+    /**
+     * The codes openDb() can reject with. They all mean "this device is not
+     * keeping recordings right now", which is a different thing from "that
+     * recording is not in the store" — see readRecord() (US-219).
+     */
+    const OPEN_FAILURE_CODES = ['no-indexeddb', 'blocked', 'blocked-by-other-tab', 'timeout'];
+
 
     function available(opts) {
         const deep = !!(opts && opts.deep);
@@ -754,8 +848,12 @@
      * @param {Blob} blob - MediaRecorder output.
      * @param {Object} [meta] - { durationMs, mimeType, label }. All optional,
      *        all sanitised, all advisory.
-     * @returns {Promise<Object>} { ok:true, record, evicted:[id...], bytes,
-     *          message } or { ok:false, code, message }. Never rejects.
+     * @returns {Promise<Object>} { ok:true, record, evicted:[id...],
+     *          evictedPrompts:[promptId...], evictedElsewhere:[id...], bytes,
+     *          count, quotaRetry, message } or { ok:false, code, message }.
+     *          Never rejects. `evictedPrompts` names every prompt that lost a
+     *          recording, so a caller can say WHICH prompt was affected instead
+     *          of assuming it was this one.
      *
      * Codes: 'no-indexeddb' | 'blocked' | 'blocked-by-other-tab' | 'timeout'
      *        (storage unavailable — offer playback-until-navigation instead),
@@ -773,15 +871,23 @@
         if (size > MAX_RECORDING_BYTES) {
             return Promise.resolve(fail('too-large', MESSAGES.tooLong, { size: size, limit: MAX_RECORDING_BYTES }));
         }
-        // One recording may never be more than the whole archive.
-        if (size > MAX_TOTAL_BYTES) {
-            return Promise.resolve(fail('too-large', MESSAGES.tooLong, { size: size, limit: MAX_TOTAL_BYTES }));
-        }
+        // There is no second "bigger than the whole archive" check here. It used
+        // to sit at this exact spot and could never fire, because
+        // MAX_RECORDING_BYTES is defined as at most MAX_TOTAL_BYTES, so the guard
+        // above always fires first (US-221). Deleting it rather than reordering
+        // the two is deliberate: reordering would report `limit:
+        // MAX_TOTAL_BYTES` to a learner whose recording actually broke the 10MB
+        // per-recording rule, which is the number they can act on. The invariant
+        // that made it dead now lives in the constant itself.
 
         const row = {
             v: RECORD_VERSION,
             promptId: key,
-            createdAt: now(),
+            // Never null/undefined, whatever _now() is stubbed with: a compound
+            // index key containing null is not a valid key, so such a row would
+            // be written, counted and evicted while being invisible to list()
+            // (US-220). 0 is a real key; "no key" is not.
+            createdAt: cleanNumber(now()) || 0,
             size: size,
             mimeType: cleanString(meta && meta.mimeType, 100) || (typeof blob.type === 'string' && blob.type ? blob.type : null),
             durationMs: cleanNumber(meta && meta.durationMs),
@@ -803,31 +909,64 @@
                 // deleted (never a prompt's newest, never a pinned baseline),
                 // and retry EXACTLY once.
                 //
+                // The freeing happens INSIDE the retrying transaction, not in a
+                // transaction of its own (US-216). That is the whole point: if
+                // the retry hits quota again, the abort rolls the eviction back
+                // with it, so the `full` refusal below — whose copy promises
+                // "your existing recordings are safe" — is telling the truth.
+                // An eviction committed separately could not be undone, and on
+                // a device that has just proved it has no room the only way to
+                // undo it would be to hold the evicted payloads in memory and
+                // write them back, which is the one thing such a device cannot
+                // be asked to do. Same-transaction eviction needs no memory and
+                // no restore.
+                //
+                // The cost, stated plainly: an engine that does not credit
+                // in-transaction deletes against the transaction's own quota
+                // will fail the retry that a separate eviction might have let
+                // through. commit() already relies on exactly that crediting
+                // for the 50MB cap path (deletes are issued before the insert
+                // for this reason), and the failure mode is a refusal, never a
+                // loss — so a lower retry success rate is the right side to
+                // err on.
+                //
                 // Nothing has been lost at this point — the failed transaction
                 // rolled back its own eviction along with its write.
                 logError(e, 'blobstore quota on first write');
-                return evictForQuota(db, size * QUOTA_EVICT_FACTOR).then(function (freed) {
-                    if (freed.ids.length === 0) throw e;   // nothing expendable
-                    return commit(db, row, blob).then(function (result) {
-                        result.evicted = freed.ids.concat(result.evicted);
-                        result.quotaRetry = true;
-                        return result;
-                    });
+                return commit(db, row, blob, size * QUOTA_EVICT_FACTOR).then(function (result) {
+                    result.quotaRetry = true;
+                    return result;
                 });
             });
         }).then(function (result) {
+            const victims = result.evictedRows || [];
+            const here = victims.filter(function (r) { return r.promptId === key; });
+            const elsewhere = victims.filter(function (r) { return r.promptId !== key; });
+            const affected = [];
+            victims.forEach(function (r) {
+                if (affected.indexOf(r.promptId) === -1) affected.push(r.promptId);
+            });
             return {
                 ok: true,
                 record: result.record,
                 evicted: result.evicted,
+                // Every prompt that lost a recording to this write, this one
+                // included. A cap or quota eviction takes from OTHER prompts, and
+                // a learner told "an in-between one was removed" about the prompt
+                // in front of them — which may still hold a single recording — is
+                // being told about the wrong prompt (US-218, BR-3).
+                evictedPrompts: affected,
+                evictedElsewhere: elsewhere.map(function (r) { return r.id; }),
                 bytes: result.bytes,
                 count: result.count,
                 quotaRetry: !!result.quotaRetry,
-                message: result.evicted.length ? MESSAGES.savedEvicted : MESSAGES.saved
+                message: elsewhere.length
+                    ? (here.length ? MESSAGES.savedEvictedAndFreedSpace : MESSAGES.savedFreedSpace)
+                    : (here.length ? MESSAGES.savedEvicted : MESSAGES.saved)
             };
         }).catch(function (e) {
             logError(e, 'blobstore put');
-            if (isQuotaError(e) || (e && e.code === 'cap-full')) {
+            if (isQuotaError(e) || (e && (e.code === 'cap-full' || e.code === 'quota-full'))) {
                 return fail('full', MESSAGES.full);
             }
             if (isCloneError(e)) {
@@ -846,8 +985,18 @@
      *
      * Deletes are issued BEFORE the insert deliberately, so the engine has the
      * freed pages available for the payload rather than having to grow first.
+     *
+     * @param {number} [quotaHeadroom] - Extra bytes to free beyond the 50MB
+     *        cap's own arithmetic, used ONLY by put()'s one quota retry. Freeing
+     *        it here rather than in a transaction of its own is what makes the
+     *        retry's failure recoverable: the abort takes the eviction with it.
+     *        Partial freeing is accepted (freeing what we can and letting the
+     *        engine decide beats refusing because we could not free the full
+     *        multiple), but freeing NOTHING refuses before any payload is
+     *        written, so a second quota failure is never provoked for nothing.
      */
-    function commit(db, row, blob) {
+    function commit(db, row, blob, quotaHeadroom) {
+        const headroom = cleanNumber(quotaHeadroom) || 0;
         return runTx(db, [STORE_META, STORE_AUDIO], 'readwrite', function (tx, ctx) {
             const metaStore = tx.objectStore(STORE_META);
             const audioStore = tx.objectStore(STORE_AUDIO);
@@ -882,7 +1031,29 @@
                     return;
                 }
 
-                const evicted = retentionVictims.concat(spacePlan.ids);
+                // The quota retry's extra headroom, from the same expendable set
+                // and net of whatever the two plans above already free.
+                let quotaVictims = [];
+                if (headroom > 0) {
+                    const planned = retentionVictims.concat(spacePlan.ids);
+                    const alreadyFreed = totalBytes(all.filter(function (r) {
+                        return planned.indexOf(r.id) !== -1;
+                    }));
+                    const stillNeeded = headroom - alreadyFreed;
+                    if (stillNeeded > 0) {
+                        const quotaPlan = planForSpace(all, planned, stillNeeded);
+                        if (quotaPlan.ids.length === 0) {
+                            // Nothing expendable left. Refuse before writing
+                            // anything, so the retry does not re-provoke the
+                            // quota error it cannot do anything about.
+                            ctx.refuse(storeError('quota-full', MESSAGES.full));
+                            return;
+                        }
+                        quotaVictims = quotaPlan.ids;
+                    }
+                }
+
+                const evicted = retentionVictims.concat(spacePlan.ids, quotaVictims);
                 evicted.forEach(function (id) {
                     ctx.watch(metaStore.delete(id));
                     ctx.watch(audioStore.delete(id));
@@ -905,6 +1076,11 @@
                         ctx.resolveWith({
                             record: publicRecord(stored),
                             evicted: evicted,
+                            // Which prompt each victim belonged to, so put() can
+                            // pick copy that names the right one (US-218). Ids
+                            // alone cannot answer that once the rows are gone.
+                            evictedRows: all.filter(function (r) { return evictedSet[r.id]; })
+                                .map(function (r) { return { id: r.id, promptId: r.promptId }; }),
                             bytes: totalBytes(kept) + row.size,
                             count: kept.length + 1
                         });
@@ -914,31 +1090,33 @@
         });
     }
 
-    /** Free at least `bytesNeeded` from the expendable set. Its own transaction. */
-    function evictForQuota(db, bytesNeeded) {
-        return readAllMeta(db).then(function (all) {
-            const plan = planForSpace(all, [], bytesNeeded);
-            // Partial is fine here: freeing what we can and retrying beats
-            // refusing because we could not free the full multiple.
-            if (plan.ids.length === 0) return { ids: [], freed: 0 };
-            return removeIds(db, plan.ids).then(function () {
-                return { ids: plan.ids, freed: plan.freed };
-            });
-        }).catch(function (e) {
-            logError(e, 'blobstore quota eviction');
-            return { ids: [], freed: 0 };
-        });
-    }
-
+    /**
+     * Delete a set of ids, metadata and payload together, in one transaction.
+     * Resolves with the ids that WERE THERE and are now gone — not the ids it
+     * was asked for. IDBObjectStore.delete() succeeds silently on a key that
+     * does not exist, so without the read below remove() would confirm deleting
+     * a recording that was never in the store (US-217). The read and both
+     * deletes share one transaction, so nothing can appear or vanish between
+     * asking and acting.
+     */
     function removeIds(db, ids) {
         return runTx(db, [STORE_META, STORE_AUDIO], 'readwrite', function (tx, ctx) {
             const metaStore = tx.objectStore(STORE_META);
             const audioStore = tx.objectStore(STORE_AUDIO);
+            const removed = [];
+            // Resolved with by reference: `removed` is still being filled by the
+            // onsuccess handlers below when this runs, and the transaction only
+            // commits once they have all fired.
+            ctx.resolveWith(removed);
             ids.forEach(function (id) {
-                ctx.watch(metaStore.delete(id));
-                ctx.watch(audioStore.delete(id));
+                const probe = ctx.watch(metaStore.get(id));
+                probe.onsuccess = function () {
+                    if (probe.result === undefined || probe.result === null) return;
+                    removed.push(id);
+                    ctx.watch(metaStore.delete(id));
+                    ctx.watch(audioStore.delete(id));
+                };
             });
-            ctx.resolveWith(ids.slice());
         });
     }
 
@@ -980,13 +1158,21 @@
     }
 
     /**
-     * One recording, blob included. null when it is not there — including the
-     * case where the metadata row survived but the payload did not, which is
-     * repaired (the orphan row is deleted) rather than reported forever.
+     * One recording, blob included, WITH the reason when there is none.
+     *
+     * get() flattens the reason away because its documented contract is
+     * "record or null", but "this device cannot open its storage at all" and
+     * "that recording is not here" are different facts, and openUrl() has to
+     * tell a learner which one happened. Reporting "no longer on this device"
+     * to somebody whose browser merely blocked IndexedDB tells them their
+     * recording was deleted when it was never saveable (US-219, BR-3).
+     *
+     * @returns {Promise<Object>} { ok:true, record } or { ok:false, code,
+     *          message }. Never rejects.
      */
-    function get(id) {
+    function readRecord(id) {
         const numericId = Number(id);
-        if (!isFinite(numericId)) return Promise.resolve(null);
+        if (!isFinite(numericId)) return Promise.resolve(fail('missing', MESSAGES.missing));
 
         return openDb().then(function (db) {
             return runTx(db, [STORE_META, STORE_AUDIO], 'readonly', function (tx, ctx) {
@@ -1006,14 +1192,38 @@
             }).then(function (result) {
                 if (result && result.orphan) {
                     // A row with no audio can only mislead the UI. Drop it, in
-                    // its own transaction, and report "not there".
-                    return removeIds(db, [result.orphan.id]).catch(function () {}).then(function () { return null; });
+                    // its own transaction, and report "not there" — which for an
+                    // orphan is the honest answer.
+                    return removeIds(db, [result.orphan.id]).catch(function () {}).then(function () {
+                        return fail('missing', MESSAGES.missing);
+                    });
                 }
-                return result;
+                if (!result) return fail('missing', MESSAGES.missing);
+                return { ok: true, record: result };
             });
         }).catch(function (e) {
             logError(e, 'blobstore get');
-            return null;
+            const code = (e && typeof e.code === 'string') ? e.code : 'read-failed';
+            // Only the open() failures mean "this device will not keep
+            // recordings"; a failed read means "could not be opened for
+            // playback". Neither means "deleted".
+            return OPEN_FAILURE_CODES.indexOf(code) !== -1
+                ? fail(code, (e && e.learnerMessage) || MESSAGES.unavailable)
+                : fail(code, MESSAGES.playbackFailed);
+        });
+    }
+
+    /**
+     * One recording, blob included. null when it is not there — including the
+     * case where the metadata row survived but the payload did not, which is
+     * repaired (the orphan row is deleted) rather than reported forever, and
+     * including the case where storage could not be opened. Callers that need to
+     * tell those apart use openUrl(), whose failures carry the code, or ask
+     * available().
+     */
+    function get(id) {
+        return readRecord(id).then(function (found) {
+            return found.ok ? found.record : null;
         });
     }
 
@@ -1080,10 +1290,16 @@
      * A playable url for a stored recording.
      * @returns {Promise<Object>} { ok:true, url, revoke, record } or
      *          { ok:false, code, message }. The caller MUST call revoke().
+     *
+     * Codes: 'missing' (really not in the store), 'no-indexeddb' | 'blocked' |
+     *        'blocked-by-other-tab' | 'timeout' (storage unavailable — the
+     *        recording may never have been saved at all, so the copy says so
+     *        rather than claiming a deletion), 'read-failed', 'no-object-url'.
      */
     function openUrl(id) {
-        return get(id).then(function (record) {
-            if (!record) return fail('missing', MESSAGES.missing);
+        return readRecord(id).then(function (found) {
+            if (!found.ok) return fail(found.code, found.message);
+            const record = found.record;
             if (!global.URL || typeof global.URL.createObjectURL !== 'function') {
                 return fail('no-object-url', MESSAGES.playbackFailed);
             }
@@ -1109,13 +1325,21 @@
     // Deleting
     // ------------------------------------------------------------------
 
-    /** Delete one recording. Learner-initiated, so it is not protected here. */
+    /**
+     * Delete one recording. Learner-initiated, so it is not protected here.
+     *
+     * An id that is not in the store reports { ok:false, code:'missing' } — the
+     * same answer as an unusable id — rather than confirming a deletion that
+     * never happened (US-217). A UI acting on a stale list therefore gets told
+     * to refresh instead of being told "Recording deleted."
+     */
     function remove(id) {
         const numericId = Number(id);
         if (!isFinite(numericId)) return Promise.resolve(fail('missing', MESSAGES.missing));
         return openDb().then(function (db) {
             return removeIds(db, [numericId]);
         }).then(function (ids) {
+            if (ids.length === 0) return fail('missing', MESSAGES.missing);
             revokeAll();   // any live url may point at what was just deleted
             return { ok: true, removed: ids.length, message: MESSAGES.removed };
         }).catch(function (e) {
@@ -1133,9 +1357,12 @@
                 const ids = all.filter(function (r) { return r.promptId === key; })
                                .map(function (r) { return r.id; });
                 if (ids.length === 0) return { ok: true, removed: 0, message: MESSAGES.removed };
-                return removeIds(db, ids).then(function () {
-                    revokeAll();
-                    return { ok: true, removed: ids.length, message: MESSAGES.removed };
+                return removeIds(db, ids).then(function (gone) {
+                    // `gone` rather than `ids`: another tab may have deleted a row
+                    // between the ledger read and this transaction, and this
+                    // method reports what it removed (US-217).
+                    if (gone.length) revokeAll();
+                    return { ok: true, removed: gone.length, message: MESSAGES.removed };
                 });
             });
         }).catch(function (e) {

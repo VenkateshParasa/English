@@ -59,34 +59,44 @@
  * behaviour in the house style of srs.test.js / portability.test.js so the suite
  * stays green and the finding stays visible:
  *
- *   A. put() can report `full` — whose learner copy is "Your existing
- *      recordings are safe" — AFTER permanently deleting an existing recording.
- *      The quota path evicts in its OWN transaction (evictForQuota, :918), so
- *      when the retry also hits quota there is nothing to roll it back. This is
- *      the one that contradicts NFR-10 ("never silent data loss") and the
- *      module's own stated property 2. See "quota › ⚠️ DEFECT A".
- *   B. remove(id) reports `{ ok:true, removed:1, message:'Recording deleted.' }`
- *      for an id that was never in the store. `removeIds` resolves with
- *      `ids.slice()` (:941) — what it was asked to delete, not what IndexedDB
- *      held. IDBObjectStore.delete() on an absent key succeeds silently.
- *   C. MESSAGES.savedEvicted ("This prompt keeps your first recording and your
- *      two most recent, so an in-between one was removed") is also used when the
- *      evicted row belonged to a DIFFERENT prompt, via the 50MB cap path. put()
- *      picks the message from `evicted.length` alone (:826).
- *   D. openUrl() on a device with no IndexedDB reports `missing` — "That
- *      recording is no longer on this device" — rather than an unavailability
- *      code, because get() flattens both cases to null.
- *   E. `cleanNumber(null) === 0`, because `Number(null) === 0`. usableRows()
- *      (:307) runs every stored row through it, so a recording saved with no
- *      durationMs is reported as `null` by put() and as `0` by list()/get():
- *      the same recording, two different answers. A row with a null `createdAt`
- *      is coerced to the epoch AND is absent from IDX_PROMPT_TIME, so it is
- *      counted by usage()/prompts() while being invisible to list().
+ *   A. FIXED (US-216). put() used to report `full` — whose learner copy is "Your
+ *      existing recordings are safe" — AFTER permanently deleting an existing
+ *      recording, because the quota path evicted in its OWN transaction
+ *      (evictForQuota) and nothing could roll that back when the retry also hit
+ *      quota. The retry now frees its headroom inside its own transaction, so
+ *      the abort takes the eviction with it. See "quota › FIXED (US-216)".
+ *   B. FIXED (US-217). remove(id) used to report
+ *      `{ ok:true, removed:1, message:'Recording deleted.' }` for an id that was
+ *      never in the store, because `removeIds` resolved with `ids.slice()` — what
+ *      it was asked to delete, not what IndexedDB held. It now reads each row in
+ *      the deleting transaction and reports `missing` when there was nothing
+ *      there.
+ *   C. FIXED (US-218). MESSAGES.savedEvicted ("This prompt keeps your first
+ *      recording and your two most recent, so an in-between one was removed") was
+ *      also used when the evicted row belonged to a DIFFERENT prompt, via the
+ *      50MB cap path, because put() picked the message from `evicted.length`
+ *      alone. It now picks from WHOSE rows went, and `evictedPrompts` names them.
+ *   D. FIXED (US-219). openUrl() on a device with no IndexedDB reported `missing`
+ *      — "That recording is no longer on this device" — because get() flattened
+ *      unavailability and not-found to the same null. Both now go through
+ *      readRecord(), which keeps the reason; get() still returns null.
+ *   E. FIXED (US-220). `cleanNumber(null)` was 0, because `Number(null) === 0`, and
+ *      usableRows() ran every stored row through it — so a recording saved with no
+ *      durationMs was reported as `null` by put() and as `0` by list()/get(): the
+ *      same recording, two different answers. cleanNumber() now accepts only
+ *      numbers and numeric strings. A row with a null `createdAt` — absent from
+ *      IDX_PROMPT_TIME, because a compound key containing null is not a valid key,
+ *      yet counted by usage()/prompts() — is now rejected by usableRows() instead
+ *      of coerced to the epoch, and put() coerces its own createdAt so it can
+ *      never write one.
  *
- * Also pinned, not defects but worth not re-deriving: the `size > MAX_TOTAL_BYTES`
- * guard at :777-779 is unreachable (the 10MB per-recording check fires first), and
- * the `if (keep[row.id]) return;` guard in planRetention is defensive only (the
- * early return at :548 makes a revisit impossible).
+ * Also once pinned here, now fixed: the `size > MAX_TOTAL_BYTES` guard in put() was
+ * unreachable (the 10MB per-recording check always fired first) and has been removed
+ * in favour of clamping MAX_RECORDING_BYTES to MAX_TOTAL_BYTES (US-221); and
+ * planRetention()/evictionCandidates() disagreed about which row counted as a
+ * baseline once the real one was deleted, and now share isPinnedBaseline() (US-222).
+ * Still true and still only defensive: the `if (keep[row.id]) return;` guard in
+ * planRetention (the early return at the top makes a revisit impossible).
  *
  * Requirements under test: FR-DATA-6 (blobs in IndexedDB, size cap, eviction),
  * NFR-10 (quota handled with a clear message, never silent data loss),
@@ -843,7 +853,7 @@ describe('retention: the pure planner', () => {
     });
 
     test('the new row is never itself a victim, even sharing a millisecond with the oldest', () => {
-        const projected = [row(1, 500), row(2, 500), row(3, 500), row(Infinity, 500)];
+        const projected = [row(1, 500, { baseline: true }), row(2, 500), row(3, 500), row(Infinity, 500)];
         const victims = BlobStore._planRetention(projected);
         expect(victims).not.toContain(Infinity);
         // NEW_ID = +Infinity so byAge sorts the new row LAST on a tie: the real
@@ -852,9 +862,53 @@ describe('retention: the pure planner', () => {
     });
 
     test('ties are broken by id, so eviction is a total order', () => {
-        const projected = [row(5, 1), row(3, 1), row(4, 1), row(Infinity, 1)];
-        // Oldest by (createdAt, id) is 3; newest kept are 5 and the new row.
+        const projected = [row(5, 1), row(3, 1, { baseline: true }), row(4, 1), row(Infinity, 1)];
+        // Oldest by (createdAt, id) is 3 — and it is the flagged baseline;
+        // newest kept are 5 and the new row.
         expect(BlobStore._planRetention(projected)).toEqual([4]);
+    });
+
+    test('US-222 — planRetention and evictionCandidates agree on which row is the baseline', () => {
+        // The disagreement: planRetention used to pin `ordered[0]` (the oldest
+        // row it could see) while evictionCandidates protected the persisted
+        // `baseline` flag. After a learner deletes their real baseline, those are
+        // different rows, and the same row was "protected" by one function and
+        // "expendable" by the other.
+        const afterBaselineDeleted = [
+            row(2, 200),                 // oldest SURVIVING row, not the baseline
+            row(3, 300),
+            row(4, 400)
+        ];
+        const projected = afterBaselineDeleted.concat([row(Infinity, 500)]);
+
+        // Both now answer from isPinnedBaseline(): nothing here is pinned, so the
+        // oldest surviving row is expendable to BOTH.
+        expect(BlobStore._planRetention(projected)).toEqual([2]);
+        expect(BlobStore._evictionCandidates(afterBaselineDeleted, []).map((r) => r.id))
+            .toEqual([2, 3]);            // everything but the prompt's newest
+
+        // And with the flag present, both protect the same row.
+        const withBaseline = [row(1, 100, { baseline: true }), row(2, 200), row(3, 300)];
+        expect(BlobStore._planRetention(withBaseline.concat([row(Infinity, 400)]))).toEqual([2]);
+        expect(BlobStore._evictionCandidates(withBaseline, []).map((r) => r.id)).toEqual([2]);
+    });
+
+    test('US-222 end to end — deleting the baseline does not leave a half-protected row', async () => {
+        const base = await putAt('p1', 100, 100);
+        const second = await putAt('p1', 100, 200);
+        const third = await putAt('p1', 100, 300);
+        expect((await BlobStore.remove(base.record.id)).ok).toBe(true);
+
+        // p1 now holds [second, third] and no flagged baseline. A fourth
+        // recording rolls the oldest surviving row out, and a cap eviction would
+        // have picked exactly the same row — one answer, not two.
+        const fourth = await putAt('p1', 100, 400);
+        const fifth = await putAt('p1', 100, 500);
+        expect(fourth.evicted).toEqual([]);
+        expect(fifth.evicted).toEqual([second.record.id]);
+        expect(store.ids()).toEqual([third.record.id, fourth.record.id, fifth.record.id]);
+        // No later recording is silently promoted to "your first try".
+        expect((await BlobStore.list('p1')).every((r) => r.baseline === false)).toBe(true);
     });
 });
 
@@ -1336,10 +1390,10 @@ describe('quota', () => {
         expect(await BlobStore.get(b.record.id)).not.toBeNull();
     });
 
-    test('⚠️ DEFECT A — `full` claims "your existing recordings are safe" AFTER deleting one', async () => {
+    test('FIXED (US-216) — a `full` refusal after a quota retry really has deleted nothing', async () => {
         // Seeded so that the ONE expendable recording is too small to make the
-        // retry fit: the quota eviction happens, the retry fails anyway, and the
-        // learner is told nothing was lost.
+        // retry fit: the quota eviction is planned, the retry fails anyway, and
+        // the abort has to take the eviction with it.
         const base = await putAt('p1', 4 * MB, 100);
         const mid = await putAt('p1', 1 * MB, 200);      // the only expendable row
         const newest = await putAt('p1', 4 * MB, 300);
@@ -1351,19 +1405,42 @@ describe('quota', () => {
         expect(res.ok).toBe(false);
         expect(res.code).toBe('full');
         expect(audioPuts()).toBe(5);                     // 3 seeds + attempt + one retry
-        // The new recording was not written — that half of the promise holds.
+        // The new recording was not written.
         expect(store.metaRows().some((r) => r.promptId === 'p2')).toBe(false);
 
-        // ⚠️ ...but an EXISTING recording is gone, because evictForQuota() runs in
-        // its own transaction (js/core/blobstore.js:918-931) and there is nothing
-        // to roll it back when the retry fails. The message the learner sees is
-        // MESSAGES.full, which states the opposite.
+        // ...and neither was anything deleted. The retry frees its headroom
+        // INSIDE its own transaction (js/core/blobstore.js commit(), the
+        // `quotaHeadroom` branch), so the second QuotaExceededError aborts the
+        // eviction along with the write. MESSAGES.full is now true when it is
+        // shown: BR-3 / NFR-10.
         expect(res.message).toContain('Your existing recordings are safe');
-        expect(store.ids()).not.toContain(mid.record.id);
-        expect(await BlobStore.get(mid.record.id)).toBeNull();
-        expect(await BlobStore.list('p1')).toHaveLength(2);
-        // The two protected rows did survive.
-        expect(store.ids()).toEqual([base.record.id, newest.record.id]);
+        expect(store.ids()).toEqual([base.record.id, mid.record.id, newest.record.id]);
+        expect(await BlobStore.get(mid.record.id)).not.toBeNull();
+        expect(await BlobStore.list('p1')).toHaveLength(3);
+        expect(store.usedBytes()).toBe(9 * MB);
+        // Payload rows did not drift from metadata rows either.
+        expect(store.audioIds()).toEqual(store.ids());
+    });
+
+    test('the quota retry frees nothing it does not then write for', async () => {
+        // The success case of the same mechanism: the eviction and the new
+        // recording land in ONE transaction, so there is no window in which the
+        // archive is short a recording and has not gained one.
+        const base = await putAt('p1', 4 * MB, 100);
+        const mid = await putAt('p1', 4 * MB, 200);
+        const newest = await putAt('p1', 4 * MB, 300);
+        store.budget = 14 * MB;
+
+        const res = await putAt('p2', 4 * MB, 400);
+
+        expect(res.ok).toBe(true);
+        expect(res.quotaRetry).toBe(true);
+        expect(res.evicted).toEqual([mid.record.id]);
+        // The retry transaction is the only one that deleted anything: two
+        // deletes (metadata + payload) for the one victim, and none before it.
+        expect(store.opsOn('recordings', 'delete').map((o) => o.key)).toEqual([mid.record.id]);
+        expect(store.opsOn('audio', 'delete').map((o) => o.key)).toEqual([mid.record.id]);
+        expect(store.ids()).toEqual([base.record.id, newest.record.id, res.record.id]);
     });
 
     test('the quota eviction is drawn from the documented expendable set only', async () => {
@@ -1689,9 +1766,9 @@ describe('object URLs', () => {
         const opened = await BlobStore.openUrl(rec.record.id);
         expect(opened.ok).toBe(true);
         expect(opened.url).toBe(createdUrls[0]);
-        // ⚠️ Not `toEqual(rec.record)`: durationMs comes back as 0 rather than
-        // null — see DEFECT E.
-        expect(opened.record).toEqual(Object.assign({}, rec.record, { durationMs: 0 }));
+        // Since US-220 a read reports exactly what put() reported, durationMs
+        // included, so this really is the same record.
+        expect(opened.record).toEqual(rec.record);
         expect(opened.record.blob).toBeUndefined();      // metadata only
         expect(BlobStore.liveUrlCount()).toBe(1);
 
@@ -1816,15 +1893,51 @@ describe('object URLs', () => {
         expect(BlobStore.liveUrlCount()).toBe(0);
     });
 
-    test('⚠️ DEFECT D — openUrl() on a device with no IndexedDB says "no longer on this device"', async () => {
+    test('FIXED (US-219) — openUrl() on a device with no IndexedDB says unavailable, not deleted', async () => {
         BlobStore._useEnvironment({ indexedDB: null, IDBKeyRange: null });
         const res = await BlobStore.openUrl(1);
-        // get() flattens "unavailable" and "not found" to null, so openUrl cannot
-        // tell them apart and reports the one that is actively misleading: the
-        // learner is told their recording is gone when it was never saveable.
-        expect(res.code).toBe('missing');
-        expect(res.message).toBe(BlobStore.MESSAGES.missing);
-        expect(res.message).toContain('no longer on this device');
+        // readRecord() keeps the reason that get() flattens to null, so a learner
+        // whose browser will not keep recordings is no longer told that the
+        // recording was deleted from their device.
+        expect(res.ok).toBe(false);
+        expect(res.code).toBe('no-indexeddb');
+        expect(res.message).toBe(BlobStore.MESSAGES.unavailable);
+        expect(res.message).not.toContain('no longer on this device');
+        expect(global.URL.createObjectURL).not.toHaveBeenCalled();
+        // get() keeps its documented "record or null" contract regardless.
+        expect(await BlobStore.get(1)).toBeNull();
+    });
+
+    test('openUrl() separates every storage failure from a genuine "not there"', async () => {
+        // A real miss still reports missing...
+        await putAt('p1', 100, 100);
+        expect((await BlobStore.openUrl(4242)).code).toBe('missing');
+
+        // ...and each way the store can be unreachable reports itself.
+        install({ openMode: 'throw' });
+        expect(await BlobStore.openUrl(1)).toEqual({
+            ok: false, code: 'blocked', message: BlobStore.MESSAGES.unavailable
+        });
+
+        install({ openMode: 'blocked' });
+        expect(await BlobStore.openUrl(1)).toEqual({
+            ok: false, code: 'blocked-by-other-tab', message: BlobStore.MESSAGES.otherTab
+        });
+
+        install({ txThrows: 'InvalidStateError' });
+        const broken = await BlobStore.openUrl(1);
+        expect(broken.code).toBe('tx-failed');
+        // A failed read is a playback problem, never "your recording was saved
+        // and then lost" and never "that recording could not be saved".
+        expect(broken.message).toBe(BlobStore.MESSAGES.playbackFailed);
+    });
+
+    test('an orphaned row still reports missing from openUrl() — for an orphan that is true', async () => {
+        const rec = await putAt('p1', 100, 100);
+        store.db._store('audio').records.delete(rec.record.id);
+        const res = await BlobStore.openUrl(rec.record.id);
+        expect(res).toEqual({ ok: false, code: 'missing', message: BlobStore.MESSAGES.missing });
+        expect(store.ids()).not.toContain(rec.record.id);   // and it was repaired
     });
 });
 
@@ -1842,9 +1955,10 @@ describe('list()', () => {
         expect(rows[1]).toEqual({
             id: a.record.id, promptId: 'p1', createdAt: 100, size: 100,
             mimeType: 'audio/webm;codecs=opus',
-            durationMs: 0,          // ⚠️ put() reported null for this — DEFECT E
+            durationMs: null,       // exactly what put() reported — US-220
             label: 'first try', baseline: true
         });
+        expect(rows[1]).toEqual(a.record);
         rows.forEach((r) => expect(r.blob).toBeUndefined());
     });
 
@@ -1990,16 +2104,30 @@ describe('remove() / removeForPrompt() / clear()', () => {
         expect(store.ids()).not.toContain(base.record.id);
     });
 
-    test('⚠️ DEFECT B — remove() reports success for an id that was never there', async () => {
-        await putAt('p1', 100, 100);
+    test('FIXED (US-217) — remove() of an id that was never there reports missing, not success', async () => {
+        const kept = await putAt('p1', 100, 100);
+        const opened = await BlobStore.openUrl(kept.record.id);
         const res = await BlobStore.remove(9999);
-        // removeIds() resolves with `ids.slice()` — the ids it was ASKED to delete,
-        // not the ones IndexedDB actually held (js/core/blobstore.js:941). An
-        // IDBObjectStore.delete() for an absent key succeeds silently, so nothing
-        // upstream notices. A UI that says "Recording deleted." on a stale list
-        // entry therefore confirms a deletion that never happened.
+        // removeIds() now reads each row inside the deleting transaction and
+        // resolves with what WAS there, because IDBObjectStore.delete() on an
+        // absent key succeeds silently. A UI acting on a stale list entry is
+        // told to refresh instead of being told "Recording deleted."
+        expect(res).toEqual({ ok: false, code: 'missing', message: BlobStore.MESSAGES.missing });
+        expect(res.message).toContain('no longer on this device');
+        expect(store.ids()).toEqual([kept.record.id]);
+        // Nothing was deleted, so no live url needed releasing either.
+        expect(revokedUrls).toEqual([]);
+        expect(BlobStore.liveUrlCount()).toBe(1);
+        expect(opened.revoke()).toBe(true);
+    });
+
+    test('remove() of a metadata row whose payload is already gone still reports the deletion', async () => {
+        // The orphan case: the row is real, so deleting it IS a deletion.
+        const rec = await putAt('p1', 100, 100);
+        store.db._store('audio').records.delete(rec.record.id);
+        const res = await BlobStore.remove(rec.record.id);
         expect(res).toEqual({ ok: true, removed: 1, message: BlobStore.MESSAGES.removed });
-        expect(store.ids()).toHaveLength(1);
+        expect(store.ids()).toEqual([]);
     });
 
     test('remove() with a non-numeric id refuses without opening the database', async () => {
@@ -2294,7 +2422,7 @@ describe('the learner-facing copy', () => {
         expect(res.quotaRetry).toBe(false);
     });
 
-    test('⚠️ DEFECT C — a cap eviction from ANOTHER prompt still says "This prompt keeps..."', async () => {
+    test('FIXED (US-218) — a cap eviction from ANOTHER prompt no longer says "This prompt keeps..."', async () => {
         // 45MB seeded across two prompts; p2's middle recording is the only
         // expendable row. Saving at p3 pushes past the 50MB cap and evicts it.
         await putAt('p1', 9 * MB, 100);
@@ -2308,61 +2436,143 @@ describe('the learner-facing copy', () => {
         expect(res.ok).toBe(true);
         expect(res.evicted).toEqual([victim.record.id]);
         expect(res.record.promptId).toBe('p3');
-        // The evicted row belongs to p2, but the message the learner reads while
-        // saving at p3 is savedEvicted: "This prompt keeps your first recording
-        // and your two most recent, so an in-between one was removed." put() picks
-        // the message from `evicted.length` alone (js/core/blobstore.js:826) and
-        // cannot distinguish a retention eviction from a cap eviction — so the
-        // learner is told p3 dropped an in-between recording when p3 has only one,
-        // and is not told that a recording at a DIFFERENT prompt was deleted.
-        expect(res.message).toBe(BlobStore.MESSAGES.savedEvicted);
-        expect(res.message).toContain('This prompt keeps');
+        // The evicted row belongs to p2, so the copy talks about "your other
+        // prompts", not about the prompt in front of the learner — which still
+        // holds exactly one recording and lost nothing.
+        expect(res.message).toBe(BlobStore.MESSAGES.savedFreedSpace);
+        expect(res.message).not.toContain('This prompt keeps');
+        expect(res.message).toContain('no room left');
+        // And the prompt that DID lose one is named, so a caller can say so.
+        expect(res.evictedPrompts).toEqual(['p2']);
+        expect(res.evictedElsewhere).toEqual([victim.record.id]);
         expect(await BlobStore.list('p3')).toHaveLength(1);
         expect(await BlobStore.list('p2')).toHaveLength(2);
     });
 
-    test('⚠️ DEFECT E — a null durationMs comes back as 0 on every read', async () => {
-        // cleanNumber() is `Number(value)` guarded by isFinite && >= 0, and
-        // `Number(null) === 0`. usableRows() runs every stored row through it
-        // (js/core/blobstore.js:307), so the null that put() wrote and reported
-        // becomes 0 the moment it is read back.
+    test('a retention eviction at THIS prompt still gets the "this prompt keeps" copy', async () => {
+        await putAt('p1', 100, 100);
+        const mid = await putAt('p1', 100, 200);
+        await putAt('p1', 100, 300);
+        const res = await putAt('p1', 100, 400);
+
+        expect(res.message).toBe(BlobStore.MESSAGES.savedEvicted);
+        expect(res.evicted).toEqual([mid.record.id]);
+        expect(res.evictedPrompts).toEqual(['p1']);
+        expect(res.evictedElsewhere).toEqual([]);
+    });
+
+    test('losing one here AND one elsewhere gets copy that admits both', async () => {
+        // p1 is at the per-prompt cap with a small middle row (a retention
+        // victim); p2 holds an expendable middle row; the archive is at the 50MB
+        // cap, so the write also has to free space from p2.
+        await putAt('p1', 10 * MB, 100);                  // p1 baseline
+        const p1mid = await putAt('p1', 1 * MB, 200);     // retention victim
+        await putAt('p1', 10 * MB, 300);                  // p1 newest
+        await putAt('p2', 9 * MB, 400);                   // p2 baseline
+        const p2mid = await putAt('p2', 9 * MB, 500);     // cap victim
+        await putAt('p2', 9 * MB, 600);                   // p2 newest
+        expect(store.usedBytes()).toBe(48 * MB);
+
+        const res = await putAt('p1', 10 * MB, 700);      // 48 - 1 + 10 = 57MB
+
+        expect(res.ok).toBe(true);
+        expect(res.evicted).toEqual([p1mid.record.id, p2mid.record.id]);
+        expect(res.evictedPrompts).toEqual(['p1', 'p2']);
+        expect(res.evictedElsewhere).toEqual([p2mid.record.id]);
+        expect(res.message).toBe(BlobStore.MESSAGES.savedEvictedAndFreedSpace);
+        expect(res.message).toContain('at this prompt');
+        expect(res.message).toContain('your other prompts');
+    });
+
+    test('FIXED (US-220) — a null durationMs stays null on every read', async () => {
+        // cleanNumber() no longer runs `Number(value)` on anything that is not a
+        // number or a numeric string, so `null` stays null instead of becoming 0
+        // the moment the row is read back.
         const written = await putAt('p1', 100, 100);        // no durationMs given
         expect(written.record.durationMs).toBeNull();
         expect(store.metaRows()[0].durationMs).toBeNull();  // null really is stored
 
         const listed = (await BlobStore.list('p1'))[0];
         const got = await BlobStore.get(written.record.id);
-        expect(listed.durationMs).toBe(0);
-        expect(got.durationMs).toBe(0);
+        expect(listed.durationMs).toBeNull();
+        expect(got.durationMs).toBeNull();
 
-        // So the same recording reports two different durations depending on
-        // which call produced the record, and a UI rendering `durationMs` shows
-        // "0:00" for every recording whose length was never measured.
-        expect(listed.durationMs).not.toBe(written.record.durationMs);
+        // One recording, one duration: a UI can now tell "not measured" from
+        // "0:00" instead of showing a length nobody ever recorded.
+        expect(listed.durationMs).toBe(written.record.durationMs);
+        expect(got.durationMs).toBe(written.record.durationMs);
     });
 
-    test('⚠️ DEFECT E, cont. — a row with no createdAt is coerced to the epoch and vanishes from list()', async () => {
+    test('FIXED (US-220) — a measured duration of 0 is still 0, not "not measured"', async () => {
+        const written = await putAt('p1', 100, 100, { durationMs: 0 });
+        expect(written.record.durationMs).toBe(0);
+        expect((await BlobStore.list('p1'))[0].durationMs).toBe(0);
+        expect((await BlobStore.get(written.record.id)).durationMs).toBe(0);
+    });
+
+    test('cleanNumber rejects every value Number() would silently turn into 0', async () => {
+        // The class of bug behind US-220: each of these used to become 0.
+        const cases = [null, false, true, '', '   ', [], {}, [7]];
+        for (let i = 0; i < cases.length; i++) {
+            const res = await putAt('p' + i, 100, 100 + i, { durationMs: cases[i] });
+            expect(res.record.durationMs).toBeNull();
+        }
+        // ...while genuine numbers and numeric strings still get through.
+        expect((await putAt('pn', 100, 900, { durationMs: '2500' })).record.durationMs).toBe(2500);
+        expect((await putAt('pm', 100, 901, { durationMs: 2500 })).record.durationMs).toBe(2500);
+    });
+
+    test('FIXED (US-220) — a row IndexedDB cannot index is ignored everywhere, not counted in one place', async () => {
         await BlobStore.available();
         store.seedMeta([
             { id: 700, promptId: 'p9', createdAt: null, size: null, durationMs: false, v: 1 }
         ]);
         store.seedAudio([{ id: 700, promptId: 'p9', blob: fakeBlob(100) }]);
 
-        // usableRows() coerces rather than rejects: `cleanNumber(null) || 0`, so
-        // the module treats this row as a valid recording dated to the epoch.
-        const u = await BlobStore.usage();
-        expect(u.count).toBe(1);
-        const got = await BlobStore.get(700);
-        expect(got.createdAt).toBe(0);
-        expect(got.size).toBe(0);
-        expect(got.durationMs).toBe(0);
-        expect((await BlobStore.prompts())[0]).toMatchObject({ promptId: 'p9', count: 1 });
-
-        // ...but IndexedDB will not index a record whose compound key contains
-        // `null`, so list() — which reads through IDX_PROMPT_TIME — cannot see it.
-        // The archive screen shows nothing while usage() insists a recording is
-        // there, and retention/eviction (which read via getAll) will act on it.
+        // A compound index key containing `null` is not a valid key, so this row
+        // is absent from IDX_PROMPT_TIME and list() — which reads through it —
+        // can never return the row. usableRows() therefore refuses it outright
+        // instead of coercing it to the epoch, so every method gives the same
+        // answer: there is no such recording.
         expect(await BlobStore.list('p9')).toEqual([]);
+        const u = await BlobStore.usage();
+        expect(u.count).toBe(0);
+        expect(u.bytes).toBe(0);
+        expect(await BlobStore.prompts()).toEqual([]);
+        expect(await BlobStore.get(700)).toBeNull();
+        expect(await BlobStore.openUrl(700)).toMatchObject({ ok: false, code: 'missing' });
+
+        // Documented consequence: the row is still physically there, so its bytes
+        // are neither reported nor reclaimable by eviction. clear() is what
+        // removes it, because it empties the stores rather than deleting rows.
+        expect(store.ids()).toEqual([700]);
+        expect((await BlobStore.clear()).ok).toBe(true);
+        expect(store.ids()).toEqual([]);
+        expect(store.audioIds()).toEqual([]);
+    });
+
+    test('a row whose createdAt is garbage but indexable is still kept, dated to the epoch', async () => {
+        // The distinction usableRows() draws: "no key" is fatal, "a key that is
+        // not a number" is not — such a row IS in the index, so list() can show
+        // it and the learner can act on it.
+        await BlobStore.available();
+        store.seedMeta([{ id: 701, promptId: 'p9', createdAt: 'whenever', size: 100, v: 1 }]);
+        store.seedAudio([{ id: 701, promptId: 'p9', blob: fakeBlob(100) }]);
+
+        const rows = await BlobStore.list('p9');
+        expect(rows).toHaveLength(1);
+        expect(rows[0].createdAt).toBe(0);
+        expect((await BlobStore.usage()).count).toBe(1);
+    });
+
+    test('put() can never write a row that the index would skip', async () => {
+        // Even with a broken clock: `createdAt` is coerced to a real key.
+        BlobStore._now = () => undefined;
+        const res = await BlobStore.put('p1', fakeBlob(100));
+        expect(res.ok).toBe(true);
+        expect(res.record.createdAt).toBe(0);
+        expect(store.metaRows()[0].createdAt).toBe(0);
+        expect(await BlobStore.list('p1')).toHaveLength(1);
     });
 
     test('the policy constants are exported so the UI never repeats the numbers', () => {
@@ -2488,7 +2698,7 @@ describe('hostile environments', () => {
         }
     });
 
-    test('a failure while freeing space for the quota retry is swallowed, and the write refused', async () => {
+    test('a failing ledger read on the quota retry refuses the write and loses nothing', async () => {
         const seeded = [
             await putAt('p1', 4 * MB, 100),
             await putAt('p1', 4 * MB, 200),
@@ -2496,8 +2706,8 @@ describe('hostile environments', () => {
         ];
         store.budget = 14 * MB;
 
-        // getAll #1 is the failing commit's own ledger read; #2 is
-        // evictForQuota()'s readAllMeta, which we break.
+        // getAll #1 is the failing first attempt's own ledger read; #2 is the
+        // retry's, inside the transaction that would also do the freeing.
         let getAlls = 0;
         store.errorHook = (s, op) => {
             if (s === 'recordings' && op === 'getAll') {
@@ -2511,10 +2721,15 @@ describe('hostile environments', () => {
         store.errorHook = null;
 
         expect(res.ok).toBe(false);
-        expect(res.code).toBe('full');
-        expect(loggedContexts()).toContain('blobstore quota eviction');
+        // Since US-216 the freeing lives inside the retry transaction, so a
+        // broken ledger read there aborts that transaction: the outcome is a
+        // plain write failure, and its copy is the one that says so.
+        expect(res.code).toBe('write-failed');
+        expect(res.message).toBe(BlobStore.MESSAGES.writeFailed);
+        expect(loggedContexts()).toContain('blobstore put');
         // Nothing was freed, so nothing was lost.
         expect(store.ids()).toEqual(seeded.map((r) => r.record.id));
+        expect(store.audioIds()).toEqual(seeded.map((r) => r.record.id));
     });
 
     test('the default _now() really is the clock', () => {
@@ -2568,17 +2783,27 @@ describe('hostile environments', () => {
     });
 });
 
-describe('dead code, pinned so nobody has to re-derive it', () => {
-    test('the "bigger than the whole archive" guard is unreachable', async () => {
-        // put() checks `size > MAX_RECORDING_BYTES` (10MB) and only then
-        // `size > MAX_TOTAL_BYTES` (50MB), so the second guard — and its
-        // `limit: MAX_TOTAL_BYTES` — can never fire. Every over-cap recording
-        // reports the per-recording limit. js/core/blobstore.js:777-779.
-        expect(BlobStore.MAX_RECORDING_BYTES).toBeLessThan(BlobStore.MAX_TOTAL_BYTES);
+describe('the per-recording cap is the only size guard, by construction', () => {
+    test('US-221 — an over-cap recording reports the limit it actually broke', async () => {
+        // There used to be a second `size > MAX_TOTAL_BYTES` guard immediately
+        // after the 10MB one, which could never fire. It is gone, and the
+        // invariant that made it dead is now in the constant: MAX_RECORDING_BYTES
+        // is clamped to MAX_TOTAL_BYTES, so one recording can never exceed the
+        // whole archive and there is nothing left to check twice.
+        expect(BlobStore.MAX_RECORDING_BYTES).toBeLessThanOrEqual(BlobStore.MAX_TOTAL_BYTES);
         const res = await BlobStore.put('p1', fakeBlob(BlobStore.MAX_TOTAL_BYTES + 1));
         expect(res.code).toBe('too-large');
+        // The number the learner can act on is the per-recording rule they broke.
         expect(res.limit).toBe(BlobStore.MAX_RECORDING_BYTES);
-        expect(res.limit).not.toBe(BlobStore.MAX_TOTAL_BYTES);
+        expect(res.message).toBe(BlobStore.MESSAGES.tooLong);
+        expect(store.openCount).toBe(0);
+    });
+
+    test('the source no longer contains the unreachable guard', () => {
+        const src = fs.readFileSync(MODULE_PATH, 'utf8');
+        // Pinned so it cannot come back by copy-paste: no refusal anywhere may
+        // report MAX_TOTAL_BYTES as a per-recording limit.
+        expect(src).not.toMatch(/limit:\s*MAX_TOTAL_BYTES/);
     });
 
     test('a recording of exactly MAX_RECORDING_BYTES is accepted', async () => {
