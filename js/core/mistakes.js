@@ -15,6 +15,12 @@
  *    registerCategories() and needs no change to this file or to app.js.
  *  - Rows derived from REQUIREMENTS.md §3 carry their table code (`T-G1`,
  *    `T-P5`, ...) so the mapping back to the requirement is checkable.
+ *  - It NEVER READS CONTENT. `data/grammar/*`, `data/pronunciation/*` and the
+ *    L1 profiles all load AFTER this module, and its own suite runs with none of
+ *    them present, so anything it needs to know about authored content arrives by
+ *    registration and is absent by default: registerCategories() for rows,
+ *    registerDrillTargets() for the destinations those rows point at (US-187).
+ *    Absent is a THIRD state, never a `false` — see isAuthoredTarget().
  *  - Learner-facing wording follows TEACHING_METHODOLOGY.md §5: addressed as
  *    *you*, specific, framed as normal and temporary, no gamification.
  *  - Evidence strength is tracked and never laundered. A speech recogniser
@@ -34,7 +40,13 @@
  *   Mistakes.unknownCategories(ids)      -> the ids in `ids` that are not registered
  *   Mistakes.registerCategories(rows)    -> { added, replaced, rejected } (FR-CNT-3)
  *   Mistakes.resetCategories()           -> back to the built-ins
- *   Mistakes.drillTarget(id)             -> { strand, target, srsKey, targets, srsKeys, label } | null
+ *   Mistakes.drillTarget(id)             -> { strand, target, srsKey, targets, srsKeys,
+ *                                            authored, liveTargets, deadTargets, label } | null
+ *   -- which drill targets content has actually authored (US-187) --
+ *   Mistakes.registerDrillTargets(strand, targets)  -> { strand, added, known, ignored }
+ *   Mistakes.authoredTargets(strand)     -> the targets registered for that strand
+ *   Mistakes.isAuthoredTarget(s, t)      -> true | false | null (null = no claim)
+ *   Mistakes.resetDrillTargets(strand)   -> forget them again; how many went
  *   -- recording --
  *   Mistakes.record(categoryId, opts)    -> the stored entry, or null
  *   Mistakes.recordMany(ids, opts)       -> [entry, ...] (the ones that stored)
@@ -171,8 +183,43 @@
     //               null means there is nothing honest to drill. A row that is
     //               drilled by more than one item adds `alsoTargets: [...]`
     //               beside `target` (or writes `targets: [...]` instead); see
-    //               `prn.th`, which covers both halves of T-P6.
+    //               `prn.th`, which covers both halves of T-P6. A target is a
+    //               claim about the CURRICULUM, not about what is authored —
+    //               drillTarget() answers the second question separately, and
+    //               only from what content has registered (US-187).
     //   reportable  false = recorded but never ranked or shown as a diagnosis
+    //
+    // WHAT THESE ROWS DELIBERATELY DO NOT CARRY: WHETHER ANYTHING PRODUCES THEM.
+    //
+    // The question is a real one — an author choosing what to write next needs to
+    // tell a row that is UNUSED (nothing has logged it on this device yet) from
+    // one that is UNUSABLE (no gradable task exists that could log it at all), and
+    // reading this file you cannot. At the time US-186 wired producers across the
+    // app (2026-09-12) exactly four rows were in the second class: `vocab.recall`
+    // (no production-from-meaning task), `vocab.collocation` (no collocation
+    // content), `lsn.gist` (the listening section asks no comprehension question)
+    // and `rdw.inference` (comprehension questions carry no type metadata, so
+    // logging every wrong answer as "needed reading between the lines" would be a
+    // false claim). That sentence is a DATED OBSERVATION and is written as one; the
+    // live answer is in app.js, beside the code that would have to change —
+    // mistakeDrillDestinations(), recordVocabMistake() and
+    // comprehensionMistakeCategory() each say which id they do not produce and why.
+    //
+    // It is not a field, and that is a decision rather than an oversight. A
+    // producer is a call site in app.js or in a content file, both of which load
+    // after this module; a `producer: null` beside a row would be a second copy of
+    // a fact this file cannot check, and would be wrong the moment someone wired
+    // one — which is exactly the defect US-160 removed when data/grammar.js's
+    // hand-copied MISTAKE_CATEGORIES list went stale and began rejecting a valid
+    // id. Nor can it be derived from the log: a row whose producer exists but which
+    // this learner has never triggered would read as producerless, the same false
+    // claim pointing the other way.
+    //
+    // The asymmetry with registerDrillTargets() is principled rather than lazy.
+    // Content CAN declare what it authored, in one line, beside the registration it
+    // already does — so the drill half of "does this button go anywhere" is
+    // answerable here and is answered. Nothing can declare its own absence, so the
+    // producer half is not claimed here at all.
     //
     // The rows below are the Telugu profile plus the generic types. Nothing in
     // this module reads any id, so a second L1 is a data addition (BR-10).
@@ -395,6 +442,97 @@
             drill: { strand: 'grammar', target: 'question-formation' }
         },
         {
+            // US-224. There was no id for a DIRECT question with its helper word
+            // missing — "Where you live?", "You know him?", "Where you going?" —
+            // so data/grammar/question-formation.js sends those options to
+            // `gram.word-order` with `errorKind:
+            // 'auxiliary-omitted-in-direct-question'`. Honest, and blunt: nothing
+            // is in the wrong order in "Where you live?". Every word is exactly
+            // where English wants it and one word is not there at all. A learner
+            // told "words in the wrong order — 6 times" about six sentences whose
+            // words are in the right order can check that finding and find it
+            // wrong, which this file's header argues costs more than no finding at
+            // all. Same defect class as US-182 and US-185.
+            //
+            // A NEW ROW rather than rewording `gram.word-order`, and the deciding
+            // fact is that that row now has THREE producers, not two:
+            //   A  app.js's sentence builder (drag-and-drop / reorder / multiple
+            //      choice) — "I like very much this book". Constituent order, with
+            //      no helper anywhere in the picture.
+            //   B  question-formation.js `auxiliary-after-subject-sov-residue` —
+            //      "Whereabouts you do live?". The helper is present, and behind
+            //      the subject instead of in front of it.
+            //   C  question-formation.js `auxiliary-omitted-in-direct-question` —
+            //      the helper is not there.
+            // "Words in the wrong order" is TRUE of A and of B, and FALSE of C. A
+            // label true of all three would have to read something like "words in
+            // the wrong order, or a word missing that English needs", which
+            // describes a scrambled adverb and an absent auxiliary in one breath
+            // and stops being a diagnosis — the one thing this taxonomy is for.
+            // So C leaves, and `gram.word-order` keeps its id AND its wording,
+            // which are true of everything that remains. Only its `example` grew,
+            // to teach B as well as A; see that row.
+            //
+            // The US-159 objection — "a second row would have to point at the same
+            // drill" — is true and is not decisive, exactly as US-182 found.
+            // `gram.copula` and `gram.subject-dropped` share `gram:be` on purpose,
+            // and three rows already share `gram:question-formation`. One
+            // destination, two findings, because the learner has to be told WHICH
+            // thing went wrong: "borrow a word that is missing" and "move a word
+            // you already said" are two different sentences to notice, and they are
+            // not two halves of one count the way "advices" and "an advice" were.
+            //
+            // WHAT HAPPENS TO ENTRIES ALREADY LOGGED: nothing, and nothing can.
+            // They stay under `gram.word-order`, which keeps its id, so none of
+            // them is orphaned and none stops being ranked. Some of them do belong
+            // here — item `question-formation-p1`'s "you live" option has been
+            // producing them since US-215 — and they cannot be moved, because
+            // record() stores `category`, `at`, `evidence` and free text and NOT
+            // `errorKind`. The log physically does not contain the fact that would
+            // say which past entries were omissions, so a migration would have to
+            // guess, and guessing which of a learner's own mistakes were which is
+            // worse than a stale label on a few of them. The 30-day window is a
+            // hard edge, so those age out of the panel inside a month by
+            // themselves, and both counts are honest from the day
+            // question-formation.js re-points that one `logAs`.
+            //
+            // `code` is null. §3.2's T-G8 is "SOV residue in questions and
+            // embedded clauses" — residue is a word in the WRONG PLACE, and the
+            // example in its own column is "You know where is the station?".
+            // Omission is a word that was never borrowed. That is a gap in §3.2,
+            // not a code this file may mint; this row can carry one on the day it
+            // exists.
+            //
+            // Priority S, for the reason §3.2 gives S to T-G7 and T-G8: those
+            // priorities track intelligibility, and nobody has ever failed to
+            // understand "Where you live?". What it costs is that the question is
+            // heard as learner English by people who would not otherwise notice
+            // anything — persona P4's entire complaint, worth a row of its own
+            // without being worth an M.
+            //
+            // "helper", not "auxiliary", in every learner-facing string. The point
+            // this row drills teaches the whole idea in that word ("the helper
+            // moves in front of the subject of the clause that IS the question"),
+            // so the panel and the lesson it opens say the same thing. `auxiliary`
+            // survives in the id and in the content's `errorKind`, which are
+            // authoring data and are never displayed.
+            id: 'gram.auxiliary-omitted',
+            code: null,
+            strand: 'grammar',
+            l1: 'telugu',
+            priority: 'S',
+            label: 'A question with its helper word missing',
+            explanation: 'Telugu does not move words to ask something — a question word or a particle does the whole job — so there is no Telugu word for English "do" to correspond to, and it does not come to mind. English wants a helper in front of the subject of whichever clause is the question, and when the verb has no helper of its own it borrows "do", "does" or "did". English does leave the helper out in quick speech — "You coming?", "Seen it yet?" — so this is not always an error; inside a full question it is heard as learner English rather than misunderstood, and one short borrowed word puts it right.',
+            example: '"Where you live?" → "Where do you live?"; "You know him?" → "Do you know him?"',
+            // Target `question-formation`, i.e. CURRICULUM.md §3 Strand B point 6,
+            // giving srsKey `gram:question-formation`. Authored by US-215, and this
+            // row is the reason the check added by US-187 matters: it reads as a
+            // LIVE target rather than as an assumption, so the day someone renames
+            // that point the button stops being drawn instead of quietly opening
+            // nothing.
+            drill: { strand: 'grammar', target: 'question-formation' }
+        },
+        {
             id: 'gram.register-indian',
             code: 'T-G9',
             strand: 'grammar',
@@ -442,6 +580,22 @@
             drill: { strand: 'grammar', target: 'past-simple' }
         },
         {
+            // US-224 left this row's ID AND ITS LABEL untouched, and only its
+            // `example` grew. Two producers remain and the label is true of both:
+            // app.js's sentence builder, where all the words are present and the
+            // order is wrong ("I like very much this book"), and
+            // question-formation.js's `auxiliary-after-subject-sov-residue`, where
+            // the helper is present and standing behind the subject ("Where you
+            // are going?"). The third producer — a helper that was never borrowed
+            // at all — moved to `gram.auxiliary-omitted`, because no wording could
+            // cover a scrambled adverb and an absent auxiliary and still be a
+            // diagnosis. See that row for what happens to entries already stored
+            // here: they stay, and stay ranked.
+            //
+            // The second example is the one that was missing. This row has had a
+            // question-shaped producer since US-215 and taught only the
+            // sentence-builder shape, so a learner meeting the finding after a
+            // question exercise saw an example from a different exercise.
             id: 'gram.word-order',
             code: null,
             strand: 'grammar',
@@ -449,7 +603,7 @@
             priority: 'M',
             label: 'Words in the wrong order',
             explanation: 'English word order does a lot of the work other languages do with endings, so the order carries meaning.',
-            example: '"I like very much this book" → "I like this book very much"',
+            example: '"I like very much this book" → "I like this book very much"; "Where you are going?" → "Where are you going?"',
             drill: { strand: 'grammar', target: 'question-formation' }
         },
 
@@ -828,6 +982,37 @@
         };
     }
 
+    /**
+     * The target name in one registration entry, or null if there is not one.
+     *
+     * Content is allowed to register whatever it already has to hand, because the
+     * whole point of the seam is that the line it adds should be one line beside
+     * the self-registration it already does:
+     *
+     *   'question-formation'                       a bare slug
+     *   'gram:question-formation'                  the srsKey the point declares
+     *   { id: 'be', srsKey: 'gram:be', ... }       the authored point itself
+     *
+     * A namespaced string is accepted only under ITS OWN strand: `phon:v-w` passed
+     * as a grammar target is refused rather than filed as a grammar point called
+     * "phon:v-w", so a mistyped strand argument fails loudly (FR-CNT-1) instead of
+     * populating the registry with an entry no category can ever match.
+     */
+    function _drillTargetName(entry, ns) {
+        if (entry == null) return null;
+        let raw = entry;
+        if (typeof entry === 'object') {
+            raw = entry.target != null ? entry.target
+                : (entry.id != null ? entry.id : entry.srsKey);
+        }
+        const s = _norm(raw);
+        if (!s) return null;
+        const colon = s.indexOf(':');
+        if (colon < 0) return s;
+        if (!ns || s.slice(0, colon) !== ns) return null;
+        return _norm(s.slice(colon + 1)) || null;
+    }
+
     /** Normalize a taxonomy row, filling defaults. Returns null if unusable. */
     function _normalizeCategory(row) {
         if (!row || typeof row !== 'object') return null;
@@ -884,6 +1069,18 @@
 
         /** id -> row, for O(1) lookup. Rebuilt whenever categoryList changes. */
         categoryIndex: {},
+
+        /**
+         * strand -> { target: true } for every drill destination CONTENT has said
+         * it authored. Empty at first load and empty throughout this module's own
+         * suite, which is the normal state and not a broken one — see
+         * isAuthoredTarget() for what empty means.
+         *
+         * Deliberately NOT cleared by resetCategories(): the taxonomy and the
+         * content are two different things, and reloading the built-in rows does
+         * not unauthor a lesson that is on disk.
+         */
+        drillTargets: {},
 
         /** The log itself: entries ascending by timestamp. */
         entryList: [],
@@ -1051,6 +1248,141 @@
             return Object.prototype.hasOwnProperty.call(this.categoryIndex, _norm(id));
         },
 
+        // --------------------------------------------------------------
+        // Which drill destinations actually exist  (US-187)
+        // --------------------------------------------------------------
+        //
+        // A row's `drill.target` is a claim about the CURRICULUM: `gram.articles`
+        // names `articles` because that is the point which fixes it. It has never
+        // been a claim that anything is AUTHORED, and drillTarget() used to compose
+        // `gram:' + target` regardless — so the dashboard drew "Practise this" from
+        // a key that opens nothing, the learner clicked, and the app did nothing.
+        // That is the class of silent failure BR-3 exists to prevent, and several
+        // targets are in it right now: `past-simple` (two rows), `prepositions`,
+        // `register`, and the listening and reading targets. `question-formation`
+        // was another until US-215 authored it — which fixed one target and not the
+        // missing check, and is what makes the gap visible rather than theoretical.
+        //
+        // THE CONSTRAINT: this module cannot look for itself. It loads before all
+        // content, is unit-tested with none present, and must not import a list of
+        // authored points or it stops being the L1-agnostic core the whole
+        // FR-CNT-3 / BR-10 design rests on.
+        //
+        // So the dependency is INVERTED, exactly as registerCategories() inverts it
+        // for the rows themselves: content declares what it authored and this
+        // module only remembers. A grammar point file's registration becomes two
+        // lines instead of one —
+        //
+        //     grammarLessons.foundation.push(GRAMMAR_QUESTION_FORMATION);
+        //     if (window.Mistakes) Mistakes.registerDrillTargets(
+        //         'grammar', GRAMMAR_QUESTION_FORMATION.id);
+        //
+        // — or a caller that already holds the whole content list registers it in
+        // one call, which is the stale-proof form because a new point file adds
+        // itself to that list and needs no second edit anywhere.
+        //
+        // THREE STATES, NOT TWO, and the third is the load-bearing one. "Nothing
+        // has registered anything for this strand" is NOT "this target is dead": it
+        // is the state at first load, in this module's own suite, and on a device
+        // where a content script failed to fetch. Answering `false` there would
+        // blank every drill button in the app on the strength of a registration
+        // that had not run yet, which is a worse and more confusing failure than
+        // the dead button. Absence of a claim is reported as a claim of absence
+        // nowhere in this file.
+
+        /**
+         * Tell this module a drill destination exists.
+         *
+         * @param {string} strand - a `drill.strand` value ('grammar', ...).
+         * @param {Array|string|Object} targets - slugs, `'gram:slug'` keys, or the
+         *        authored objects themselves; see _drillTargetName().
+         * @returns {{strand: string, added: string[], known: string[], ignored: Array}}
+         *          `known` is what was already registered, so a double-loaded
+         *          script is a no-op rather than an error. `ignored` is anything
+         *          that named no usable target, reported the way
+         *          registerCategories() reports a rejected row.
+         */
+        registerDrillTargets(strand, targets) {
+            const s = _norm(strand);
+            const list = Array.isArray(targets) ? targets : [targets];
+            const result = { strand: s, added: [], known: [], ignored: [] };
+            const ns = s ? (SRS_NAMESPACE[s] || null) : null;
+
+            for (let i = 0; i < list.length; i++) {
+                // No strand means nothing can be filed, so every entry is ignored
+                // rather than guessed at from its shape.
+                const name = s ? _drillTargetName(list[i], ns) : null;
+                if (!name) {
+                    result.ignored.push(list[i]);
+                    continue;
+                }
+                const bucket = this.drillTargets[s] || (this.drillTargets[s] = {});
+                if (Object.prototype.hasOwnProperty.call(bucket, name)) {
+                    if (result.known.indexOf(name) < 0) result.known.push(name);
+                    continue;
+                }
+                bucket[name] = true;
+                result.added.push(name);
+            }
+
+            if (result.ignored.length > 0 &&
+                global.AppErrorHandler && typeof global.AppErrorHandler.logError === 'function') {
+                global.AppErrorHandler.logError(
+                    new Error('Mistakes.registerDrillTargets ignored ' + result.ignored.length +
+                              ' entr(y/ies) for strand "' + s + '": each needs a non-empty ' +
+                              'target, and a namespaced key must match that strand'),
+                    'Mistakes drill targets'
+                );
+            }
+            return result;
+        },
+
+        /**
+         * Forget registered destinations — one strand, or all of them.
+         * @returns {number} how many targets were forgotten.
+         */
+        resetDrillTargets(strand) {
+            const s = _norm(strand);
+            if (s) {
+                const gone = this.authoredTargets(s).length;
+                delete this.drillTargets[s];
+                return gone;
+            }
+            let gone = 0;
+            const strands = Object.keys(this.drillTargets);
+            for (let i = 0; i < strands.length; i++) {
+                gone += Object.keys(this.drillTargets[strands[i]]).length;
+            }
+            this.drillTargets = {};
+            return gone;
+        },
+
+        /** The targets registered for one strand, in registration order. */
+        authoredTargets(strand) {
+            const bucket = this.drillTargets[_norm(strand)];
+            return bucket ? Object.keys(bucket) : [];
+        },
+
+        /**
+         * Is there content behind this destination?
+         *
+         *   true   this strand's registry names this target
+         *   false  this strand's registry is populated and does NOT name it, so
+         *          the target is provably dead and a button drawn from it would
+         *          open nothing
+         *   null   no claim: nothing has registered for this strand at all, or no
+         *          target was asked about. Callers must treat null as "unknown",
+         *          which for a drill button means draw it — the behaviour before
+         *          US-187, unchanged wherever no registration has happened.
+         */
+        isAuthoredTarget(strand, target) {
+            const bucket = this.drillTargets[_norm(strand)];
+            if (!bucket || !Object.keys(bucket).length) return null;
+            const t = _norm(target);
+            if (!t) return null;
+            return Object.prototype.hasOwnProperty.call(bucket, t);
+        },
+
         /**
          * What "practise this one" should open, for the FR-SRS-3 drill button.
          * Returns null when there is nothing honest to drill, which the UI must
@@ -1063,12 +1395,29 @@
          * both halves of T-P6, so a /ð/ miss has somewhere to go). A UI that
          * offers one button uses `srsKey`; one that offers a choice, or that has
          * to route a specific phoneme, reads `srsKeys`.
+         *
+         * US-187 added `authored` / `liveTargets` / `deadTargets`, and a dead
+         * target is NOT dropped from `targets` or `srsKeys`. A category whose
+         * lesson does not exist is still a real weakness the learner has, and the
+         * panel owes them the finding plus an honest line about there being no
+         * exercise for it yet — the shape app.js already draws for a `drillable`
+         * row with no destination. Silently emptying the list would turn that into
+         * "this one has no drill of its own", which is a different and false claim.
          */
         drillTarget(id) {
             const cat = this.categoryIndex[_norm(id)];
             if (!cat || !cat.drill || !cat.drill.strand) return null;
             const ns = SRS_NAMESPACE[cat.drill.strand];
             const targets = (cat.drill.targets || []).slice();
+
+            const live = [];
+            const dead = [];
+            for (let i = 0; i < targets.length; i++) {
+                const known = this.isAuthoredTarget(cat.drill.strand, targets[i]);
+                if (known === true) live.push(targets[i]);
+                else if (known === false) dead.push(targets[i]);
+            }
+
             return {
                 categoryId: cat.id,
                 label: cat.label,
@@ -1081,7 +1430,19 @@
                 targets: targets,
                 // Empty when the strand has no SRS namespace or the drill names
                 // no addressable item — never a key built from a null target.
-                srsKeys: ns ? targets.map(t => ns + ':' + t) : []
+                srsKeys: ns ? targets.map(t => ns + ':' + t) : [],
+                // Tri-state for the PRIMARY target; see isAuthoredTarget(). null
+                // when `target` is null too, because a whole-strand drill names no
+                // addressable item to have authored — the strand IS the
+                // destination, which is authored intent rather than a dead end.
+                authored: cat.drill.target
+                    ? this.isAuthoredTarget(cat.drill.strand, cat.drill.target)
+                    : null,
+                // The same answer per destination, for the multi-target rows. Both
+                // are empty while `authored` is null, so a caller cannot mistake
+                // "nothing registered" for "nothing authored".
+                liveTargets: live,
+                deadTargets: dead
             };
         },
 

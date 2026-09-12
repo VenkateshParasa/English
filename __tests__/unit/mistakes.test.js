@@ -47,6 +47,13 @@ const seed = (category, ages, opts) => {
 
 beforeEach(() => {
     Mistakes.resetCategories();
+    // US-187. The drill-target registry is content's claim about itself, and is
+    // deliberately NOT cleared by resetCategories() — reloading the built-in rows
+    // does not unauthor a lesson on disk. It IS cleared here, because empty is the
+    // module's state at first load and is what almost every test below wants: an
+    // empty registry means "no claim", so nothing in this suite reads as dead
+    // unless it registered something first.
+    Mistakes.resetDrillTargets();
     Mistakes.entryList = [];
     Mistakes._now = () => NOW;
 });
@@ -425,11 +432,13 @@ describe('US-182 — a dropped SUBJECT is its own row, and gram.copula keeps its
         expect(copula.label).toBe('Dropped "am", "is" or "are"');
         expect(copula.code).toBe('T-G2');
         expect(Mistakes.drillTarget('gram.copula').srsKey).toBe('gram:be');
-        // Nothing else was renamed or dropped either: 34 shipped rows + 1.
-        expect(Mistakes.categoryIds()).toHaveLength(35);
+        // Nothing else was renamed or dropped either: 34 shipped rows + 1, and
+        // + 1 again for US-224's `gram.auxiliary-omitted`.
+        expect(Mistakes.categoryIds()).toHaveLength(36);
         ['gram.articles', 'gram.copula', 'gram.stative-progressive',
             'gram.uncountable-plural', 'gram.tag-question', 'gram.present-perfect',
             'gram.preposition-transfer', 'gram.embedded-question-order',
+            'gram.auxiliary-omitted',
             'gram.register-indian', 'gram.tense-agreement', 'gram.subject-verb-agreement',
             'gram.verb-form', 'gram.word-order', 'prn.rhythm', 'prn.final-vowel',
             'prn.cluster', 'prn.word-stress', 'prn.v-w', 'prn.th', 'prn.i-length',
@@ -670,6 +679,490 @@ describe('US-164 — a /ð/ miss has somewhere to go', () => {
         expect(Mistakes.drillTarget('prn.th').targets).toEqual(['θ-t', 'ð-d']);
         Mistakes.drillTarget('prn.th').srsKeys.push('MUTATED');
         expect(Mistakes.drillTarget('prn.th').srsKeys).toHaveLength(2);
+    });
+});
+
+describe('US-187 — a drill target that nothing authors is distinguishable from one that does', () => {
+    // drillTarget() composed `gram:<target>` with no check that anything was
+    // authored under it, so the dashboard drew "Practise this" from a key that
+    // opens nothing: the learner clicks and the app does nothing, which is the
+    // class of silent failure BR-3 exists to prevent. Four targets are in that
+    // state today — `past-simple` (two rows point at it), `prepositions`,
+    // `register`, plus the listening and reading targets.
+    //
+    // The seam is a REGISTRATION, mirroring registerCategories(): content declares
+    // what it authored and this module only remembers, because a core module that
+    // read data/grammar/* would invert the load order and couple the taxonomy to
+    // one profile's content (FR-CNT-3 / BR-10). The authored half is read OFF
+    // data/grammar/question-formation.js rather than restated, in the style of the
+    // US-165 and US-182 blocks above.
+    const questionFormation =
+        require('../../data/grammar/question-formation.js').GRAMMAR_QUESTION_FORMATION;
+
+    /** What data/grammar/*.js would register at load, read off the content. */
+    const registerAuthoredGrammar = () =>
+        Mistakes.registerDrillTargets('grammar', [
+            require('../../data/grammar/be.js').GRAMMAR_BE,
+            require('../../data/grammar/countability.js').GRAMMAR_COUNTABILITY,
+            questionFormation
+        ]);
+
+    it('makes NO claim until content has registered something', () => {
+        // The load-bearing case. An empty registry is the state at first load, in
+        // this whole suite, and on a device where a content script failed to fetch.
+        // Reading it as "dead" would blank every drill button in the app on the
+        // strength of a registration that had not run yet.
+        expect(Mistakes.authoredTargets('grammar')).toEqual([]);
+        const t = Mistakes.drillTarget('gram.articles');
+        expect(t.authored).toBeNull();
+        expect(t.liveTargets).toEqual([]);
+        expect(t.deadTargets).toEqual([]);
+        // ...and everything a pre-US-187 caller read is byte-for-byte unchanged.
+        expect(t).toMatchObject({
+            strand: 'grammar', target: 'articles', srsKey: 'gram:articles',
+            targets: ['articles'], srsKeys: ['gram:articles']
+        });
+        expect(Mistakes.isAuthoredTarget('grammar', 'articles')).toBeNull();
+    });
+
+    it('reads question-formation as LIVE once its own file registers it', () => {
+        registerAuthoredGrammar();
+        expect(questionFormation.id).toBe('question-formation');
+        const t = Mistakes.drillTarget('gram.word-order');
+        expect(t.authored).toBe(true);
+        expect(t.liveTargets).toEqual(['question-formation']);
+        expect(t.deadTargets).toEqual([]);
+        expect(t.srsKey).toBe('gram:question-formation');
+        // All FOUR rows that route there resolve, US-215's three plus US-224's.
+        ['gram.tag-question', 'gram.embedded-question-order', 'gram.word-order',
+            'gram.auxiliary-omitted'].forEach(id => {
+            expect(Mistakes.drillTarget(id).authored).toBe(true);
+        });
+    });
+
+    it('reads a target outside the registered set as DEAD, and names it', () => {
+        // Deliberately registers a PARTIAL set — the three points this block
+        // requires — so what reads dead is a property of the registry handed in,
+        // not of what happens to be authored in the repo today. `prepositions` and
+        // `register` are dangling as US-187 was written; the day someone authors
+        // one, app.js registers it and it reads live with no change here.
+        registerAuthoredGrammar();
+        // The two rows that point at `past-simple`, which nothing authors.
+        ['gram.tense-agreement', 'gram.verb-form'].forEach(id => {
+            const t = Mistakes.drillTarget(id);
+            expect(t.authored).toBe(false);
+            expect(t.deadTargets).toEqual(['past-simple']);
+            expect(t.liveTargets).toEqual([]);
+        });
+        expect(Mistakes.drillTarget('gram.preposition-transfer').deadTargets)
+            .toEqual(['prepositions']);
+        expect(Mistakes.drillTarget('gram.register-indian').deadTargets)
+            .toEqual(['register']);
+        // And a live one beside them, so `false` is a real discrimination and not
+        // a blanket answer.
+        expect(Mistakes.drillTarget('gram.copula').authored).toBe(true);
+    });
+
+    it('does NOT drop a dead target from targets, srsKeys or the panel', () => {
+        // A category whose lesson does not exist is still a real weakness the
+        // learner has. The finding stays, `drillable` stays true, and the panel
+        // owes them the honest line about there being no exercise yet — which is a
+        // different claim from "this one has no drill of its own", the copy for a
+        // row with `drill: null`.
+        registerAuthoredGrammar();
+        seed('gram.tense-agreement', [1, 2, 3]);
+        const row = Mistakes.topCategories()[0];
+        expect(row.id).toBe('gram.tense-agreement');
+        expect(row.count).toBe(3);
+        expect(row.drillable).toBe(true);                       // unchanged
+        expect(row.drill.srsKey).toBe('gram:past-simple');      // unchanged
+        expect(row.drill.targets).toEqual(['past-simple']);     // unchanged
+        expect(row.drill.authored).toBe(false);                 // ...and now known
+        // The two "no button" cases stay distinguishable, which is what the two
+        // different sentences in the panel are keyed on.
+        expect(Mistakes.drillTarget('prn.retroflex')).toBeNull();
+    });
+
+    it('answers per destination, so prn.th can have one live half and one dead', () => {
+        Mistakes.registerDrillTargets('pronunciation', ['θ-t', 'v-w']);
+        const t = Mistakes.drillTarget('prn.th');
+        expect(t.authored).toBe(true);            // the primary is authored
+        expect(t.liveTargets).toEqual(['θ-t']);
+        expect(t.deadTargets).toEqual(['ð-d']);   // ...and the /ð/ half is not
+        expect(t.srsKeys).toEqual(['phon:θ-t', 'phon:ð-d']);   // still both
+        // Registering the second half makes it live with no other change.
+        Mistakes.registerDrillTargets('pronunciation', 'ð-d');
+        expect(Mistakes.drillTarget('prn.th').liveTargets).toEqual(['θ-t', 'ð-d']);
+        expect(Mistakes.drillTarget('prn.th').deadTargets).toEqual([]);
+    });
+
+    it('makes no claim about a whole-strand drill, which has nothing to author', () => {
+        // vocab.meaning declares `target: null` — "the strand IS the destination",
+        // authored intent rather than a dead end — so `false` would be a lie even
+        // with a populated vocabulary registry.
+        Mistakes.registerDrillTargets('vocabulary', ['some-word-list']);
+        const t = Mistakes.drillTarget('vocab.meaning');
+        expect(t.target).toBeNull();
+        expect(t.authored).toBeNull();
+        expect(t.deadTargets).toEqual([]);
+    });
+
+    it('keeps strands apart, so a pronunciation pair is not a grammar point', () => {
+        Mistakes.registerDrillTargets('pronunciation', ['θ-t']);
+        expect(Mistakes.isAuthoredTarget('grammar', 'θ-t')).toBeNull();
+        expect(Mistakes.drillTarget('gram.articles').authored).toBeNull();
+        expect(Mistakes.resetDrillTargets('pronunciation')).toBe(1);
+        expect(Mistakes.authoredTargets('pronunciation')).toEqual([]);
+    });
+
+    it('accepts a slug, its srsKey, or the authored object itself', () => {
+        // One line beside the self-registration a content file already does, using
+        // whatever that file has to hand.
+        Mistakes.registerDrillTargets('grammar', 'articles');
+        Mistakes.registerDrillTargets('grammar', 'gram:be');
+        Mistakes.registerDrillTargets('grammar', [{ id: 'countable-uncountable' }]);
+        Mistakes.registerDrillTargets('grammar', [{ srsKey: 'gram:question-formation' }]);
+        expect(Mistakes.authoredTargets('grammar').sort()).toEqual(
+            ['articles', 'be', 'countable-uncountable', 'question-formation']);
+        ['gram.articles', 'gram.copula', 'gram.uncountable-plural', 'gram.word-order']
+            .forEach(id => expect(Mistakes.drillTarget(id).authored).toBe(true));
+    });
+
+    it('refuses a namespaced key that does not match the strand (FR-CNT-1)', () => {
+        // Filing `phon:v-w` as a grammar point called "phon:v-w" would populate the
+        // registry with an entry no category can ever match, and would make every
+        // real grammar target read as dead. Loud, not absorbed.
+        const res = Mistakes.registerDrillTargets('grammar', ['phon:v-w', 'articles', '', null]);
+        expect(res.added).toEqual(['articles']);
+        expect(res.ignored).toHaveLength(3);
+        expect(Mistakes.authoredTargets('grammar')).toEqual(['articles']);
+        // No strand, nothing to file it under, so nothing is guessed at.
+        expect(Mistakes.registerDrillTargets('', ['articles']).ignored).toHaveLength(1);
+        expect(Mistakes.authoredTargets('')).toEqual([]);
+    });
+
+    it('refuses the entry shapes that name no target at all', () => {
+        // `{ target }` wins over `{ id }`, because a row that carries both means
+        // the drill destination by the first.
+        expect(Mistakes.registerDrillTargets('grammar',
+            [{ target: 'articles', id: 'not-this-one' }]).added).toEqual(['articles']);
+        // A bare namespace with nothing after it, an object with none of the three
+        // fields, and — for a strand with no SRS namespace at all — anything
+        // colon-shaped, since `lsn:` is not a namespace this module mints.
+        expect(Mistakes.registerDrillTargets('grammar', ['gram:', 'gram:   ']).added).toEqual([]);
+        expect(Mistakes.registerDrillTargets('grammar', [{ code: 'T-G1' }]).added).toEqual([]);
+        expect(Mistakes.registerDrillTargets('listening', ['lsn:gist']).added).toEqual([]);
+        expect(Mistakes.registerDrillTargets('listening', ['gist']).added).toEqual(['gist']);
+        expect(Mistakes.drillTarget('lsn.gist').authored).toBe(true);
+        expect(Mistakes.drillTarget('lsn.detail').authored).toBe(false);
+        // An empty target is a question with no answer, not a dead target.
+        expect(Mistakes.isAuthoredTarget('listening', '')).toBeNull();
+        expect(Mistakes.isAuthoredTarget('listening', null)).toBeNull();
+    });
+
+    it('is idempotent, so a double-loaded script is a no-op not an error', () => {
+        expect(Mistakes.registerDrillTargets('grammar', ['articles', 'be']).added)
+            .toEqual(['articles', 'be']);
+        const again = Mistakes.registerDrillTargets('grammar', ['articles', 'be', 'articles']);
+        expect(again.added).toEqual([]);
+        expect(again.known).toEqual(['articles', 'be']);
+        expect(Mistakes.authoredTargets('grammar')).toEqual(['articles', 'be']);
+    });
+
+    it('reports an ignored entry through AppErrorHandler, as a bad row is', () => {
+        const logged = [];
+        const previous = global.AppErrorHandler;
+        global.AppErrorHandler = { logError: (e, ctx) => logged.push(ctx) };
+        try {
+            Mistakes.registerDrillTargets('grammar', ['phon:v-w']);
+            expect(logged).toContain('Mistakes drill targets');
+        } finally {
+            if (previous === undefined) delete global.AppErrorHandler;
+            else global.AppErrorHandler = previous;
+        }
+    });
+
+    it('survives resetCategories, because content is not the taxonomy', () => {
+        registerAuthoredGrammar();
+        Mistakes.resetCategories();
+        // Reloading the built-in rows does not unauthor a lesson that is on disk.
+        expect(Mistakes.drillTarget('gram.word-order').authored).toBe(true);
+        expect(Mistakes.resetDrillTargets()).toBeGreaterThan(0);
+        expect(Mistakes.drillTarget('gram.word-order').authored).toBeNull();
+    });
+
+    it('answers for a row a second L1 profile registers, with no change here', () => {
+        // FR-CNT-3 / BR-10: the two extension points compose. A Hindi row pointing
+        // at an authored point reads live; one pointing at a slug nobody wrote
+        // reads dead, and the profile author finds out from this module.
+        registerAuthoredGrammar();
+        Mistakes.registerCategories([
+            { id: 'gram.hi.live', strand: 'grammar', label: 'Points at a real point',
+              drill: { strand: 'grammar', target: 'question-formation' } },
+            { id: 'gram.hi.dead', strand: 'grammar', label: 'Points at a slug nobody wrote',
+              drill: { strand: 'grammar', target: 'ergative-ne' } }
+        ]);
+        expect(Mistakes.drillTarget('gram.hi.live').authored).toBe(true);
+        expect(Mistakes.drillTarget('gram.hi.dead').authored).toBe(false);
+        expect(Mistakes.drillTarget('gram.hi.dead').deadTargets).toEqual(['ergative-ne']);
+    });
+});
+
+describe('US-224 — an omitted helper word is its own row, and gram.word-order keeps its wording', () => {
+    // There was no id for "Where you live?" / "You know him?", so
+    // data/grammar/question-formation.js sends those options to `gram.word-order`
+    // with `errorKind: 'auxiliary-omitted-in-direct-question'`. Honest and blunt:
+    // in "Where you live?" every word is exactly where English wants it and one
+    // word is absent, so "Words in the wrong order" is a finding the learner can
+    // check and find wrong — the US-182 / US-185 defect class.
+    //
+    // The tension US-224 names is that `gram.word-order` now has THREE producers.
+    // Two are order errors (app.js's sentence builder; question-formation.js's
+    // `auxiliary-after-subject-sov-residue`) and one is an omission. The label is
+    // true of the first two and false of the third, and a label true of all three
+    // would have to describe a scrambled adverb and an absent auxiliary at once,
+    // which stops being a diagnosis. So the third leaves.
+    //
+    // The content half is read OFF question-formation.js rather than restated.
+    const qf = require('../../data/grammar/question-formation.js').GRAMMAR_QUESTION_FORMATION;
+
+    /** What the CONTENT says to log when the learner picks `answer` on `itemId`. */
+    const routeOf = (itemId, answer) => {
+        const item = (qf.practice || []).find(i => i.id === itemId);
+        expect(item).toBeDefined();
+        const fb = (item.feedback || []).find(f => f.forAnswer === answer);
+        expect(fb).toBeDefined();
+        return { logAs: fb.logAs || qf.mistakeCategory, errorKind: fb.errorKind };
+    };
+
+    it('registers the row beside the one it split from', () => {
+        expect(Mistakes.isKnownCategory('gram.auxiliary-omitted')).toBe(true);
+        const cat = Mistakes.getCategory('gram.auxiliary-omitted');
+        expect(cat.strand).toBe('grammar');
+        expect(cat.l1).toBe('telugu');       // same source as T-G5 and T-G8
+        expect(cat.reportable).toBe(true);
+    });
+
+    it('has a label TRUE of the error routed to it — and no claim about order', () => {
+        const cat = Mistakes.getCategory('gram.auxiliary-omitted');
+        // The defect being fixed: the label must not say anything is misordered,
+        // because in every one of these sentences the order is correct.
+        expect(cat.label).not.toMatch(/order/i);
+        expect(cat.label).toMatch(/question/i);
+        expect(cat.label).toMatch(/missing|left out|no helper/i);
+        // ...and the example shows the shape the learner actually produced.
+        expect(cat.example).toMatch(/Where you live\?/);
+        expect(cat.example).toMatch(/You know him\?/);
+        expect(cat.example).toMatch(/Where do you live\?/);
+    });
+
+    it('speaks the same word as the lesson its button opens', () => {
+        // question-formation.js teaches the whole idea as "the helper moves in
+        // front of the subject". A panel that said "auxiliary" and a lesson that
+        // said "helper" would be two vocabularies for one idea.
+        const cat = Mistakes.getCategory('gram.auxiliary-omitted');
+        expect(cat.label + cat.explanation).toMatch(/helper/);
+        expect(cat.label + cat.explanation).not.toMatch(/auxiliar/i);
+        expect(qf.review.rulePrompt).toMatch(/helper/);
+    });
+
+    it('is honest that English drops helpers too (§5, "never claim more than we have")', () => {
+        // "You coming?" and "Seen it yet?" are ordinary English. A row that told
+        // the learner a missing helper is always an error would be wrong, and
+        // being told something wrong about your own language costs trust — the
+        // same commitment gram.subject-dropped makes.
+        const cat = Mistakes.getCategory('gram.auxiliary-omitted');
+        expect(cat.explanation).toMatch(/not always an error/);
+        expect(cat.explanation).toMatch(/You coming\?/);
+        // The cost is how it is heard, not whether it is understood.
+        expect(cat.explanation).toMatch(/rather than misunderstood/);
+    });
+
+    it('follows §5 tone: second person, no blame, no exclamation marks', () => {
+        const cat = Mistakes.getCategory('gram.auxiliary-omitted');
+        expect(cat.explanation).toMatch(/\byou\b/i);
+        expect(cat.label + cat.explanation + cat.example).not.toMatch(/!/);
+        expect(cat.explanation).not.toMatch(/careless|lazy|wrong of you|bad/i);
+        expect(cat.explanation.length).toBeGreaterThan(20);
+    });
+
+    it('carries no T- code, because §3.2 has no row for omission', () => {
+        // T-G8 is "SOV residue in questions and embedded clauses" — residue is a
+        // word in the WRONG PLACE, and its own example column is "You know where
+        // is the station?". Omission is a word that was never borrowed.
+        expect(Mistakes.getCategory('gram.auxiliary-omitted').code).toBeNull();
+        expect(Mistakes.categories().map(c => c.code)).not.toContain('T-G10');
+        expect(Mistakes.getCategory('gram.embedded-question-order').code).toBe('T-G8');
+        // Still Telugu transfer, so an L1 filter finds it.
+        expect(Mistakes.categories({ l1: 'telugu' }).map(c => c.id))
+            .toContain('gram.auxiliary-omitted');
+    });
+
+    it('is priority S, on the intelligibility grounds §3.2 uses', () => {
+        // Nobody has ever failed to understand "Where you live?". What it costs is
+        // being heard as learner English — worth a row, not worth an M.
+        expect(Mistakes.getCategory('gram.auxiliary-omitted').priority).toBe('S');
+        expect(Mistakes.getCategory('gram.preposition-transfer').priority).toBe('S');
+    });
+
+    it('shares one drill with gram.word-order on purpose, as US-182 established', () => {
+        const t = Mistakes.drillTarget('gram.auxiliary-omitted');
+        expect(t).toMatchObject({
+            strand: 'grammar', target: 'question-formation',
+            srsKey: 'gram:question-formation'
+        });
+        // Read the destination back off the content, not off a literal.
+        expect(qf.id).toBe('question-formation');
+        expect(t.srsKey).toBe('gram:' + qf.id);
+        expect(Mistakes.drillTarget('gram.word-order').srsKey).toBe(t.srsKey);
+        // One destination, FOUR findings. That is the established shape here, not
+        // a compromise: gram.copula and gram.subject-dropped already share
+        // `gram:be` because the learner has to be told which word went missing.
+        const sharing = Mistakes.categories()
+            .filter(c => c.drill && c.drill.target === 'question-formation')
+            .map(c => c.id);
+        expect(sharing).toEqual(['gram.tag-question', 'gram.embedded-question-order',
+            'gram.auxiliary-omitted', 'gram.word-order']);
+    });
+
+    it('leaves gram.word-order its id AND its label, which are true of what remains', () => {
+        // Not renamed: record() writes this string into learner storage, so a
+        // rename would orphan every entry already logged under it. Not reworded
+        // either, because both remaining producers ARE misordered words.
+        const cat = Mistakes.getCategory('gram.word-order');
+        expect(cat.label).toBe('Words in the wrong order');
+        expect(cat.code).toBeNull();
+        expect(cat.priority).toBe('M');
+        // The one thing that changed: the example now teaches the question-shaped
+        // producer as well as the sentence-builder one, which it has had since
+        // US-215 and never showed.
+        expect(cat.example).toMatch(/I like this book very much/);
+        expect(cat.example).toMatch(/Where are you going\?/);
+    });
+
+    it('ranks as its own finding, and does not halve the row it left', () => {
+        // What the learner sees. Two labels, both true, and neither is two halves
+        // of one habit: "borrow a word that is missing" and "move a word you
+        // already said" are two different things to notice.
+        seed('gram.auxiliary-omitted', [1, 2, 3, 5], { given: 'you live', source: 'grammarPractice' });
+        seed('gram.word-order', [4, 6], { given: 'I like very much this book' });
+
+        const top = Mistakes.topCategories();
+        expect(top.map(r => r.id)).toEqual(['gram.auxiliary-omitted', 'gram.word-order']);
+        expect(top[0].label).toBe('A question with its helper word missing');
+        expect(top[0].count).toBe(4);
+        expect(top[1].label).toBe('Words in the wrong order');
+        expect(top[1].count).toBe(2);
+        expect(top[0].drillable).toBe(true);
+        expect(top[0].drill.srsKey).toBe('gram:question-formation');
+    });
+
+    it('leaves already-logged gram.word-order entries in place and still ranked', () => {
+        // The split cannot be retroactive, and this is why: record() stores
+        // `category`, `at`, `evidence` and free text, and NOT `errorKind`. The log
+        // physically does not contain the fact that would say which past entries
+        // were omissions, so a migration would have to guess — and guessing which
+        // of a learner's own mistakes were which is worse than a stale label on a
+        // few of them. Nothing is orphaned and nothing stops being ranked.
+        const stored = Mistakes.record('gram.word-order', { at: daysAgo(1), given: 'you live' });
+        expect(Object.keys(stored).sort())
+            .toEqual(['at', 'category', 'evidence', 'expected', 'given', 'item', 'source']);
+        expect(stored.category).toBe('gram.word-order');
+        expect(Object.prototype.hasOwnProperty.call(stored, 'errorKind')).toBe(false);
+        expect(Mistakes.topCategories()[0].id).toBe('gram.word-order');
+        expect(Mistakes.topCategories()[0].label).toBe('Words in the wrong order');
+        // ...and the 30-day window is a hard edge, so a mislabelled historical
+        // entry ages out of the panel by itself rather than needing a rewrite.
+        expect(Mistakes.topCategories({ now: NOW + 31 * DAY_MS })).toEqual([]);
+        expect(Mistakes.stats().entries).toBe(1);
+    });
+
+    it('is loggable now, and the content still declares nothing record() refuses', () => {
+        // NOTHING emits this id yet — question-formation.js is owned elsewhere and
+        // this file cannot wire it. The edit that file needs is on
+        // `question-formation-p1`, whose "you live" option carries
+        //     logAs: "gram.word-order", errorKind: "auxiliary-omitted-in-direct-question"
+        // and should become `logAs: "gram.auxiliary-omitted"` with the errorKind
+        // kept. That is the ONLY site: the other word-order routings in that file
+        // are order errors and stay put.
+        expect(Mistakes.record('gram.auxiliary-omitted', { at: daysAgo(1) })).not.toBeNull();
+
+        const declared = [qf.mistakeCategory];
+        (qf.practice || []).forEach(item => (item.feedback || []).forEach(f => {
+            if (f && f.logAs) declared.push(f.logAs);
+        }));
+        expect(Mistakes.unknownCategories(declared)).toEqual([]);
+
+        // Written to hold both before and after that edit: it pins that the
+        // omission errorKind and the order errorKinds never share a destination,
+        // rather than pinning which destination the omission currently has.
+        const omission = routeOf('question-formation-p1', 'you live');
+        const residue = routeOf('question-formation-p1', 'you do live');
+        expect(omission.errorKind).toBe('auxiliary-omitted-in-direct-question');
+        expect(residue.errorKind).toBe('auxiliary-after-subject-sov-residue');
+        expect(['gram.word-order', 'gram.auxiliary-omitted']).toContain(omission.logAs);
+        expect(residue.logAs).toBe('gram.word-order');
+        // Whatever the omission is logged as, its row's label must be true of it.
+        expect(Mistakes.getCategory(omission.logAs).label)
+            .toMatch(omission.logAs === 'gram.auxiliary-omitted' ? /helper/ : /order/);
+    });
+});
+
+describe('Task 3 — the taxonomy does not claim which rows have a producer', () => {
+    // Four rows can never fire in this build — `vocab.recall`,
+    // `vocab.collocation`, `lsn.gist`, `rdw.inference` — because no gradable task
+    // exists to attach them to, and app.js documents that beside the code that
+    // would have to change. The taxonomy's shape doc now names the DISTINCTION an
+    // author needs (unused vs unusable) and says where the live answer is, as a
+    // dated observation. It is deliberately not a field, and these pin that.
+
+    it('carries no per-row producer field that could go stale', () => {
+        // A `producer` / `producible` field here would be a second copy of a fact
+        // this module cannot check — the US-160 defect, where data/grammar.js's
+        // hand-copied list went stale and began rejecting a valid id.
+        Mistakes.categories().forEach(c => {
+            ['producer', 'producers', 'producible', 'hasProducer', 'unusable']
+                .forEach(k => expect(Object.prototype.hasOwnProperty.call(c, k)).toBe(false));
+        });
+        // The row shape is exactly the eleven documented fields, so a later field
+        // cannot arrive unremarked.
+        expect(Object.keys(Mistakes.getCategory('gram.articles')).sort()).toEqual(
+            ['code', 'drill', 'example', 'explanation', 'id', 'l1', 'label',
+                'priority', 'reportable', 'strand']);
+    });
+
+    it('reports what has actually fired on THIS device, and nothing more', () => {
+        // The only honest runtime answer, and it is a fact about the learner's
+        // history rather than about the build. Absence here is NOT evidence that a
+        // producer does not exist: a row whose producer the learner never
+        // triggered is indistinguishable from one that has none, which is why the
+        // claim is not made in either direction.
+        expect(Mistakes.isKnownCategory('vocab.recall')).toBe(true);
+        expect(Mistakes.stats().categoriesSeen).toBe(0);
+        expect(Mistakes.stats().categoriesRegistered).toBe(36);
+        seed('vocab.meaning', [1]);
+        expect(Mistakes.stats().categoriesSeen).toBe(1);
+        // The four never-firing rows are ordinary rows in every other respect:
+        // registered, reportable, explained, and rankable the day one is wired.
+        ['vocab.recall', 'vocab.collocation', 'lsn.gist', 'rdw.inference'].forEach(id => {
+            const cat = Mistakes.getCategory(id);
+            expect(cat.reportable).toBe(true);
+            expect(cat.explanation.length).toBeGreaterThan(20);
+            expect(Mistakes.record(id, { at: daysAgo(1) })).not.toBeNull();
+        });
+        expect(Mistakes.topCategories({ limit: 99 }).map(r => r.id))
+            .toEqual(expect.arrayContaining(['vocab.recall', 'lsn.gist']));
+    });
+
+    it('does not let the drill registry answer the producer question either', () => {
+        // The two are separate axes and the asymmetry is principled: content CAN
+        // declare what it authored, so the DRILL half of "does this button go
+        // anywhere" is answerable here. Nothing can declare a producer's absence,
+        // so a registered drill target says nothing about whether anything logs
+        // the row that points at it.
+        Mistakes.registerDrillTargets('listening', ['gist', 'detail']);
+        expect(Mistakes.drillTarget('lsn.gist').authored).toBe(true);
+        expect(Mistakes.stats().categoriesSeen).toBe(0);   // still no producer
     });
 });
 
