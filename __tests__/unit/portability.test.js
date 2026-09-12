@@ -43,32 +43,38 @@
  *
  * `__tests__/setup.js` clears localStorage after each test, which is necessary
  * but NOT sufficient for this module: `SRS.records`, and the module-level
- * one-way `suspended` latch behind `writesSuspended()`, are in-memory and
- * survive it. Both are handled here — see beforeEach and the note on the
- * `writesSuspended` block.
+ * `suspended` latch behind `writesSuspended()`, are in-memory and survive it.
+ * Both are handled in beforeEach — the latch through the `_resetWritesSuspended`
+ * seam, so this file has no declaration-order dependency and survives
+ * `--randomize`.
  *
- * WHAT THIS SUITE FOUND. Three defects, all pinned as current behaviour with a
- * `⚠️` marker in the house style of __tests__/unit/srs.test.js rather than left
- * as red assertions, so the suite stays green and the finding stays visible:
+ * WHAT THIS SUITE FOUND, AND WHAT WAS DONE ABOUT IT. Three defects were pinned
+ * here as current behaviour with a `⚠️` marker in the house style of
+ * __tests__/unit/srs.test.js; all three are now fixed and the pins below assert
+ * the fixed behaviour instead:
  *
- *   A. `resetReviewHistory()` reports SUCCESS when the removal fails. SRS.reset()
- *      swallows its own removeItem error (js/core/srs.js:1408), so the learner is
- *      told "Your review history is cleared" while `srsData` is still in
- *      localStorage and comes back on the next reload. The module applies
- *      "verify by reading the store back" to rollback() and not to reset().
- *   B. `MESSAGES.rollbackFailed` can name a recovery key that was never written.
- *      `writePreImportBackup()` returns a boolean that importFromText():567
- *      discards.
- *   C. `resetReviewHistory()` files the migration backup under the CURRENT
- *      SCHEMA_VERSION whatever era the data is actually from, so pre-fix data
- *      lands under `srsData.bak.v2` while migrations.js would file it as `.v1`.
+ *   A. US-198 — `resetReviewHistory()` reported SUCCESS when the removal failed.
+ *      SRS.reset() swallows its own removeItem error (js/core/srs.js:1408), so
+ *      the learner was told "Your review history is cleared" while `srsData` was
+ *      still in localStorage and came back on the next reload. The reset path now
+ *      reads the store back, exactly as rollback() does, and re-syncs SRS from
+ *      storage so the badge cannot show a zero the store does not agree with.
+ *   B. US-199 — `MESSAGES.rollbackFailed` could name a recovery key that was
+ *      never written. `writePreImportBackup()`'s return value is no longer
+ *      discarded, and there are now three truthful endings: a copy exists, a copy
+ *      does not exist and data is lost, or there was nothing here to lose.
+ *   C. US-200 — `resetReviewHistory()` filed the migration backup under the
+ *      CURRENT SCHEMA_VERSION whatever era the data was from. It now decides the
+ *      era from the data's SHAPE, the same way migrations.js does, so pre-fix
+ *      data lands under `srsData.bak.v1` where a recovery note would look for it.
  *
- * TESTABILITY GAP: `js/core/portability.js:826-832`, the reload after a
- * successful import, is the only code this suite cannot reach. jsdom's
- * `location.reload` is a not-implemented stub, `Location` is unforgeable so it
- * cannot be spied on, and assigning to `window.location` navigates rather than
- * replaces. An injectable seam — `Portability._reload` defaulting to
- * `global.location.reload.bind(global.location)` — would close it.
+ * TWO TEST SEAMS were added with them, both no-ops in the browser:
+ *   - `Portability._resetWritesSuspended()` (US-207), for the one-way latch.
+ *   - `Portability._reload()` (US-208), the reload after a successful import.
+ *     jsdom's `location.reload` is a not-implemented stub, `Location` is
+ *     unforgeable so it cannot be spied on, and assigning to `window.location`
+ *     navigates rather than replaces — so this was the module's only unreachable
+ *     line. In production the seam still calls `global.location.reload()`.
  */
 
 const Portability = require('../../js/core/portability.js');
@@ -196,6 +202,11 @@ beforeEach(() => {
     localStorage.clear();
     SRS.records = {};
     SRS._migrated = true;
+    // The `suspended` latch is module-level and one-way, so a successful import
+    // in any test would otherwise leak `writesSuspended() === true` into every
+    // test declared after it. Reset through the seam rather than relying on
+    // declaration order (US-207).
+    P._resetWritesSuspended();
     // logError() falls through to console.warn when AppErrorHandler is absent.
     // Silenced, but kept as a spy so the failure paths can assert they logged.
     jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -420,6 +431,51 @@ describe('exportToFile — the download (STUBBED: jsdom has no object URLs)', ()
         expect(result.ok).toBe(false);
         expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
     });
+
+    // -----------------------------------------------------------------------
+    // US-209: an export this app cannot restore says so.
+    //
+    // validateExport() refuses a file with neither progress nor review history
+    // (`no-data`), so a settings-only device used to produce a "successful"
+    // backup that could never be restored. The REFUSAL is kept deliberately: a
+    // commit is a replacement, so accepting a settings-only file would let one
+    // mis-picked, genuinely-ours file wipe a populated device, and the thing it
+    // would rescue is a theme toggle. What changed is that the export no longer
+    // claims to be something it is not (`BR-7`, `BR-3`).
+    // -----------------------------------------------------------------------
+
+    it('a normal export is restorable and says only "Saved."', () => {
+        seed({ learningProgress: PROGRESS, theme: 'dark' });
+        const result = P.exportToFile();
+        expect(result.restorable).toBe(true);
+        expect(result.message).toBe(P.MESSAGES.exportOk);
+    });
+
+    it('a review-history-only export is restorable too', () => {
+        seed({ srsData: SRSDATA, theme: 'dark' });
+        expect(P.exportToFile().restorable).toBe(true);
+    });
+
+    it('a settings-only export admits it cannot be restored', () => {
+        seed({ theme: 'dark' });
+        const result = P.exportToFile();
+        expect(result.ok).toBe(true);              // the file really was written
+        expect(result.keyCount).toBe(1);
+        expect(result.restorable).toBe(false);
+        expect(result.message).toBe(P.MESSAGES.exportOkNotRestorable);
+        // ...and the admission is true: the very file it just wrote is refused.
+        expect(P.validateExport(JSON.stringify(P.buildExport(), null, 2)).code).toBe('no-data');
+    });
+
+    it('an export from an empty device gets the same caveat, worded to fit', () => {
+        const result = P.exportToFile();
+        expect(result.ok).toBe(true);
+        expect(result.restorable).toBe(false);
+        expect(result.message).toBe(P.MESSAGES.exportOkNotRestorable);
+        // Says nothing about what the file contains, because it contains nothing.
+        expect(result.message).toMatch(/no progress or review history on this device yet/);
+        expect(result.message).toMatch(/cannot restore that file later/);
+    });
 });
 
 // ===========================================================================
@@ -536,10 +592,12 @@ describe('round trip is byte-exact (BR-7 / FR-DATA-4)', () => {
     });
 
     it('restores what the file has and drops what it does not — replacement, not merge', () => {
-        // A "clean install" must not keep this device's leftovers. The flip side
-        // is that an srsData-only file DELETES learningProgress; the confirm
-        // copy says "replaces ... with the ones in this file", so this is the
-        // documented behaviour and not an accident.
+        // A "clean install" must not keep this device's leftovers, and the
+        // rollback path depends on the commit being a whole state rather than a
+        // merge. The flip side is that an srsData-only file DELETES
+        // learningProgress (US-204). That behaviour is kept — see the
+        // importConfirmMessage block, which is where the learner is now told,
+        // in the words of the thing they are about to lose, before they agree.
         seed({ learningProgress: PROGRESS, theme: 'dark', staleLeftover: 'x' });
         const result = P.importFromText(file({ data: { srsData: SRSDATA } }));
         expect(result.ok).toBe(true);
@@ -738,6 +796,104 @@ describe('validateExport — everything that can say no (FR-DATA-4)', () => {
 });
 
 // ===========================================================================
+describe('the confirm copy names what a restore will remove (US-204)', () => {
+// ===========================================================================
+// A commit is a REPLACEMENT, so a file carrying only `srsData` deletes
+// `learningProgress`. The behaviour is kept — a "clean install" that silently
+// retained this device's leftovers would be a worse lie, and rollback() depends
+// on `before` being a whole state rather than a merge — but the old fixed copy
+// ("replaces the progress, review history and settings ... with the ones in this
+// file") reads as substitution, and nobody would infer "and deletes the
+// categories this file happens to omit". So the copy changed, not the code.
+
+    const planFor = (text) => {
+        const checked = P.validateExport(text);
+        expect(checked.ok).toBe(true);
+        return checked.plan;
+    };
+
+    it('states the general rule, so nothing rests on the specific sentences', () => {
+        expect(P.MESSAGES.importConfirm).toMatch(/Anything saved here that the file does not contain is removed/);
+        expect(P.MESSAGES.importConfirm).toMatch(/A copy of what is here now is kept/);
+    });
+
+    it('warns in as many words that a review-history-only file deletes progress', () => {
+        seed({ learningProgress: PROGRESS, srsData: SRSDATA });
+        const message = P.importConfirmMessage(planFor(file({ data: { srsData: SRSDATA } })));
+        expect(message).toContain(P.MESSAGES.importConfirmProgressLost);
+        expect(message).toMatch(/streak and completed exercises/);
+        expect(message).not.toContain(P.MESSAGES.importConfirmReviewLost);
+        expect(message.endsWith(P.MESSAGES.importConfirmTail)).toBe(true);
+    });
+
+    it('warns that a progress-only file deletes the review history', () => {
+        seed({ learningProgress: PROGRESS, srsData: SRSDATA });
+        const message = P.importConfirmMessage(planFor(file({ data: { learningProgress: PROGRESS } })));
+        expect(message).toContain(P.MESSAGES.importConfirmReviewLost);
+        expect(message).not.toContain(P.MESSAGES.importConfirmProgressLost);
+    });
+
+    it('names the other things it will remove in learner words, not storage keys', () => {
+        seedPopulated();
+        const message = P.importConfirmMessage(planFor(file()));
+        expect(message).toContain('your mistake history');
+        expect(message).toContain("today's plan");
+        expect(message).toContain('your appearance settings');
+        expect(message).not.toContain('mistakeLog');
+        expect(message).not.toContain('sessionPlan');
+        // Deny-listed keys are not touched by a commit, so they are not named.
+        expect(message).not.toContain('errorLog');
+        expect(message).not.toContain('word_serendipity');
+    });
+
+    it('counts a key it has no name for rather than showing it raw', () => {
+        // The deny-list means a future feature's key is exported and replaced
+        // automatically, and this module cannot invent a learner-facing name
+        // for it — so it is counted, not printed.
+        seed({ learningProgress: PROGRESS, phase9State: '{}' });
+        const message = P.importConfirmMessage(planFor(file({ data: { learningProgress: PROGRESS } })));
+        expect(message).toContain('one other saved item');
+        expect(message).not.toContain('phase9State');
+    });
+
+    it('pluralises the unnamed count', () => {
+        seed({ learningProgress: PROGRESS, phase9State: '{}', phase10State: '{}' });
+        const message = P.importConfirmMessage(planFor(file({ data: { learningProgress: PROGRESS } })));
+        expect(message).toContain('2 other saved items');
+    });
+
+    it('adds nothing when the file replaces everything the device has', () => {
+        seed({ learningProgress: PROGRESS, srsData: SRSDATA });
+        expect(P.importConfirmMessage(planFor(file()))).toBe(
+            P.MESSAGES.importConfirm + '\n\n' + P.MESSAGES.importConfirmTail
+        );
+    });
+
+    it('never warns about a loss on an empty device, because there is none', () => {
+        const message = P.importConfirmMessage(planFor(file({ data: { srsData: SRSDATA } })));
+        expect(message).not.toContain(P.MESSAGES.importConfirmProgressLost);
+        expect(message).toBe(P.MESSAGES.importConfirm + '\n\n' + P.MESSAGES.importConfirmTail);
+    });
+
+    it('reads nothing and writes nothing', () => {
+        seedPopulated();
+        const before = dumpAll();
+        const setItem = jest.spyOn(Storage.prototype, 'setItem');
+        P.importConfirmMessage(planFor(file()));
+        expect(setItem).not.toHaveBeenCalled();
+        expect(dumpAll()).toEqual(before);
+    });
+
+    it('does not throw when handed no plan at all', () => {
+        // A missing plan means "the file carries nothing", which is the most
+        // alarming reading, not the most reassuring one.
+        seedPopulated();
+        expect(() => P.importConfirmMessage()).not.toThrow();
+        expect(P.importConfirmMessage(null)).toContain(P.MESSAGES.importConfirmProgressLost);
+    });
+});
+
+// ===========================================================================
 describe('validate-before-write: a rejected import touches nothing', () => {
 // ===========================================================================
 
@@ -872,25 +1028,21 @@ describe('commit failure: the store is put back (NFR-10 / BR-7)', () => {
         expect(localStorage.getItem('srsData')).toBe(SRSDATA);
     });
 
-    it('⚠️ KNOWN DEFECT: the rollback-failed message can name a backup that does not exist', () => {
+    it('US-199 FIXED: names no backup when no backup could be taken', () => {
         // The worst case this module has, and the only path where learner data
         // is genuinely lost: a device so full that the pre-import copy will not
         // fit AND the rollback cannot write anything back.
         //
-        // `writePreImportBackup()` already RETURNS whether it succeeded, but
-        // importFromText():567 discards the value — so when the commit later
-        // fails, the learner is handed MESSAGES.rollbackFailed, which states the
+        // It used to hand the learner MESSAGES.rollbackFailed, which states the
         // previous data "is still on this device, saved under
-        // 'learnerData.preImport.bak'". Here that key does not exist, `theme` has
-        // been deleted by the commit and cannot be restored, and the message
-        // sends the learner looking for a recovery copy that was never written.
+        // 'learnerData.preImport.bak'" — while that key did not exist. The data
+        // was lost AND the recovery advice pointed at nothing (`BR-3`).
         //
-        // THE SEAM ALREADY EXISTS: capture the return value of
-        // writePreImportBackup() and either (a) refuse to commit at all when the
-        // store is non-empty and no recovery copy could be taken, or (b) select a
-        // truthful message. One line, no new API.
-        //
-        // Pinned as current behaviour, in the house style of srs.test.js.
+        // The decision was to keep committing and tell the truth, NOT to refuse
+        // the restore: the commit removes keys before it writes, so it routinely
+        // succeeds where the extra copy would not fit (see "a failed pre-import
+        // backup does not block the restore"), and refusing would deny a restore
+        // to exactly the learner who most needs one.
         seed({ learningProgress: JSON.stringify(progressRecord({ streak: 1 })), theme: 'dark' });
         stubSetItem(() => 'throw');                 // nothing can be written at all
 
@@ -898,12 +1050,49 @@ describe('commit failure: the store is put back (NFR-10 / BR-7)', () => {
             data: { learningProgress: PROGRESS, srsData: SRSDATA }
         }));
 
+        // A distinct code, because this is a materially different outcome.
+        expect(result.code).toBe('rollback-failed-no-backup');
+        expect(result.message).toBe(P.MESSAGES.rollbackFailedNoBackup);
+        // The key that does not exist is not named...
+        expect(result.message).not.toContain(PRE_IMPORT_KEY);
+        expect(localStorage.getItem(PRE_IMPORT_KEY)).toBeNull();
+        // ...the loss is stated rather than glossed...
+        expect(result.message).toMatch(/some of what was here before is lost/);
+        // ...and the one thing that IS recoverable is what they are pointed at.
+        expect(result.message).toMatch(/restore that file again/);
+        expect(localStorage.getItem('theme')).toBeNull();
+        expect(localStorage.getItem('learningProgress.bak.v1')).toBeNull();
+    });
+
+    it('says nothing was lost when a failed rollback had nothing to lose', () => {
+        // Empty device, partial commit, and the removals fail too. The store is
+        // not `before`, so the rollback is a failure — but there was no earlier
+        // data, so both "your previous data could not be put back" and the name
+        // of a recovery copy would be untrue.
+        jest.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+            throw quotaError();
+        });
+        stubSetItem((k) => (k === 'srsData' ? 'throw' : 'pass'));
+
+        const result = P.importFromText(file());
+
+        expect(result.code).toBe('rollback-failed-nothing-lost');
+        expect(result.message).toBe(P.MESSAGES.rollbackFailedNothingLost);
+        expect(result.message).not.toContain(PRE_IMPORT_KEY);
+        expect(result.message).toMatch(/none of your earlier data is lost/);
+    });
+
+    it('still names the backup when there really is one', () => {
+        // The other side of the fix: the original message is not weakened, it is
+        // just no longer used when it would be false.
+        seed({ learningProgress: PROGRESS, theme: 'dark' });
+        stubSetItem((k) => (k === PRE_IMPORT_KEY ? 'pass' : 'throw'));
+
+        const result = P.importFromText(file({ data: { learningProgress: PROGRESS, srsData: SRSDATA } }));
+
         expect(result.code).toBe('rollback-failed');
         expect(result.message).toContain(PRE_IMPORT_KEY);
-        // ...and the evidence that the message is not true.
-        expect(localStorage.getItem(PRE_IMPORT_KEY)).toBeNull();
-        expect(localStorage.getItem('theme')).toBeNull();        // silently lost
-        expect(localStorage.getItem('learningProgress.bak.v1')).toBeNull();
+        expect(JSON.parse(localStorage.getItem(PRE_IMPORT_KEY)).data.theme).toBe('dark');
     });
 
     describe('recognises a full device however the browser words it', () => {
@@ -1231,25 +1420,19 @@ describe('resetReviewHistory — clears srsData and nothing else (FR-DATA-5)', (
         }
     });
 
-    it('⚠️ KNOWN DEFECT: reports SUCCESS when SRS is loaded and the removal fails', () => {
+    it('US-198 FIXED: reports FAILURE when SRS is loaded and the removal fails', () => {
         // SRS.reset() swallows its own removeItem failure
-        // (js/core/srs.js:1408 `catch (e) { /* ignore */ }`), so
-        // resetReviewHistory() cannot see it and returns
-        // `{ ok: true, cleared: true }` with the message "Your review history is
-        // cleared" — while `srsData` is still sitting in localStorage. The
-        // in-memory records ARE cleared, so the due badge reads zero and the UI
-        // looks correct; on the next reload SRS.load() reads the old records
-        // back and the history returns.
+        // (js/core/srs.js:1408 `catch (e) { /* ignore */ }`), so no exception
+        // reaches resetReviewHistory() — it used to return
+        // `{ ok: true, cleared: true }` with "Your review history is cleared"
+        // while `srsData` was still sitting in localStorage. The in-memory records
+        // ARE cleared, so the due badge read zero and the UI looked correct; on
+        // the next reload SRS.load() read the old records back and the history
+        // returned.
         //
-        // This is the one place the module does not apply its own doctrine.
-        // rollback() decides its verdict by READING THE STORE BACK precisely
-        // because "no exception escaped" is not evidence (see the "rollback is
-        // verified" block above); the reset path takes the exception's absence on
-        // trust. A `localStorage.getItem(SRS_KEY) === null` check after the
-        // reset, mirroring storeMatches(), would close it.
-        //
-        // Pinned as current behaviour rather than asserted as a failure, in the
-        // house style of __tests__/unit/srs.test.js. Flip when fixed.
+        // The module now applies its own doctrine here: the verdict comes from
+        // READING THE STORE BACK, exactly as rollback() decides its own (see the
+        // "rollback is verified" block above).
         seed({ srsData: SRSDATA });
         SRS.records = JSON.parse(SRSDATA);
         jest.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
@@ -1258,32 +1441,160 @@ describe('resetReviewHistory — clears srsData and nothing else (FR-DATA-5)', (
 
         const result = P.resetReviewHistory();
 
-        expect(result.ok).toBe(true);            // should be false
-        expect(result.cleared).toBe(true);       // should be false
-        expect(result.message).toBe(P.MESSAGES.resetOk);
-        // The evidence: the history the learner was told is gone is still here.
+        expect(result.ok).toBe(false);
+        expect(result.cleared).toBeUndefined();
+        expect(result.code).toBe('reset-failed');
+        expect(result.message).toBe(P.MESSAGES.resetFailed);
+        expect(result.message).toMatch(/Nothing has changed/);
+        // The history is still here — and now the report agrees with the store.
         expect(localStorage.getItem('srsData')).toBe(SRSDATA);
-        expect(SRS.records).toEqual({});         // so nothing on screen shows it
+        // And the in-memory records are back in step with it, so the badge does
+        // not show a zero the store disagrees with until the next reload.
+        expect(SRS.records).toEqual(JSON.parse(SRSDATA));
+        expect(console.warn).toHaveBeenCalled();
     });
 
-    it('⚠️ names the migration backup after this BUILD, not after the data\'s era', () => {
-        // backupOnce(SRS_KEY, buildSchemaVersion()) always passes the CURRENT
+    it('reports the outcome as unverified when storage stops answering mid-reset', () => {
+        // The removal may or may not have landed: getItem throws only on the
+        // read-back. Claiming either outcome would be inventing one (`BR-3`), so
+        // this is neither "cleared" nor "nothing has changed".
+        seed({ srsData: SRSDATA });
+        let reads = 0;
+        const realGet = Storage.prototype.getItem;
+        jest.spyOn(Storage.prototype, 'getItem').mockImplementation(function (k) {
+            reads++;
+            if (reads > 1) throw new Error('storage went away');
+            return realGet.call(this, k);
+        });
+
+        const result = P.resetReviewHistory();
+
+        expect(result.ok).toBe(false);
+        expect(result.code).toBe('reset-unverified');
+        expect(result.message).toBe(P.MESSAGES.resetUnverified);
+        expect(result.message).not.toMatch(/Nothing has changed/);
+        expect(result.message).toMatch(/may not have been cleared/);
+    });
+
+    it('US-200 FIXED: names the migration backup after the DATA\'s era, not the build\'s', () => {
+        // backupOnce(SRS_KEY, buildSchemaVersion()) always passed the CURRENT
         // SCHEMA_VERSION, so a legacy bare-word `srsData` — exactly the
-        // pre-grading-fix data FR-DATA-5 exists for — is filed as
-        // `srsData.bak.v2`, naming the version it is NOT. migrations.js's own
-        // path files the same pristine data as `srsData.bak.v1`
+        // pre-grading-fix data FR-DATA-5 exists for — was filed as
+        // `srsData.bak.v2`, naming the version it is NOT, while migrations.js's
+        // own path files the same pristine data as `srsData.bak.v1`
         // (migrateSrsData: `backupOnce(SRS_KEY, Math.max(1, firstChangedTo - 1))`).
         //
-        // Not data loss: backupOnce never overwrites and both names are excluded
-        // from export. But recovery here is by hand, and someone told to look for
-        // `srsData.bak.v1` will not find it. Passing
-        // versionOfRawProgress()-style detection instead of buildSchemaVersion()
-        // would fix it.
+        // Recovery here is by hand, so the name is the whole interface: someone
+        // told to look for `.bak.v1` has to find it there.
         const legacy = '{"happy":{"word":"happy","reps":3}}';
         seed({ srsData: legacy });
         P.resetReviewHistory();
-        expect(localStorage.getItem('srsData.bak.v2')).toBe(legacy);
+        expect(localStorage.getItem('srsData.bak.v1')).toBe(legacy);
+        expect(localStorage.getItem('srsData.bak.v2')).toBeNull();
+    });
+
+    it('files a legacy DIFFICULTY as v1 too, because that is the other v2 step', () => {
+        // srsLevelsV2 rewrites `data.difficulty` through LEVEL_ALIASES, so a
+        // typed-key map still holding `intermediate` is pre-v2 data and
+        // migrations.js would back it up as v1. Both steps are mirrored, not just
+        // the one that is easy to see.
+        const legacyLevel = JSON.stringify({
+            'vocab:happy': { word: 'happy', reps: 1, data: { difficulty: 'intermediate' } }
+        });
+        seed({ srsData: legacyLevel });
+        P.resetReviewHistory();
+        expect(localStorage.getItem('srsData.bak.v1')).toBe(legacyLevel);
+        expect(localStorage.getItem('srsData.bak.v2')).toBeNull();
+    });
+
+    it('files data already in the current shape under the current version', () => {
+        // The flip side: the era is read from the data, so current data must not
+        // be filed as legacy either. SRSDATA carries typed keys and no difficulty.
+        seed({ srsData: SRSDATA });
+        P.resetReviewHistory();
+        expect(localStorage.getItem('srsData.bak.v' + Migrations.SCHEMA_VERSION)).toBe(SRSDATA);
         expect(localStorage.getItem('srsData.bak.v1')).toBeNull();
+    });
+
+    it('files an unreadable history under the current version, not as legacy', () => {
+        // We cannot claim data belongs to an era we could not inspect, so an
+        // unparseable value is filed under this build rather than guessed at v1.
+        seed({ srsData: 'not json at all' });
+        P.resetReviewHistory();
+        expect(localStorage.getItem('srsData.bak.v' + Migrations.SCHEMA_VERSION)).toBe('not json at all');
+        expect(localStorage.getItem('srsData.bak.v1')).toBeNull();
+    });
+
+    it('a stray non-record sibling does not make a typed map look legacy', () => {
+        // srsTypedKeysV2 leaves a non-object value exactly where it is, so it
+        // says nothing about the era — and neither does the era check.
+        const withSibling = JSON.stringify({
+            'vocab:happy': { word: 'happy', reps: 1 },
+            lastSyncedAt: 1700000000000
+        });
+        seed({ srsData: withSibling });
+        P.resetReviewHistory();
+        expect(localStorage.getItem('srsData.bak.v' + Migrations.SCHEMA_VERSION)).toBe(withSibling);
+        expect(localStorage.getItem('srsData.bak.v1')).toBeNull();
+    });
+
+    it('detects the era with its own fallback when Migrations has no predicate', () => {
+        // The era test prefers Migrations.isTypedSrsKey so the two can never
+        // disagree about what "typed" means, and falls back to its own regex.
+        // The fallback has to reach the same verdict, or a recovery note would
+        // point at the wrong name in exactly the environments that need it most.
+        const savedIsTyped = Migrations.isTypedSrsKey;
+        const legacy = '{"happy":{"word":"happy","reps":3}}';
+        try {
+            delete Migrations.isTypedSrsKey;
+            seed({ srsData: legacy });
+            P.resetReviewHistory();
+            expect(localStorage.getItem('srsData.bak.v1')).toBe(legacy);
+            expect(localStorage.getItem('srsData.bak.v2')).toBeNull();
+        } finally {
+            Migrations.isTypedSrsKey = savedIsTyped;
+        }
+    });
+
+    it('resets at all with no Migrations module loaded', () => {
+        // index.html loads migrations.js first, but this module is also
+        // require()able on its own (see its header), so a missing Migrations
+        // must cost the migration-style backup and nothing else.
+        const savedMigrations = global.Migrations;
+        try {
+            delete global.Migrations;
+            seed({ srsData: '{"happy":{"word":"happy","reps":3}}' });
+            const result = P.resetReviewHistory();
+            expect(result.ok).toBe(true);
+            expect(result.cleared).toBe(true);
+            expect(localStorage.getItem('srsData')).toBeNull();
+            // The rolling reset copy does not go through Migrations at all.
+            expect(localStorage.getItem(RESET_BAK)).toBe('{"happy":{"word":"happy","reps":3}}');
+        } finally {
+            global.Migrations = savedMigrations;
+        }
+    });
+
+    it('a failed reset leaves the history itself intact, records and all', () => {
+        // The resync goes through SRS.load(), so legacy data may come back in
+        // its MIGRATED shape rather than its stored bytes — the same rewrite the
+        // next page load would have done. What must not change is the history:
+        // every record is still there and still schedulable.
+        const legacy = '{"happy":{"word":"happy","reps":3,"interval":7}}';
+        seed({ srsData: legacy });
+        jest.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+            throw quotaError();
+        });
+
+        const result = P.resetReviewHistory();
+
+        expect(result.ok).toBe(false);
+        expect(result.code).toBe('reset-failed');
+        // The record survived, under whichever key shape SRS.load() settled on.
+        const keys = Object.keys(SRS.records);
+        expect(keys.length).toBe(1);
+        expect(SRS.records[keys[0]].reps).toBe(3);
+        expect(JSON.parse(localStorage.getItem('srsData'))).not.toEqual({});
     });
 
     it('the confirm copy promises exactly what the code does', () => {
@@ -1357,10 +1668,15 @@ describe('storageInfo — what is on this device (CON-3 / NFR-10)', () => {
 // ===========================================================================
 describe('writesSuspended — the autosave latch', () => {
 // ===========================================================================
-// NOTE ON ORDERING: `suspended` is a module-level one-way latch with no reset,
-// and jest runs a file's tests in declaration order. This block therefore has
-// to come BEFORE the UI block, which imports a file successfully and flips it
-// for the rest of the run. Nothing here can reset it.
+// `suspended` is a module-level ONE-WAY latch: nothing in the browser clears it,
+// because the only thing that legitimately does is the reload after a successful
+// import. That used to give this file a declaration-order dependency — the UI
+// block imports a file successfully and flipped the latch for every test
+// declared after it — which would have broken under `--randomize`.
+//
+// The seam `Portability._resetWritesSuspended()` (US-207) closes it: beforeEach
+// resets the latch, so these assertions hold wherever the block runs. The seam
+// is never called in the browser, so it changes no production behaviour.
 
     it('does not block saves before an import', () => {
         expect(P.writesSuspended()).toBe(false);
@@ -1375,6 +1691,12 @@ describe('writesSuspended — the autosave latch', () => {
         expect(P.writesSuspended()).toBe(true);
         P.suspendWrites();
         expect(P.writesSuspended()).toBe(true);
+    });
+
+    it('is still false here, which is the proof the ordering dependency is gone', () => {
+        // Declared immediately after a test that latched it. Before the seam
+        // this read `true`, and every later test in the file inherited it.
+        expect(P.writesSuspended()).toBe(false);
     });
 });
 
@@ -1480,6 +1802,19 @@ describe('initUI — the Dashboard controls', () => {
         expect(document.getElementById('dataControlsStatus').className).toContain('error');
     });
 
+    it('the export button reports a caveat as information, not as a success', () => {
+        // US-209: the file saved, but this app cannot restore it. Dressing that
+        // in a success tone is what made it a trap.
+        seed({ theme: 'dark' });
+        P.initUI();
+        document.getElementById('exportData').click();
+        expect(status()).toBe(P.MESSAGES.exportOkNotRestorable);
+        expect(document.getElementById('dataControlsStatus').className).toContain('info');
+        expect(document.getElementById('dataControlsStatus').className).not.toContain('success');
+        // The usage line is still redrawn: the export did happen.
+        expect(usage()).toMatch(/across 1 item\.$/);
+    });
+
     it('the import button opens the picker rather than importing anything', () => {
         P.initUI();
         const input = document.getElementById('importDataFile');
@@ -1562,9 +1897,24 @@ describe('initUI — the Dashboard controls', () => {
         P.initUI();
         stubFileReader(file(), 'ok');
         pick('x', 10);
-        expect(confirmMock).toHaveBeenCalledWith(P.MESSAGES.importConfirm);
+        // The copy is built for THIS file against THIS device, so it can name
+        // what the file does not carry (US-204).
+        expect(confirmMock).toHaveBeenCalledWith(
+            P.importConfirmMessage(P.validateExport(file()).plan)
+        );
+        expect(confirmMock.mock.calls[0][0]).toContain(P.MESSAGES.importConfirm);
         expect(status()).toBe(P.MESSAGES.cancelled);
         expect(dumpAll()).toEqual(before);
+    });
+
+    it('spells out that a review-history-only file will delete the progress', () => {
+        seed({ learningProgress: PROGRESS, srsData: SRSDATA });
+        confirmMock.mockReturnValue(false);
+        P.initUI();
+        stubFileReader(file({ data: { srsData: SRSDATA } }), 'ok');
+        pick('x', 10);
+        expect(confirmMock.mock.calls[0][0]).toContain(P.MESSAGES.importConfirmProgressLost);
+        expect(localStorage.getItem('learningProgress')).toBe(PROGRESS);
     });
 
     it('does not ask on an empty device, because there is nothing to replace', () => {
@@ -1731,19 +2081,18 @@ describe('initUI — the Dashboard controls', () => {
         expect(status()).toBe('');
     });
 
-    it('suspends autosaves and schedules the reload after a successful import', () => {
-        // Runs last in this file on purpose: it flips the module-level
-        // `suspended` latch, which nothing can reset.
-        //
-        // TESTABILITY GAP: the reload itself is not asserted. jsdom's
-        // `location.reload` is a "not implemented" stub, the Location object is
-        // unforgeable (defineProperty on it is rejected) and assigning to
-        // `window.location` navigates instead of replacing it — so there is no
-        // seam to observe the call through. What IS asserted is everything that
-        // must be true before it: the data landed, saves are suspended, the
-        // learner is told, and the reload is still PENDING rather than immediate.
+    it('suspends autosaves and RELOADS after a successful import', () => {
+        // US-208: the reload is asserted through `Portability._reload`, the seam
+        // that exists because jsdom's `location.reload` is a "not implemented"
+        // stub, the Location object is unforgeable (defineProperty on it is
+        // rejected) and assigning to `window.location` navigates instead of
+        // replacing it. In production the seam still calls
+        // `global.location.reload()` at exactly this moment.
         jest.useFakeTimers();
+        const realReload = P._reload;
+        const reload = jest.fn();
         try {
+            P._reload = reload;
             seedPopulated();
             P.initUI();
             stubFileReader(file(), 'ok');
@@ -1756,10 +2105,83 @@ describe('initUI — the Dashboard controls', () => {
             // writes the pre-import state over what was just restored.
             expect(P.writesSuspended()).toBe(true);
             // Deferred, not synchronous: long enough to read the confirmation.
+            expect(reload).not.toHaveBeenCalled();
             expect(jest.getTimerCount()).toBe(1);
+
+            jest.advanceTimersByTime(1500);
+            expect(reload).toHaveBeenCalledTimes(1);
         } finally {
+            P._reload = realReload;
             jest.clearAllTimers();
             jest.useRealTimers();
         }
+    });
+
+    it('a reload that throws is logged, not allowed to escape', () => {
+        // The learner has already been told the restore succeeded — and it did.
+        // A failed reload must not surface as an unhandled error on top of it.
+        jest.useFakeTimers();
+        const realReload = P._reload;
+        try {
+            P._reload = () => { throw new Error('navigation blocked'); };
+            seed({ learningProgress: PROGRESS });
+            P.initUI();
+            stubFileReader(file(), 'ok');
+            pick('x', 10);
+            expect(status()).toBe(P.MESSAGES.importOk);
+            expect(() => jest.advanceTimersByTime(1500)).not.toThrow();
+            expect(console.warn).toHaveBeenCalled();
+        } finally {
+            P._reload = realReload;
+            jest.clearAllTimers();
+            jest.useRealTimers();
+        }
+    });
+
+    it('the default seam is the real reload, not a test stub left behind', () => {
+        // The seam is only honest if production still goes to location.reload().
+        // jsdom's is a not-implemented stub that logs rather than navigating, so
+        // this asserts the wiring, which is all that can be asserted here.
+        expect(typeof P._reload).toBe('function');
+        expect(String(P._reload)).toContain('location.reload()');
+    });
+
+    it('tells the learner to reload themselves when there is no reload to call', () => {
+        // An embedded webview with no usable location: the restore still
+        // happened, and the copy says what to do about it.
+        //
+        // The capability check goes through a seam for the same reason the
+        // reload itself does — jsdom's `location` is [Unforgeable], so
+        // `delete window.location` is a silent no-op and defineProperty on it
+        // throws. Without `_canReload` this branch is unreachable here, which is
+        // how it stayed uncovered.
+        jest.useFakeTimers();
+        const realCanReload = P._canReload;
+        try {
+            P._canReload = () => false;
+            seed({ learningProgress: PROGRESS });
+            P.initUI();
+            stubFileReader(file(), 'ok');
+            pick('x', 10);
+            expect(status()).toBe(P.MESSAGES.importOkNoReload);
+            expect(document.getElementById('dataControlsStatus').className).toContain('success');
+            // No reload scheduled, so nothing is promised that will not happen.
+            expect(jest.getTimerCount()).toBe(0);
+            // The restore itself still landed, and saves are still suspended.
+            expect(localStorage.getItem('srsData')).toBe(SRSDATA);
+            expect(P.writesSuspended()).toBe(true);
+        } finally {
+            P._canReload = realCanReload;
+            jest.clearAllTimers();
+            jest.useRealTimers();
+        }
+    });
+
+    it('the default capability check asks the real location', () => {
+        expect(typeof P._canReload).toBe('function');
+        // jsdom does provide location.reload (a not-implemented stub), so the
+        // real check says yes here — which is why the reload branch is the one
+        // every other UI import test takes.
+        expect(P._canReload()).toBe(true);
     });
 });

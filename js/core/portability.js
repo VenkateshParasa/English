@@ -44,12 +44,15 @@
  *   buildExport()                -> the export envelope as an object
  *   exportToFile()               -> triggers the download
  *   validateExport(text)         -> { ok, plan } | { ok:false, code, message }
+ *   importConfirmMessage(plan)   -> the confirm copy for one specific file
  *   importFromText(text)         -> writes all-or-nothing
  *   resetReviewHistory()         -> clears srsData only
  *   storageInfo()                -> bytes held on this device
  *   writesSuspended()            -> true once an import is committed
  *   MESSAGES                     -> every learner-facing string
  *   initUI()                     -> wires the Dashboard controls
+ *   _reload / _canReload / _resetWritesSuspended -> test seams, never called in
+ *                                   the browser except through handleFile()
  */
 (function (global) {
     'use strict';
@@ -192,6 +195,61 @@
         }
     }
 
+    /** True for a pre-CEFR difficulty id (`basic` / `intermediate` / `medium`). */
+    function isLegacyLevel(value) {
+        const aliases = global.LEVEL_ALIASES;
+        if (!aliases) return false;
+        const norm = String(value == null ? '' : value).trim().toLowerCase();
+        return hasOwn(aliases, norm) && aliases[norm] !== norm;
+    }
+
+    /**
+     * The schema era a raw `srsData` string is from, decided by SHAPE.
+     *
+     * `srsData` carries no version stamp of its own — migrations.js
+     * migrateSrsData() explains why it cannot have one — so migrations.js
+     * decides the era by asking which of its shape-gated steps would change the
+     * data, and files its backup under `Math.max(1, firstChangedTo - 1)`. This
+     * mirrors that verdict from the outside, so a copy taken here lands under
+     * the SAME name migrations.js would have used for the same bytes: a bare
+     * (untyped) record key, or a legacy level alias inside a record, means the
+     * pre-typed-key era (1).
+     *
+     * Anything unreadable reads as THIS BUILD's version, not as 1: we cannot
+     * claim data belongs to an era we were unable to inspect (`BR-3`). The
+     * asymmetry with versionOfRawProgress() is deliberate — there, an unusable
+     * value really is the pre-version shape, because version 1 is defined as
+     * "no schemaVersion field"; here there is no field to be missing.
+     */
+    function versionOfRawSrs(raw) {
+        const current = buildSchemaVersion();
+        let parsed;
+        try {
+            parsed = JSON.parse(raw);
+        } catch (e) {
+            return current;
+        }
+        if (!isPlainObject(parsed)) return current;
+
+        // Migrations' own predicate when it is loaded, so the two can never
+        // disagree about what "typed" means; the regex is the Node fallback.
+        const isTyped = (global.Migrations && typeof global.Migrations.isTypedSrsKey === 'function')
+            ? global.Migrations.isTypedSrsKey
+            : function (k) { return /^(vocab|gram|phon|coll):/.test(String(k)); };
+
+        const keys = Object.keys(parsed);
+        for (let i = 0; i < keys.length; i++) {
+            const rec = parsed[keys[i]];
+            // Matches srsTypedKeysV2's own test for "is this a record": a stray
+            // non-object sibling is left exactly where it is by the migration,
+            // so it says nothing about which era the map is from.
+            if (!rec || typeof rec !== 'object') continue;
+            if (!isTyped(keys[i])) return 1;
+            if (isLegacyLevel(rec.data && rec.data.difficulty)) return 1;
+        }
+        return current;
+    }
+
     /** UTF-8 byte length, with a character-count fallback. */
     function byteLength(str) {
         const s = String(str == null ? '' : str);
@@ -227,9 +285,23 @@
 
     const MESSAGES = {
         exportOk: 'Saved. The file is in your downloads folder.',
+        // A file with neither progress nor review history in it is refused on
+        // the way back in (see validateExport), so saying only "Saved." would be
+        // promising a restore that cannot happen. Worded to be true of a
+        // settings-only file and of a brand-new device alike. US-209.
+        exportOkNotRestorable: 'Saved. There is no progress or review history on this device yet, though, so this app cannot restore that file later. Save another copy once you have done some work.',
         exportFailed: 'The copy could not be created. Nothing on this device has changed.',
 
-        importConfirm: 'Restoring replaces the progress, review history and settings on this device with the ones in this file. A copy of what is here now is kept on this device first.\n\nContinue?',
+        // A restore is a REPLACEMENT, not a merge (see importFromText step 3), so
+        // the copy has to say what happens to anything the file does not carry.
+        // "replaces ... with the ones in this file" alone reads as substitution
+        // and nobody would guess it means "and deletes the categories the file
+        // omits" — US-204. importConfirmMessage() appends the specific sentences.
+        importConfirm: 'Restoring replaces what is on this device with what is in this file. Anything saved here that the file does not contain is removed, not kept. A copy of what is here now is kept on this device first.',
+        importConfirmProgressLost: 'This file has no progress in it, so the progress on this device — including your streak and completed exercises — will be removed.',
+        importConfirmReviewLost: 'This file has no review history in it, so the review history on this device will be removed, and every word goes back to being unseen.',
+        importConfirmOtherLost: 'Other items saved on this device are not in this file and will also be removed: ',
+        importConfirmTail: 'Continue?',
         importOk: 'Restored. Reloading now so everything on screen matches your file.',
         importOkNoReload: 'Restored. Reload the page when you are ready, so everything on screen matches your file.',
         cancelled: 'Nothing has changed.',
@@ -246,13 +318,82 @@
 
         quota: 'There is not enough room on this device to restore that file, so your existing data has been put back. Nothing has changed.',
         writeFailed: 'The restore could not be completed, so your existing data has been put back. Nothing has changed.',
+        // Three ways a failed rollback can end, because the module must only
+        // name a recovery copy it actually took (`BR-3`) and must not tell
+        // someone data is lost when there was none to lose. US-199.
         rollbackFailed: 'The restore stopped part way and your previous data could not be put back automatically. It is still on this device, saved under "' + PRE_IMPORT_KEY + '". Save a copy of this message before you reload.',
+        rollbackFailedNoBackup: 'The restore stopped part way, your previous data could not be put back, and this device had no room to keep a copy of it first — so some of what was here before is lost. What is on the device now is part of the file you chose. Make room on this device, then restore that file again. Save a copy of this message before you reload.',
+        rollbackFailedNothingLost: 'The restore stopped part way, so only part of that file is on this device. There was nothing saved here before it, so none of your earlier data is lost. Make room on this device, then restore that file again.',
 
         resetConfirm: 'This clears your review history. Every word goes back to being unseen, so reviews start again from the beginning.\n\nYour progress, streak, completed exercises and settings stay exactly as they are. A copy of the review history is kept on this device.\n\nThis cannot be undone from here. Continue?',
         resetOk: 'Your review history is cleared. Words you meet from now on are scheduled fresh.',
         resetNothing: 'There is no review history to clear yet.',
-        resetFailed: 'The review history could not be cleared. Nothing has changed.'
+        resetFailed: 'The review history could not be cleared. Nothing has changed.',
+        // The removal neither failed nor could be confirmed: storage stopped
+        // answering between clearing it and reading it back. Saying "nothing has
+        // changed" would be a guess. US-198 / `BR-3`.
+        resetUnverified: 'The review history may not have been cleared — this device stopped answering part way. Reload the page to see where things stand.'
     };
+
+    // ------------------------------------------------------------------
+    // Naming what a restore is about to remove (US-204)
+    // ------------------------------------------------------------------
+    //
+    // Learner-facing names for the keys the app writes today. A key with no
+    // entry here is still learner data — the export is a deny-list, so a future
+    // feature's key is carried automatically — but this module cannot invent a
+    // name for it, so it is counted as "other saved items" rather than shown to
+    // a learner as a raw storage key.
+
+    const KEY_LABELS = {};
+    KEY_LABELS[PROGRESS_KEY] = 'your progress';
+    KEY_LABELS[SRS_KEY] = 'your review history';
+    KEY_LABELS.mistakeLog = 'your mistake history';
+    KEY_LABELS.sessionPlan = "today's plan";
+    KEY_LABELS.theme = 'your appearance settings';
+
+    /**
+     * The confirm text for ONE specific file, on THIS device.
+     *
+     * A restore is a replacement, so a file carrying only `srsData` deletes
+     * `learningProgress`. That is the right behaviour — a "clean install" that
+     * silently kept this device's leftovers would be a worse lie, and the
+     * rollback path depends on the commit being a whole state, not a merge — but
+     * it is only defensible if the learner is told before they agree, in the
+     * words of the thing they are about to lose rather than in storage keys.
+     *
+     * Takes a validated plan, so it is only ever built for a file that was
+     * actually going to load: nobody is warned about a loss that was never on
+     * the table.
+     */
+    function importConfirmMessage(plan) {
+        const data = (plan && plan.data) || {};
+        const parts = [MESSAGES.importConfirm];
+
+        const dropped = ownedKeys().filter(function (key) {
+            return !hasOwn(data, key);
+        });
+
+        if (dropped.indexOf(PROGRESS_KEY) !== -1) parts.push(MESSAGES.importConfirmProgressLost);
+        if (dropped.indexOf(SRS_KEY) !== -1) parts.push(MESSAGES.importConfirmReviewLost);
+
+        const others = [];
+        let unnamed = 0;
+        dropped.forEach(function (key) {
+            if (key === PROGRESS_KEY || key === SRS_KEY) return;
+            if (hasOwn(KEY_LABELS, key)) others.push(KEY_LABELS[key]);
+            else unnamed++;
+        });
+        if (unnamed > 0) {
+            others.push(unnamed === 1 ? 'one other saved item' : unnamed + ' other saved items');
+        }
+        if (others.length > 0) {
+            parts.push(MESSAGES.importConfirmOtherLost + others.join(', ') + '.');
+        }
+
+        parts.push(MESSAGES.importConfirmTail);
+        return parts.join('\n\n');
+    }
 
     // ------------------------------------------------------------------
     // Export (US-203 / FR-DATA-4)
@@ -291,6 +432,23 @@
     }
 
     /**
+     * True when a file built from this data could actually be restored by
+     * validateExport() — i.e. it carries progress or review history.
+     *
+     * US-209: a device holding only `theme` produces a file that exports
+     * happily and is then refused `no-data` on the way back in. The refusal is
+     * KEPT deliberately: an import is a replacement, so accepting a
+     * settings-only file would let one mis-picked, genuinely-ours file wipe a
+     * populated device, and the thing it would rescue is a theme toggle. What
+     * was wrong was calling that export a success with no qualification — so the
+     * export tells the truth instead. `BR-7` is about data being recoverable;
+     * this is about not claiming a copy is a backup when it is not.
+     */
+    function isRestorableExport(data) {
+        return hasOwn(data, PROGRESS_KEY) || hasOwn(data, SRS_KEY);
+    }
+
+    /**
      * One learner action, one file. Blob + object URL, no library, no network —
      * CON-5 leaves nothing else on the table anyway.
      */
@@ -320,7 +478,15 @@
                 try { URL.revokeObjectURL(url); } catch (e) { /* already gone */ }
             }, 0);
 
-            return { ok: true, keyCount: payload.keyCount, bytes: byteLength(text), fileName: a.download };
+            const restorable = isRestorableExport(payload.data);
+            return {
+                ok: true,
+                keyCount: payload.keyCount,
+                bytes: byteLength(text),
+                fileName: a.download,
+                restorable: restorable,
+                message: restorable ? MESSAGES.exportOk : MESSAGES.exportOkNotRestorable
+            };
         } catch (e) {
             if (url) {
                 try { URL.revokeObjectURL(url); } catch (ignored) { /* ignore */ }
@@ -417,7 +583,11 @@
             if (typeof parsed.data[key] !== 'string') return reject('wrong-shape', MESSAGES.notMine);
         }
 
-        // A file with neither of these restores nothing a learner would notice.
+        // A file with neither of these restores nothing a learner would notice —
+        // and, because a commit is a replacement, accepting one would let a
+        // settings-only file DELETE the progress on a populated device. Kept
+        // strict for that reason; exportToFile() says so at the moment the file
+        // is written instead. See isRestorableExport() (US-209).
         const hasProgress = hasOwn(parsed.data, PROGRESS_KEY);
         const hasSrs = hasOwn(parsed.data, SRS_KEY);
         if (!hasProgress && !hasSrs) return reject('no-data', MESSAGES.noData);
@@ -538,6 +708,33 @@
     }
 
     /**
+     * The verdict for a rollback that did not restore the store.
+     *
+     * The message may only name PRE_IMPORT_KEY when that copy was actually
+     * written. On a device too full to hold the recovery copy AND too full to
+     * roll back, the old copy pointed a learner at a key that does not exist —
+     * the one path in this module where data is genuinely lost, made worse by
+     * misdirecting the recovery (US-199, `BR-3`).
+     *
+     * The alternative — refusing to commit when no recovery copy could be taken —
+     * was rejected: the commit REMOVES keys before it writes, so it routinely
+     * succeeds on a device where the extra copy would not fit, and refusing
+     * there would deny a restore to exactly the learner who most needs one. The
+     * in-memory snapshot, not PRE_IMPORT_KEY, is the real protection (see
+     * writePreImportBackup). So we still commit, and say what is true.
+     */
+    function rollbackFailure(before, backupTaken) {
+        if (backupTaken) {
+            return reject('rollback-failed', MESSAGES.rollbackFailed);
+        }
+        if (Object.keys(before).length === 0) {
+            // Nothing was here to lose: the restore is simply incomplete.
+            return reject('rollback-failed-nothing-lost', MESSAGES.rollbackFailedNothingLost);
+        }
+        return reject('rollback-failed-no-backup', MESSAGES.rollbackFailedNoBackup);
+    }
+
+    /**
      * Restore from an export. All-or-nothing, in four steps:
      *
      *   1. Validate the entire file. Nothing is written until it passes, so
@@ -550,7 +747,8 @@
      *      replacement, not a merge — otherwise a "clean install" still carries
      *      this device's leftovers), then write the file's keys verbatim.
      *   4. If any write throws — quota is the realistic case — roll the
-     *      snapshot back and report failure.
+     *      snapshot back and report failure. Whether the recovery copy of step 2
+     *      exists decides which failure the learner is told about.
      *
      * localStorage has no transaction, so this is not atomicity; it is
      * "validate before touching anything, and undo if the commit breaks".
@@ -564,7 +762,9 @@
         const plan = checked.plan;
         const before = snapshot();
 
-        writePreImportBackup(before);
+        // Kept, not discarded: it is the only thing that makes the
+        // rollback-failed message true. See rollbackFailure().
+        const backupTaken = writePreImportBackup(before);
         if (global.Migrations && typeof global.Migrations.backupOnce === 'function' &&
             hasOwn(before, PROGRESS_KEY)) {
             global.Migrations.backupOnce(PROGRESS_KEY, versionOfRawProgress(before[PROGRESS_KEY]));
@@ -583,7 +783,7 @@
             logError(e, 'import learner data');
             const restored = rollback(before, written);
             if (!restored) {
-                return reject('rollback-failed', MESSAGES.rollbackFailed);
+                return rollbackFailure(before, backupTaken);
             }
             return isQuotaError(e)
                 ? reject('quota', MESSAGES.quota)
@@ -609,6 +809,24 @@
     // ------------------------------------------------------------------
 
     /**
+     * Put the in-memory review records back in step with what is actually in
+     * storage. Used when a reset could not be confirmed: SRS.reset() has already
+     * emptied SRS.records, so without this the due badge would read zero over a
+     * history that is still on disk and returns on the next reload.
+     *
+     * SRS.load() is the module's own loader, so a legacy history may come back
+     * in its migrated shape rather than its stored bytes — the same rewrite the
+     * next page load would have performed anyway. Nothing is lost by it, and
+     * re-parsing the raw string here instead would leave the in-memory records
+     * in a shape the rest of the app has stopped expecting.
+     */
+    function resyncSrsFromStorage() {
+        if (global.SRS && typeof global.SRS.load === 'function') {
+            try { global.SRS.load(); } catch (e) { logError(e, 'SRS resync after failed reset'); }
+        }
+    }
+
+    /**
      * Clear `srsData` and nothing else. Progress, streak, completed exercises
      * and settings are separate keys and are never touched here.
      *
@@ -617,7 +835,15 @@
      *     discarded is always recoverable by hand.
      *   - Migrations.backupOnce() keeps the FIRST one forever. That is the
      *     pre-grading-fix data this feature exists because of, and it must
-     *     survive a second reset a month later.
+     *     survive a second reset a month later. It is filed under the era the
+     *     DATA is from, not the era this build is in — see versionOfRawSrs().
+     *
+     * The verdict comes from READING THE STORE BACK, exactly as rollback()
+     * decides its own. SRS.reset() swallows its removeItem failure
+     * (js/core/srs.js:1408), so "no exception escaped" is not evidence here
+     * either, and this is the one place a false "cleared" would be invisible:
+     * the in-memory records really are gone, so the badge reads zero and the
+     * screen looks right until the next reload brings the history back (US-198).
      */
     function resetReviewHistory() {
         let existing = null;
@@ -640,7 +866,7 @@
             logError(e, 'review history backup');
         }
         if (global.Migrations && typeof global.Migrations.backupOnce === 'function') {
-            global.Migrations.backupOnce(SRS_KEY, buildSchemaVersion());
+            global.Migrations.backupOnce(SRS_KEY, versionOfRawSrs(existing));
         }
 
         try {
@@ -653,6 +879,24 @@
             }
         } catch (e) {
             logError(e, 'reset review history');
+            return reject('reset-failed', MESSAGES.resetFailed);
+        }
+
+        // Did it actually go? The module's own standard, applied here too.
+        let after;
+        try {
+            after = localStorage.getItem(SRS_KEY);
+        } catch (e) {
+            // The removal may or may not have landed and storage will no longer
+            // say. Claiming either outcome would be inventing one.
+            logError(e, 'verify review history reset');
+            resyncSrsFromStorage();
+            return reject('reset-unverified', MESSAGES.resetUnverified);
+        }
+
+        if (after !== null && after !== '') {
+            logError(new Error('srsData survived the reset'), 'verify review history reset');
+            resyncSrsFromStorage();
             return reject('reset-failed', MESSAGES.resetFailed);
         }
 
@@ -713,6 +957,19 @@
     function suspendWrites() { suspended = true; }
     function writesSuspended() { return suspended; }
 
+    /**
+     * TEST SEAM (US-207). In the browser nothing calls this: the latch is
+     * one-way on purpose, because the only thing that legitimately clears it is
+     * the page reload that follows a successful import.
+     *
+     * It exists because `suspended` is module-level state that survives
+     * localStorage.clear(), which gave the suite a hidden ordering dependency —
+     * every test after the first successful import saw `writesSuspended() ===
+     * true`, and the file would break under `--randomize`. A seam that only ever
+     * runs in a test is honest; a production reset path would not be.
+     */
+    function _resetWritesSuspended() { suspended = false; }
+
     // ------------------------------------------------------------------
     // UI wiring
     // ------------------------------------------------------------------
@@ -770,8 +1027,14 @@
 
     function handleExport() {
         const result = exportToFile();
-        setStatus(result.ok ? MESSAGES.exportOk : result.message, result.ok ? 'success' : 'error');
-        if (result.ok) showUsage();
+        if (!result.ok) {
+            setStatus(result.message, 'error');
+            return;
+        }
+        // The file did save either way, but a copy this app cannot restore is a
+        // caveat rather than a success, so it is not dressed as one (US-209).
+        setStatus(result.message, result.restorable ? 'success' : 'info');
+        showUsage();
     }
 
     function handleFile(file) {
@@ -806,7 +1069,10 @@
                 setStatus(checked.message, 'error');
                 return;
             }
-            if (ownedKeys().length > 0 && !confirmed(MESSAGES.importConfirm)) {
+            // Named per file, not a fixed string: a restore is a replacement, so
+            // the learner has to be told which of THEIR categories this
+            // particular file does not carry (US-204).
+            if (ownedKeys().length > 0 && !confirmed(importConfirmMessage(checked.plan))) {
                 setStatus(MESSAGES.cancelled, 'info');
                 return;
             }
@@ -823,10 +1089,12 @@
             // storage, so suspend saves and reload rather than half-refresh.
             suspendWrites();
             refreshDueCount();
-            if (global.location && typeof global.location.reload === 'function') {
+            if (Portability._canReload()) {
                 setStatus(MESSAGES.importOk, 'success');
                 setTimeout(function () {
-                    try { global.location.reload(); } catch (e) { logError(e, 'reload after import'); }
+                    // Through the seam, not straight to location.reload(): see
+                    // Portability._reload (US-208). Same call in production.
+                    try { Portability._reload(); } catch (e) { logError(e, 'reload after import'); }
                 }, RELOAD_DELAY_MS);
             } else {
                 setStatus(MESSAGES.importOkNoReload, 'success');
@@ -905,12 +1173,35 @@
         exportFileName: exportFileName,
         exportToFile: exportToFile,
         validateExport: validateExport,
+        importConfirmMessage: importConfirmMessage,
         importFromText: importFromText,
         resetReviewHistory: resetReviewHistory,
         storageInfo: storageInfo,
         suspendWrites: suspendWrites,
         writesSuspended: writesSuspended,
-        initUI: initUI
+        initUI: initUI,
+
+        /**
+         * TEST SEAM (US-208). The reload after a successful import, behind one
+         * indirection so it can be observed, plus the capability check that
+         * decides whether a reload is possible at all.
+         *
+         * jsdom's `location` is [Unforgeable]: `location.reload` is a "not
+         * implemented" stub, it cannot be spied on, `delete window.location` is
+         * a silent no-op and defineProperty on it throws — so without these two
+         * the reload was the only unreachable line in the module and the
+         * "reload it yourself" branch could not be reached either. In production
+         * they ARE `global.location.reload()` and the same guard as before,
+         * called at the same moment: the seams change what the calls can be
+         * watched through, not what they do.
+         */
+        _reload: function () { global.location.reload(); },
+        _canReload: function () {
+            return !!(global.location && typeof global.location.reload === 'function');
+        },
+
+        // TEST SEAM (US-207) — see _resetWritesSuspended().
+        _resetWritesSuspended: _resetWritesSuspended
     };
 
     global.Portability = Portability;
