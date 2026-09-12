@@ -2,20 +2,21 @@
 // Provides offline functionality and caching
 
 const CACHE_NAME = 'english-portal-v1.0.2';
-// v16 -> v17 (US-179). No file was ADDED, so STATIC_ASSETS below is unchanged —
-// but index.html, app.js and styles.css all changed together, and .js/.css go
-// through cacheFirstStrategy(STATIC_CACHE) while index.html goes network-first.
-// Without a new cache name a returning learner would be served the NEW markup
-// against the OLD app.js, which here is worse than a stale page: the
-// #pronunciationGroups switcher would exist and do nothing (the old app.js has no
-// handler for `.pron-group-btn`), and #pronBrowseCard would stay `hidden`
-// permanently — so the section would advertise the 21 word-stress and 15 prosody
-// items with three dead buttons and no way to reach either group. Renaming the
-// cache is what makes the activate handler below delete v16.
+// v17 -> v18 (US-140 / US-141 / US-186). No file was ADDED, so STATIC_ASSETS
+// below is unchanged — but app.js and styles.css changed together and both go
+// through cacheFirstStrategy(STATIC_CACHE), while index.html goes network-first.
+// Without a new cache name a returning learner keeps the OLD app.js, and here
+// that is specifically: the dictation check still grading with the fake
+// `sim > 0.8` and printing an unmarked answer; the comprehension checker still
+// painting questions red with no fix beside them; and every new Mistakes.record()
+// call missing, so the dashboard's "what keeps coming back" panel stays
+// grammar/pronunciation-only. The new .question-feedback / .word-miss rules would
+// also be unstyled, since old styles.css has neither.
 //
-// The previous bump, for the record: v14 -> v15 -> v16 (US-177 / US-181), same
-// reasoning applied to #reviewCard and #mistakePanel.
-const STATIC_CACHE = 'english-portal-static-v17';
+// The previous bumps, for the record: v14 -> v15 -> v16 (US-177 / US-181,
+// #reviewCard and #mistakePanel) and v16 -> v17 (US-179, the pronunciation
+// group switcher).
+const STATIC_CACHE = 'english-portal-static-v18';
 const DYNAMIC_CACHE = 'english-portal-dynamic-v3';
 const API_CACHE = 'english-portal-api-v3';
 
@@ -58,6 +59,7 @@ const STATIC_ASSETS = [
     '/data/grammar/be.js',
     '/data/grammar/countability.js',
     '/data/grammar/present-simple-continuous.js',
+    '/data/grammar/question-formation.js',
     '/data/grammar/present-perfect.js',
     '/data/pronunciation/vowels-stress.js',
     '/data/pronunciation/consonants.js',
