@@ -514,3 +514,148 @@ describe('today\'s session markup (US-170)', () => {
     });
 });
 
+
+/**
+ * Reading feedback and the mistake-log producers (US-140 / US-141 / US-186).
+ *
+ * Structural, like the rest of this file — app.js exports nothing and cannot be
+ * required. Three things are worth a static gate:
+ *
+ *  1. EVERY category id app.js hands Mistakes.record() has to RESOLVE. record()
+ *     rejects an unknown id, so a typo is not a wrong bucket, it is a mistake
+ *     that goes unlogged and a diagnosis that silently loses evidence.
+ *     mistakes.js provides unknownCategories() for exactly this check and asks
+ *     callers to use it (FR-CNT-1: fail loudly at author time).
+ *  2. The dictation check must not grow another fake tolerance. The old code
+ *     computed `sim = exact ? 1 : 0.5` and tested `sim > 0.8`, so the name and
+ *     the threshold both described matching that did not exist.
+ *  3. Every new record() call has to stay behind its single-answer guard. Without
+ *     one, a learner who checks the same wrong answer four times becomes four
+ *     occurrences, and one stubborn item becomes the whole top-5.
+ */
+describe('reading feedback and mistake producers (US-140 / US-141 / US-186)', () => {
+    const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+    const Mistakes = require(path.join(ROOT, 'js', 'core', 'mistakes.js'));
+
+    /** The body of one top-level function, by brace matching. */
+    function functionBody(header) {
+        const start = appSource.indexOf(header);
+        expect(start).toBeGreaterThan(-1);
+        let depth = 0;
+        for (let i = appSource.indexOf('{', start); i < appSource.length; i++) {
+            if (appSource[i] === '{') depth++;
+            else if (appSource[i] === '}' && --depth === 0) return appSource.slice(start, i + 1);
+        }
+        throw new Error('unbalanced braces after ' + header);
+    }
+
+    it('passes Mistakes.record() only ids the taxonomy knows', () => {
+        const ids = Array.from(appSource.matchAll(/Mistakes\.record\(\s*'([^']+)'/g))
+            .map(match => match[1]);
+        // The other two producers choose between ids on the line above the call
+        // (a ternary in recordSentenceMistake, comprehensionMistakeCategory), so
+        // those are collected separately below rather than by this regex.
+        const chosen = ['gram.word-order', 'general.uncategorised'];
+        chosen.forEach(id => expect(appSource).toContain(`'${id}'`));
+        // If this is ever zero the regex has stopped matching, not the app.
+        expect(ids.length).toBeGreaterThanOrEqual(3);
+        expect(Mistakes.unknownCategories(ids.concat(chosen))).toEqual([]);
+    });
+
+    it('records the seven categories that had no producer where one now exists', () => {
+        // vocab.recall, vocab.collocation and lsn.gist are deliberately still
+        // absent — there is no production-from-meaning task, no collocation
+        // content and no gist question in this build to produce them honestly.
+        ['vocab.meaning', 'vocab.spelling', 'lsn.detail'].forEach(id => {
+            expect(appSource).toContain(`Mistakes.record('${id}'`);
+        });
+    });
+
+    it('grades dictation word by word, with no invented similarity score', () => {
+        const body = functionBody('function markDictation(');
+        expect(body).toContain('diffSpeechAttempt(');
+        // Completion is no more generous than the exact comparison it replaced:
+        // every target word matched AND nothing extra typed.
+        expect(body).toMatch(/right:\s*diff\.allMatched && extra\.length === 0/);
+
+        // The two halves of the old lie, gone from the handler that held them.
+        // Scoped to the handler, not the file: the block comment above
+        // markDictation() quotes the old code on purpose.
+        const handler = functionBody('function initializeReadingButtons(');
+        expect(handler).not.toMatch(/sim\s*>\s*0\.8/);
+        expect(handler).not.toMatch(/\?\s*1\s*:\s*0\.5/);
+        expect(handler).toContain('markDictation(target, typed)');
+    });
+
+    it('gives a wrong dictation a reason, a contrast and a retry', () => {
+        const body = functionBody('function renderDictationResult(');
+        // The contrast is two marked lines: the learner's, then the audio's.
+        expect(body).toContain("appendMarkedWordLine(host, 'You wrote:'");
+        expect(body).toContain("appendMarkedWordLine(host, 'The audio said:'");
+        expect(body).toContain('dictation-reason');
+        expect(body).toContain('dictation-retry');
+        // No bare verdict left: the old failure branch was `Correct: "…"` alone.
+        expect(functionBody('function initializeReadingButtons('))
+            .not.toContain('`Correct: "${correct}"`');
+    });
+
+    it('gives a wrong comprehension answer the answer, a reason and a retry', () => {
+        const body = functionBody('function checkComprehensionAnswers(');
+        expect(body).toContain('question-verdict');
+        expect(body).toContain('question-reason');
+        expect(body).toContain('question-retry');
+        // FR-A11Y-5: the fix is on the same screen, so the ✗ line carries it.
+        expect(body).toMatch(/The answer is "\$\{answerText\}"/);
+        // §5 tone: the praise and its exclamation marks are gone, the ✓ stays.
+        expect(body).not.toContain('Perfect');
+        expect(body).toMatch(/✓ All \$\{questions\.length\} answers right\./);
+        // The old red paint with nothing beside it.
+        expect(body).not.toContain('#ffebee');
+    });
+
+    it('never marks or logs an unanswered question', () => {
+        const comprehension = functionBody('function checkComprehensionAnswers(');
+        // The unanswered branch runs before anything is marked wrong and returns.
+        expect(comprehension).toMatch(/if \(!chosen\) \{[\s\S]*?is-unanswered[\s\S]*?return;/);
+        // initializeSentenceButtons() counted an unanswered multiple choice as
+        // wrong, which would have logged a mistake the learner never made.
+        const sentences = functionBody('function initializeSentenceButtons(');
+        expect(sentences).toMatch(/\} else if \(!given\.trim\(\)\) \{/);
+        expect(sentences.indexOf('} else if (!given.trim()) {'))
+            .toBeLessThan(sentences.indexOf('state.sentenceAttempts++'));
+    });
+
+    it('keeps every new record() call behind its single-answer guard', () => {
+        // Vocabulary: the `answered` flag, one answer per word render.
+        const quiz = functionBody('function displayVocabQuiz(');
+        expect(quiz).toMatch(/if \(!answered\) \{[\s\S]*?recordVocabMistake\(/);
+
+        // Sentences: the first wrong attempt only. sentenceAttempts is zeroed by
+        // loadSentenceExercise() and by Reset.
+        const sentences = functionBody('function initializeSentenceButtons(');
+        expect(sentences).toMatch(/state\.sentenceAttempts === 1\) \{\s*\n\s*recordSentenceMistake\(/);
+
+        // Reading: a per-render flag, because a WRONG answer never marks the
+        // passage complete and isExerciseCompleted() therefore cannot be the
+        // guard on its own.
+        ['function recordDictationMistakes(', 'function recordComprehensionMistakes(']
+            .forEach(header => {
+                expect(functionBody(header)).toMatch(/if \(readingSession\.\w+Logged\) return;/);
+            });
+        expect(functionBody('function loadReadingPassage(')).toMatch(/readingSession = \{/);
+    });
+
+    it('logs graded evidence, and says so at every call site', () => {
+        // All four new producers compared against an answer the app held, so all
+        // four are `graded`. Written out rather than left to record()'s default,
+        // because BR-3 turns on this distinction.
+        const graded = appSource.match(/evidence: Mistakes\.EVIDENCE\.GRADED/g) || [];
+        expect(graded.length).toBeGreaterThanOrEqual(5);
+        // `source` names the screen, so the log can tell a section answer from a
+        // review answer — the same wrong click means the same thing about the
+        // learner either way, but not about the app.
+        ["'readingDictation'", "'readingComprehension'", "'vocabQuiz'",
+         "'vocabReview'", "'sentenceExercise'"]
+            .forEach(source => expect(appSource).toContain(source));
+    });
+});

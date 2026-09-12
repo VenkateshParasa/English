@@ -1147,6 +1147,136 @@ header h1 {
     border-color: #667eea;
 }
 
+/* ---------------------------------------------------------------------------
+ * Reading feedback — US-140 (dictation) / US-141 (comprehension)
+ * ---------------------------------------------------------------------------
+ * Deliberately hard-coded light values rather than theme tokens, matching the
+ * block above. `.question-item` and `.reading-passage` are `background: white`
+ * in both themes (see the US-169 note at .grammar-container .exercise-card:
+ * this section is not theme-aware yet), so tinting these with --success-50 /
+ * --error-50 would be fine but pairing them with --text-* would not — the token
+ * text colours flip to light and would land on a white card. When the reading
+ * section is themed, this whole block moves to tokens in one go.
+ *
+ * The states are classes, not the inline `q.style.background = '#ffebee'` the
+ * checker used to set, so a wrong question is one class and one place.
+ */
+.question-item.is-correct {
+    background: #e8f5e9;
+}
+
+.question-item.is-wrong {
+    background: #ffebee;
+}
+
+.question-item.is-unanswered {
+    background: #f5f5f5;
+}
+
+/* The chosen option and the right one, marked on the options themselves so the
+ * feedback under the question is not the only place the answer appears. */
+.question-options label.is-chosen {
+    outline: 2px solid #9e9e9e;
+    outline-offset: 1px;
+}
+
+.question-options label.is-answer {
+    background: #dcfce7;
+    font-weight: 700;
+}
+
+/* The per-question feedback: FR-A11Y-5's "the fix on the same screen" is
+ * literally this element — it sits under the question it is about, never in a
+ * single summary line at the bottom of the set. */
+.question-feedback {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border-left: 4px solid #9e9e9e;
+    border-radius: 6px;
+    background: #ffffff;
+    font-size: 1em;
+    font-weight: 400;
+    color: #333;
+}
+
+.question-feedback.is-correct {
+    border-left-color: #4CAF50;
+}
+
+.question-feedback.is-wrong {
+    border-left-color: #f44336;
+}
+
+.question-feedback.is-open {
+    border-left-color: #f59e0b;
+}
+
+/* `.question-item p` above is bold 1.1em, which is right for the question and
+ * wrong for a paragraph of feedback, so these reset it. Both selectors below are
+ * qualified with .question-feedback: at equal specificity the reset would
+ * otherwise win over the verdict's weight purely on source order. */
+.question-feedback p {
+    margin: 0 0 8px;
+    font-size: 1em;
+    font-weight: 400;
+}
+
+.question-feedback p:last-child {
+    margin-bottom: 0;
+}
+
+.question-feedback .question-verdict {
+    font-weight: 700;
+}
+
+.question-feedback .question-reason {
+    font-style: italic;
+}
+
+.question-feedback .question-retry {
+    color: #444;
+}
+
+/* Dictation. One line for what the learner wrote, one for what was said, with
+ * the words that did not match marked in both. */
+.dictation-verdict {
+    font-weight: 700;
+    margin: 0 0 10px;
+}
+
+.dictation-line {
+    margin: 0 0 8px;
+    line-height: 1.7;
+}
+
+.dictation-line-label {
+    font-weight: 700;
+    margin-right: 4px;
+}
+
+/* A word that does not match. Not colour alone (FR-A11Y-2 / WCAG 1.4.1): the
+ * wavy underline and the weight carry it for a learner who cannot see the red,
+ * and `title` carries it for a screen reader. */
+.word-miss {
+    font-weight: 700;
+    color: #b91c1c;
+    text-decoration: underline;
+    text-decoration-style: wavy;
+    text-decoration-color: #b91c1c;
+}
+
+.dictation-reason,
+.dictation-scope,
+.dictation-retry {
+    margin: 8px 0 0;
+    font-weight: 400;
+}
+
+.dictation-scope {
+    font-size: 0.9em;
+    color: #555;
+}
+
 /* Listening Styles */
 .listening-container {
     max-width: 900px;

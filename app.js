@@ -2724,6 +2724,36 @@ async function loadVocabularyWord() {
     }
 }
 
+/**
+ * US-186. A wrong vocabulary answer, logged by type.
+ *
+ * `vocab.meaning` — "Picked the meaning of a different word" — is exactly what
+ * this quiz asks and exactly what a wrong option is: every authored item offers
+ * definitions of other words as its distractors ("What does 'happy' mean?" →
+ * Sad / Joyful / Angry / Tired). Before this call the whole vocabulary strand had
+ * no producer at all, so FR-SRS-3's diagnosis could never name a word problem
+ * however many the learner made.
+ *
+ * EVIDENCE: graded. The app held `quiz.correct` and compared the click to it.
+ *
+ * `source` distinguishes the section from the review queue, as recordGrammarMistake
+ * does: the same wrong click means the same thing about the learner either way,
+ * but not about the app. renderVocabReviewCard() calls straight into
+ * displayVocabQuiz(), so this covers the review card with no second call site.
+ */
+function recordVocabMistake(quiz, chosenIndex) {
+    if (typeof Mistakes === 'undefined' || !Mistakes || typeof Mistakes.record !== 'function') return;
+    const options = (quiz && quiz.options) || [];
+    const word = state.currentVocabWord || {};
+    Mistakes.record('vocab.meaning', {
+        item: word.word || (quiz && quiz.question) || undefined,
+        given: options[chosenIndex],
+        expected: options[quiz && quiz.correct],
+        evidence: Mistakes.EVIDENCE.GRADED,
+        source: state.reviewMode ? 'vocabReview' : 'vocabQuiz'
+    });
+}
+
 function displayVocabQuiz(quiz) {
     document.getElementById('quizQuestion').textContent = quiz.question;
     const container = document.getElementById('quizOptions');
@@ -2753,6 +2783,10 @@ function displayVocabQuiz(quiz) {
                     updateStatistics('vocabulary');
                     updateDashboard();
                     saveProgress();
+                } else {
+                    // US-186. Inside the `answered` guard, so a learner who clicks
+                    // three wrong options in a row logs one mistake, not three.
+                    recordVocabMistake(quiz, index);
                 }
                 if (window.SRS && state.currentVocabWord) {
                     SRS.schedule(state.currentVocabWord, isCorrect);
@@ -4656,33 +4690,91 @@ function selectWordInOrder(btn) {
     selectedDiv.appendChild(wordSpan);
 }
 
+/**
+ * US-186. A wrong sentence exercise, logged by type.
+ *
+ * THREE OF THE FOUR MODES ARE THE SAME ERROR. Drag-and-drop, reorder and multiple
+ * choice all present the SAME WORDS and ask which order they go in — the multiple
+ * choice distractors are literally permutations built by loadMultipleChoiceSentence()
+ * (reverse, shuffle, rotate) — so a wrong answer in any of them is
+ * `gram.word-order`, "Words in the wrong order". That row already existed and had
+ * no producer.
+ *
+ * Fill-in-the-blank is NOT that. Its distractors are verb forms and be-forms
+ * ("I ___ happy today" → am / is / are / be), so a wrong answer there is usually
+ * copula or agreement — but which of the two is a property of the item, and
+ * nothing in data.js says. Guessing between `gram.copula`,
+ * `gram.subject-verb-agreement` and `gram.verb-form` on the shape of the typed
+ * word would be inventing a diagnosis, so it goes to the honest fallback:
+ * counted, not ranked, and a to-do list for whoever authors the exercises.
+ *
+ * EVIDENCE: graded, in both cases. The app held `exercise.correct` (or the blank's
+ * `answer`) and compared.
+ */
+function recordSentenceMistake(mode, given, expected) {
+    if (typeof Mistakes === 'undefined' || !Mistakes || typeof Mistakes.record !== 'function') return;
+    const isOrderTask = mode === 'dragdrop' || mode === 'reorder' || mode === 'multiplechoice';
+    const exercise = state.currentExercise || {};
+    Mistakes.record(isOrderTask ? 'gram.word-order' : 'general.uncategorised', {
+        item: exercise.correct || ('sentences:' + state.currentSentenceIndex),
+        given: given,
+        expected: expected,
+        evidence: Mistakes.EVIDENCE.GRADED,
+        source: 'sentenceExercise'
+    });
+}
+
 function initializeSentenceButtons() {
     // Universal check button
     document.getElementById('checkSentence').onclick = () => {
         // Clear all feedbacks
         document.getElementById('sentenceFeedback').classList.remove('visible');
-        
+
         let isCorrect = false;
         let correctAnswer = '';
-        
+        // Which of the four exercise types is on screen, what the learner
+        // actually produced, and whether they produced anything at all. The last
+        // one is not a detail: an UNANSWERED item used to be graded as wrong (see
+        // the multiple-choice branch below), which both told the learner "✗
+        // Incorrect" about a question they had not answered and, once a mistake
+        // log existed, would have logged a mistake they never made.
+        let mode = null;
+        let given = '';
+        // What the LOG should say the answer was. Same as `correctAnswer` except
+        // for fill-in-the-blank, whose `correctAnswer` is the display phrase "the
+        // blanks correctly" rather than any word the learner could have typed.
+        let expected = '';
+
         // Check which exercise type is visible
         if (document.getElementById('dragDropContainer') && document.getElementById('dragDropContainer').style.display === 'block') {
+            mode = 'dragdrop';
             const userSentence = state.sentenceBuilderWords.join(' ');
+            given = userSentence;
             correctAnswer = document.getElementById('sentenceBuilder').dataset.correct;
             isCorrect = userSentence.toLowerCase() === correctAnswer.toLowerCase();
         } else if (document.getElementById('fillBlankExerciseContainer') && document.getElementById('fillBlankExerciseContainer').style.display === 'block') {
+            mode = 'fillblank';
             const inputs = document.querySelectorAll('.blank-input');
             isCorrect = true;
+            const typed = [];
+            const answers = [];
             inputs.forEach(input => {
                 input.style.borderColor = '';
                 const correct = input.value.trim().toLowerCase() === input.dataset.answer.toLowerCase();
                 input.style.borderColor = correct ? '#4CAF50' : '#f44336';
                 if (!correct) isCorrect = false;
+                if (input.value.trim()) typed.push(input.value.trim());
+                answers.push(input.dataset.answer);
             });
+            given = typed.join(' ');
             correctAnswer = 'the blanks correctly';
+            // What the log needs is the words, not the display phrase above.
+            expected = answers.join(' ');
         } else if (document.getElementById('multipleChoiceContainer') && document.getElementById('multipleChoiceContainer').style.display === 'block') {
+            mode = 'multiplechoice';
             const selected = document.querySelector('input[name="sentenceChoice"]:checked');
             if (selected) {
+                given = selected.value;
                 correctAnswer = selected.dataset.correct;
                 isCorrect = selected.value === correctAnswer;
                 // Highlight selection
@@ -4695,11 +4787,13 @@ function initializeSentenceButtons() {
                 });
             }
         } else if (document.getElementById('reorderContainer') && document.getElementById('reorderContainer').style.display === 'block') {
+            mode = 'reorder';
             const selectedWords = Array.from(document.querySelectorAll('#selectedWords .selected-word')).map(s => s.textContent);
+            given = selectedWords.join(' ');
             correctAnswer = document.querySelector('.reorder-words').dataset.correct;
             isCorrect = selectedWords.join(' ').toLowerCase() === correctAnswer.toLowerCase();
         }
-        
+
         if (isCorrect) {
             showFeedback('sentenceFeedback', '✓ Correct!', 'success');
             state.dailyGoals.sentence = true;
@@ -4711,10 +4805,23 @@ function initializeSentenceButtons() {
             updateDashboard();
             saveProgress();
             hideHintButton();
+        } else if (!given.trim()) {
+            // Nothing produced yet. Not an attempt, so no ✗, no attempt counted
+            // (the hint still arrives on the third real try) and nothing logged.
+            showFeedback('sentenceFeedback',
+                'Nothing to check yet — put your answer together above, then press Check Answer.', 'info');
         } else {
             // Increment attempts
             state.sentenceAttempts++;
-            
+
+            // US-186. The FIRST wrong attempt only: state.sentenceAttempts is reset
+            // to 0 by loadSentenceExercise() and by Reset, so this is once per
+            // exercise render. A learner who tries the same wrong order six times
+            // has one habit to work on, not six.
+            if (state.sentenceAttempts === 1) {
+                recordSentenceMistake(mode, given, expected || correctAnswer);
+            }
+
             // Show hint button after 3 attempts and keep it visible
             if (state.sentenceAttempts >= 3) {
                 showHintButton();
@@ -5034,6 +5141,14 @@ function loadReadingPassage() {
         }
     }
     
+    // A fresh passage on screen is a fresh attempt: the mistake-log guards reset
+    // with it, and cannot carry an outcome across from the previous passage.
+    readingSession = {
+        index: state.currentPassageIndex,
+        comprehensionLogged: false,
+        dictationLogged: false
+    };
+
     document.getElementById('passageTitle').textContent = passage.title;
     document.getElementById('passageText').textContent = passage.text;
     loadComprehensionQuestions(passage.questions);
@@ -5047,15 +5162,634 @@ function loadComprehensionQuestions(questions) {
     questions.forEach((q, qi) => {
         const div = document.createElement('div');
         div.className = 'question-item';
-        div.innerHTML = `<p>${qi + 1}. ${q.question}</p><div class="question-options"></div>`;
-        const opts = div.querySelector('.question-options');
-        q.options.forEach((opt, oi) => {
+
+        // The question text, kept where checkComprehensionAnswers() can read it
+        // back for the mistake log without re-deriving it from the paragraph.
+        div.dataset.question = q.question;
+
+        // US-186 content hook. A question may name the error type a wrong answer
+        // is evidence of; nothing in data.js does yet, so today every wrong
+        // comprehension answer lands in the honest fallback. See
+        // comprehensionMistakeCategory().
+        if (q.mistakeCategory) div.dataset.mistakeCategory = q.mistakeCategory;
+
+        // Built node by node rather than with innerHTML (US-127): this is our own
+        // content, but it is content, which is the thing most likely to grow a
+        // stray angle bracket, and index.html's CSP still allows 'unsafe-inline'.
+        const prompt = document.createElement('p');
+        prompt.className = 'question-text';
+        prompt.textContent = `${qi + 1}. ${q.question}`;
+        div.appendChild(prompt);
+
+        const opts = document.createElement('div');
+        opts.className = 'question-options';
+        (q.options || []).forEach((opt, oi) => {
             const label = document.createElement('label');
-            label.innerHTML = `<input type="radio" name="q${qi}" value="${oi}" data-correct="${q.correct}">${opt}`;
+            const radio = document.createElement('input');
+            radio.type = 'radio';
+            radio.name = `q${qi}`;
+            radio.value = String(oi);
+            radio.dataset.correct = String(q.correct);
+            label.appendChild(radio);
+            label.appendChild(document.createTextNode(opt));
             opts.appendChild(label);
         });
+        div.appendChild(opts);
         container.appendChild(div);
     });
+}
+
+// ============================================
+// READING — WHAT A WRONG ANSWER IS OWED  (US-140 / US-141)
+// ============================================
+//
+// Both checkers in this section used to stop at a verdict, which FR-GRM-2 and
+// TEACHING_METHODOLOGY.md principle 2 forbid: every wrong answer owes the learner
+// a REASON, a CONTRAST and a RETRY. FR-A11Y-5 is the same rule from the other
+// side — never a red ✗ without the fix on the same screen.
+//
+// DICTATION (US-140). The old check was:
+//
+//     const sim = typed.trim().toLowerCase() === correct.toLowerCase() ? 1 : 0.5;
+//     if (sim > 0.8) { …pass… } else { showFeedback(`Correct: "${correct}"`) }
+//
+// which named a similarity, tested a threshold, and graded EXACTLY: every
+// non-identical answer scored 0.5 and failed. The name and the 0.8 both implied a
+// tolerance that did not exist, and the failure branch printed the whole sentence
+// back with no mark on it, so one wrong word out of twelve read exactly like
+// twelve wrong words.
+//
+// It now grades WORD BY WORD through diffSpeechAttempt() — the LCS diff written
+// for read-aloud — rather than through a new similarity metric:
+//
+//  1. It is the honest shape of the task. Dictation has an exact known target, so
+//     "how similar are these two strings" is not the question anyone needs
+//     answered; "which words are not there" is, and it is the one the learner can
+//     act on.
+//  2. A similarity number cannot say WHERE. "92% match" tells a learner nothing
+//     they can fix. *brightly* underlined tells them everything, and the diff
+//     already returns a per-word mark.
+//  3. LCS costs exactly one word for one dropped or inserted word, where
+//     index-by-index comparison reports everything after the shift as wrong (see
+//     the note above diffSpeechAttempt). A learner who leaves out one "the" must
+//     not be told the rest of the sentence failed.
+//
+// Completion is UNCHANGED in strictness: every target word must be matched, and
+// nothing extra may be typed, so this grades no more generously than the exact
+// comparison it replaces. What changed is that a miss is located and explained.
+// Case and punctuation are not marked and the feedback says so — they are not
+// audible, and marking what the exercise never asked for is its own dishonesty.
+//
+// Levenshtein does appear here, but never as the grade: it separates a word the
+// learner heard and wrote differently ("shinning" for *shining*) from a word that
+// never arrived at all. That is the difference between `vocab.spelling` and
+// `lsn.detail` in the mistake log, and it is the only claim it is used for.
+
+/**
+ * Per-render state for the passage on screen, rebuilt by loadReadingPassage().
+ *
+ * It exists for the mistake log and nothing else. `isExerciseCompleted('reading',
+ * …)` cannot be the guard on its own: a WRONG answer never marks the passage
+ * complete, so a learner checking the same wrong answer four times would log four
+ * mistakes and one stubborn item would become a diagnosis. These flags are the
+ * same "record it once" discipline scheduleGrammarLapse() applies to the SRS.
+ */
+let readingSession = { index: -1, comprehensionLogged: false, dictationLogged: false };
+
+/** Levenshtein distance. Two rows, so it costs O(min) memory and no dependency. */
+function editDistance(a, b) {
+    const s = String(a == null ? '' : a);
+    const t = String(b == null ? '' : b);
+    if (s === t) return 0;
+    if (!s.length) return t.length;
+    if (!t.length) return s.length;
+
+    let prev = [];
+    for (let j = 0; j <= t.length; j++) prev.push(j);
+    for (let i = 1; i <= s.length; i++) {
+        const row = [i];
+        for (let j = 1; j <= t.length; j++) {
+            row[j] = Math.min(
+                prev[j] + 1,                                        // deletion
+                row[j - 1] + 1,                                     // insertion
+                prev[j - 1] + (s[i - 1] === t[j - 1] ? 0 : 1)       // substitution
+            );
+        }
+        prev = row;
+    }
+    return prev[t.length];
+}
+
+/**
+ * Is `typedKey` the same word spelled differently, rather than a different word?
+ *
+ * The bar rises with word length and is capped at two edits, so "shinning" is
+ * *shining* misspelled while "sea" is not "sky" — a three-letter word gets one
+ * edit, which is as much as can be claimed about it. Deliberately conservative:
+ * the consequence of a false positive is telling a learner they heard a word they
+ * did not, and BR-3 says we do not make claims of that kind cheaply.
+ */
+function isSpellingNearMiss(targetKey, typedKey) {
+    const distance = editDistance(targetKey, typedKey);
+    if (distance === 0 || distance > 2) return false;
+    return distance <= Math.floor(Math.max(targetKey.length, typedKey.length) / 3);
+}
+
+/**
+ * The learner's own words, marked against the alignment the LCS diff found.
+ *
+ * diffSpeechAttempt() reports the TARGET side only, so the typed side is
+ * reconstructed by consuming one typed word per matched target word. A token that
+ * normalises to nothing (a stray comma on its own) is never marked: there was no
+ * sound for it to be right or wrong about.
+ */
+function markTypedWords(diff, typed) {
+    const spent = {};
+    diff.words.forEach(entry => {
+        if (!entry.matched) return;
+        const key = normalizeSpeechWord(entry.word);
+        if (key) spent[key] = (spent[key] || 0) + 1;
+    });
+    return splitSpeechWords(typed).map(word => {
+        const key = normalizeSpeechWord(word);
+        if (!key) return { word: word, key: key, matched: true };
+        if (spent[key] > 0) {
+            spent[key]--;
+            return { word: word, key: key, matched: true };
+        }
+        return { word: word, key: key, matched: false };
+    });
+}
+
+/**
+ * Mark one dictation attempt.
+ *
+ * @returns {Object}
+ *   diff      diffSpeechAttempt()'s target-side marks
+ *   typed     the learner's words, each { word, key, matched }
+ *   spelling  [{ expected, given }] — heard, written differently
+ *   notHeard  target words with nothing like them in the typed text
+ *   extra     typed words the audio does not contain
+ *   right     every target word matched AND nothing extra typed
+ */
+function markDictation(target, typed) {
+    const diff = diffSpeechAttempt(target, typed);
+    const typedMarks = markTypedWords(diff, typed);
+    const spare = typedMarks.filter(entry => !entry.matched);
+    const claimed = new Set();
+
+    const spelling = [];
+    const notHeard = [];
+
+    diff.words.forEach(entry => {
+        if (entry.matched) return;
+        const key = normalizeSpeechWord(entry.word);
+        if (!key) return;
+
+        // The closest unclaimed thing the learner typed. Nearest-first, so two
+        // misspellings in one sentence cannot both claim the same typed word.
+        let best = -1;
+        let bestDistance = Infinity;
+        spare.forEach((candidate, i) => {
+            if (claimed.has(i)) return;
+            const distance = editDistance(key, candidate.key);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = i;
+            }
+        });
+
+        if (best >= 0 && isSpellingNearMiss(key, spare[best].key)) {
+            claimed.add(best);
+            spelling.push({ expected: entry.word, given: spare[best].word });
+        } else {
+            notHeard.push(entry.word);
+        }
+    });
+
+    const extra = spare.filter((entry, i) => !claimed.has(i)).map(entry => entry.word);
+
+    return {
+        diff: diff,
+        typed: typedMarks,
+        spelling: spelling,
+        notHeard: notHeard,
+        extra: extra,
+        // Extra words count. Dictation is "type what you hear", and the LCS
+        // alignment on its own would pass a learner who typed every target word
+        // plus three of their own.
+        right: diff.allMatched && extra.length === 0
+    };
+}
+
+/** A line of words with the ones that do not match marked. textContent only. */
+function appendMarkedWordLine(host, label, marks) {
+    const line = document.createElement('p');
+    line.className = 'dictation-line';
+
+    const tag = document.createElement('span');
+    tag.className = 'dictation-line-label';
+    tag.textContent = label + ' ';
+    line.appendChild(tag);
+
+    marks.forEach((mark, index) => {
+        const span = document.createElement('span');
+        span.textContent = mark.word;
+        if (!mark.matched) {
+            span.className = 'word-miss';
+            span.title = 'This word does not match';
+        }
+        line.appendChild(span);
+        if (index < marks.length - 1) line.appendChild(document.createTextNode(' '));
+    });
+
+    host.appendChild(line);
+    return line;
+}
+
+/** `<p class=…>` of plain text, for this section's feedback blocks. */
+function readingParagraph(text, className) {
+    const p = document.createElement('p');
+    if (className) p.className = className;
+    p.textContent = text;
+    return p;
+}
+
+/** `"a", "b" and "c"` — for listing words back without a bare comma soup. */
+function quotedList(words) {
+    const quoted = words.map(word => `"${word}"`);
+    if (quoted.length <= 1) return quoted.join('');
+    return quoted.slice(0, -1).join(', ') + ' and ' + quoted[quoted.length - 1];
+}
+
+/**
+ * Everything the learner sees after checking a dictation, in the methodology's
+ * order: the count, the contrast (their line, then the audio's), the reason for
+ * each kind of miss, the retry.
+ *
+ * The audio's line is shown even though it ends the puzzle, because FR-A11Y-5 is
+ * binding — the fix has to be on the same screen as the ✗ — and it is shown LAST
+ * of the two, which is §2's "transcript last, always" as far as a marked attempt
+ * allows. Nothing is disabled, so the retry happens in place.
+ */
+function renderDictationResult(mark) {
+    const host = document.getElementById('dictationFeedback');
+    if (!host) return;
+    const diff = mark.diff;
+
+    if (diff.totalCount === 0) {
+        showFeedback('dictationFeedback',
+            'There is nothing to check this against yet — play the audio first.', 'info');
+        return;
+    }
+
+    host.textContent = '';
+
+    if (mark.right) {
+        // Praise the specific thing (§5), and only what we actually checked. This
+        // one is defensible: the target text is known exactly, so "every word
+        // matched" is a fact rather than the "Perfect!" principle 3 forbids.
+        host.className = 'feedback success visible';
+        host.appendChild(readingParagraph(
+            `✓ All ${diff.totalCount} words match, spelling included.`, 'dictation-verdict'));
+        return;
+    }
+
+    host.className = 'feedback info visible';
+
+    // The verdict is a COUNT, not a pass/fail. "11 of 12 match" is what happened;
+    // "Incorrect" is what the learner was told before, and it was less true.
+    host.appendChild(readingParagraph(
+        `✗ ${diff.matchedCount} of ${diff.totalCount} words match.`, 'dictation-verdict'));
+
+    // 1. THE CONTRAST — their words first, so the marks are on their own work
+    //    before the answer appears.
+    appendMarkedWordLine(host, 'You wrote:', mark.typed);
+    appendMarkedWordLine(host, 'The audio said:', diff.words);
+
+    // 2. THE REASON, one sentence per kind of miss, because they need different
+    //    things done about them.
+    if (mark.spelling.length) {
+        const pairs = mark.spelling.map(s => `"${s.given}" for "${s.expected}"`).join('; ');
+        host.appendChild(readingParagraph(
+            mark.spelling.length === 1
+                ? `You caught this one and wrote it differently: ${pairs}. That is spelling, not listening.`
+                : `You caught these and wrote them differently: ${pairs}. That is spelling, not listening.`,
+            'dictation-reason'));
+    }
+    if (mark.notHeard.length) {
+        host.appendChild(readingParagraph(
+            mark.notHeard.length === 1
+                ? `Nothing in what you wrote lines up with ${quotedList(mark.notHeard)} — that word did not come through.`
+                : `Nothing in what you wrote lines up with ${quotedList(mark.notHeard)} — those words did not come through.`,
+            'dictation-reason'));
+    }
+    if (mark.extra.length) {
+        host.appendChild(readingParagraph(
+            mark.extra.length === 1
+                ? `You also wrote ${quotedList(mark.extra)}, which is not in the audio.`
+                : `You also wrote ${quotedList(mark.extra)}, which are not in the audio.`,
+            'dictation-reason'));
+    }
+    host.appendChild(readingParagraph(
+        'Capital letters and punctuation are not checked — you cannot hear them.',
+        'dictation-scope'));
+
+    // 3. THE RETRY. The box keeps what they typed, so this is a repair job on a
+    //    few words rather than the whole sentence again.
+    host.appendChild(readingParagraph(
+        'Try again — play the audio once more and listen for the marked words. Your text is still in the box, so only those need changing.',
+        'dictation-retry'));
+}
+
+/**
+ * US-186. A wrong dictation, logged by type.
+ *
+ * ONE ENTRY PER CATEGORY PER ATTEMPT, and at most one attempt per passage render:
+ *  - Per category, not per word, because a learner who mistypes four words made
+ *    one attempt with four slips in it. Four entries would let a single bad
+ *    attempt outrank a month of real evidence in a top-5 built from raw counts.
+ *  - Per render, through readingSession, so re-checking the same wrong text
+ *    cannot log it twice.
+ *
+ * EVIDENCE: graded, for both categories. The app had the exact target text and
+ * compared the learner's against it — this is the class mistakes.js defines as
+ * "the app knew the right answer and compared it to the learner's", whatever the
+ * cause of the miss turns out to be.
+ *
+ * The `vocab.spelling` claim ("you heard the word correctly and wrote it
+ * differently") needs the attempt to have ALIGNED before it can be made at all,
+ * so it is dropped when half the sentence or more failed to match — the same
+ * reasoning recordReadAloudLapses() uses to refuse a mostly-failed read-aloud.
+ * In that case everything unmatched is reported as not caught, which is the
+ * weaker and safer of the two claims.
+ */
+function recordDictationMistakes(mark, target) {
+    if (readingSession.dictationLogged) return;
+    if (typeof Mistakes === 'undefined' || !Mistakes || typeof Mistakes.record !== 'function') return;
+
+    const diff = mark.diff;
+    const mostlyAligned = diff.matchedCount * 2 > diff.totalCount;
+    const spelling = mostlyAligned ? mark.spelling : [];
+    const notCaught = mostlyAligned
+        ? mark.notHeard.slice()
+        : mark.notHeard.concat(mark.spelling.map(entry => entry.expected));
+
+    if (!spelling.length && !notCaught.length) return;
+    readingSession.dictationLogged = true;
+
+    if (spelling.length) {
+        Mistakes.record('vocab.spelling', {
+            item: target,
+            given: spelling.map(entry => entry.given).join(', '),
+            expected: spelling.map(entry => entry.expected).join(', '),
+            evidence: Mistakes.EVIDENCE.GRADED,
+            source: 'readingDictation'
+        });
+    }
+    if (notCaught.length) {
+        // The words the learner did not get out of the audio at all. `lsn.detail`
+        // rather than a reading id: the input here is speech, and what failed was
+        // catching a specific word in it.
+        Mistakes.record('lsn.detail', {
+            item: target,
+            given: splitSpeechWords(mark.typed.map(entry => entry.word).join(' ')).join(' '),
+            expected: notCaught.join(', '),
+            evidence: Mistakes.EVIDENCE.GRADED,
+            source: 'readingDictation'
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Comprehension (US-141)
+// ---------------------------------------------------------------------------
+
+/** Words too common to make a passage sentence identifiable by their presence. */
+const PASSAGE_STOPWORDS = {
+    the: 1, and: 1, but: 1, for: 1, are: 1, was: 1, were: 1, been: 1, being: 1,
+    that: 1, this: 1, these: 1, those: 1, with: 1, from: 1, into: 1, your: 1,
+    you: 1, they: 1, them: 1, their: 1, there: 1, here: 1, what: 1, when: 1,
+    where: 1, which: 1, who: 1, why: 1, how: 1, does: 1, did: 1, has: 1,
+    have: 1, had: 1, will: 1, would: 1, can: 1, could: 1, more: 1, most: 1,
+    some: 1, such: 1, only: 1, also: 1, very: 1, all: 1, any: 1, its: 1,
+    not: 1, then: 1, than: 1, about: 1
+};
+
+/** The passage split into sentences. No lookbehind: this runs in old Safari too. */
+function passageSentences(text) {
+    return (String(text == null ? '' : text).match(/[^.!?]+[.!?]*/g) || [])
+        .map(sentence => sentence.trim())
+        .filter(sentence => sentence.length > 0);
+}
+
+/**
+ * A sentence of the passage that contains the right answer's content words, or
+ * null.
+ *
+ * Deliberately weak, and phrased that way on screen ("In the passage: …"). It is
+ * a WHERE-TO-LOOK, not a claim that this sentence proves the answer, and it is
+ * returned only when EXACTLY ONE sentence contains every content word of the
+ * chosen option — an ambiguous or absent match returns null and the learner is
+ * told the passage does not put it in those words, which is also true and is
+ * often the reason the question was hard.
+ */
+function passageEvidenceFor(passage, answerText) {
+    const keys = splitSpeechWords(answerText)
+        .map(normalizeSpeechWord)
+        .filter(key => key.length > 2 && !PASSAGE_STOPWORDS[key]);
+    if (!keys.length) return null;
+
+    const hits = passageSentences(passage).filter(sentence => {
+        const sentenceKeys = splitSpeechWords(sentence).map(normalizeSpeechWord);
+        return keys.every(key => sentenceKeys.indexOf(key) >= 0);
+    });
+    return hits.length === 1 ? hits[0] : null;
+}
+
+/** The per-question feedback host, created on first use and reused after that. */
+function comprehensionFeedbackHost(questionEl) {
+    let host = questionEl.querySelector('.question-feedback');
+    if (!host) {
+        host = document.createElement('div');
+        host.className = 'question-feedback';
+        host.setAttribute('role', 'status');
+        host.setAttribute('aria-live', 'polite');
+        questionEl.appendChild(host);
+    }
+    host.textContent = '';
+    return host;
+}
+
+/**
+ * US-186. Which error type a wrong comprehension answer is evidence of.
+ *
+ * `rdw.inference` is NOT returned by default, and that is the whole decision
+ * here. Its label is "Answer needed reading between the lines", which is false of
+ * "What does the mother do?" — a question answered by one sentence of the
+ * passage. Logging every wrong comprehension answer under it would hand the
+ * learner a diagnosis they can check and find wrong, which mistakes.js's own
+ * header argues costs more than no finding at all.
+ *
+ * So the id comes from the question when its author names one, and otherwise this
+ * is `general.uncategorised`: counted, kept out of the ranked list
+ * (reportable:false), and honest about the fact that the app knew the answer was
+ * wrong but not why. Growth there is a to-do list for whoever authors the
+ * questions, which is where the type belongs.
+ */
+function comprehensionMistakeCategory(questionEl) {
+    const authored = (questionEl.dataset && questionEl.dataset.mistakeCategory) || '';
+    if (authored && typeof Mistakes !== 'undefined' && Mistakes &&
+        typeof Mistakes.isKnownCategory === 'function' && Mistakes.isKnownCategory(authored)) {
+        return authored;
+    }
+    return 'general.uncategorised';
+}
+
+/**
+ * Log the wrong comprehension answers of one check.
+ *
+ * Guarded by readingSession, so a second check of the same wrong answers records
+ * nothing. UNANSWERED QUESTIONS ARE NOT IN `wrong` and never reach here: not
+ * answering is not a mistake, and logging it would put words in the learner's
+ * mouth. Evidence is graded — the app held the correct index and compared it.
+ */
+function recordComprehensionMistakes(wrong) {
+    if (readingSession.comprehensionLogged) return;
+    if (typeof Mistakes === 'undefined' || !Mistakes || typeof Mistakes.record !== 'function') return;
+    if (!wrong.length) return;
+
+    readingSession.comprehensionLogged = true;
+    wrong.forEach(entry => {
+        Mistakes.record(comprehensionMistakeCategory(entry.element), {
+            item: (entry.element.dataset && entry.element.dataset.question) || undefined,
+            given: entry.given,
+            expected: entry.expected,
+            evidence: Mistakes.EVIDENCE.GRADED,
+            source: 'readingComprehension'
+        });
+    });
+}
+
+/**
+ * Check the comprehension questions — US-141.
+ *
+ * What it used to do: paint every wrong question `#ffebee`, print "2/3 correct!",
+ * and, on a clean sheet, "✓ Perfect! 3/3 correct!". So a red question carried no
+ * fix (FR-A11Y-5), no reason and no retry (FR-GRM-2), and the success line had
+ * two exclamation marks in six words (§5: "never … excessive exclamation marks").
+ *
+ * "✓" itself stays, and so does naming the count: unlike a speech attempt, a
+ * comprehension answer IS objectively gradable — the app holds the correct index
+ * — so saying every answer was right claims nothing it cannot support (principle
+ * 3 is about the recogniser, not about this). "Perfect!" goes, because it is
+ * praise for the learner rather than a report on the work (§5), and the
+ * exclamation marks go with it.
+ *
+ * Every wrong question now gets, under the question and beside its options:
+ * the answer, one sentence of the passage where it can be found when that is
+ * unambiguous, and a retry cue. The radios are never disabled, so the retry is on
+ * the same screen.
+ */
+function checkComprehensionAnswers() {
+    document.getElementById('comprehensionFeedback').classList.remove('visible');
+
+    const passage = document.getElementById('passageText').textContent || '';
+    const questions = Array.from(document.querySelectorAll('.question-item'));
+    const wrong = [];
+    let correct = 0;
+    let unanswered = 0;
+
+    questions.forEach(questionEl => {
+        questionEl.classList.remove('is-correct', 'is-wrong', 'is-unanswered');
+        // The old inline colour, cleared: this now runs off classes so the two
+        // states are themeable and legible in dark mode.
+        questionEl.style.background = '';
+        const host = comprehensionFeedbackHost(questionEl);
+
+        const labels = Array.from(questionEl.querySelectorAll('.question-options label'));
+        labels.forEach(label => label.classList.remove('is-chosen', 'is-answer'));
+
+        const chosen = questionEl.querySelector('input:checked');
+        const correctIndex = labels.length
+            ? parseInt(labels[0].querySelector('input').dataset.correct, 10)
+            : -1;
+        const answerLabel = labels[correctIndex];
+        const answerText = answerLabel ? answerLabel.textContent.trim() : '';
+
+        if (!chosen) {
+            // Not a mistake, so not marked as one and not logged. FR-A11Y-5 is
+            // about a ✗ without a fix; the fix for this one is to answer it.
+            unanswered++;
+            questionEl.classList.add('is-unanswered');
+            host.className = 'question-feedback is-open';
+            host.appendChild(readingParagraph('Not answered yet — choose one of the options above.'));
+            return;
+        }
+
+        const chosenLabel = labels[parseInt(chosen.value, 10)];
+        chosenLabel?.classList.add('is-chosen');
+
+        if (parseInt(chosen.value, 10) === correctIndex) {
+            correct++;
+            questionEl.classList.add('is-correct');
+            host.className = 'question-feedback is-correct';
+            host.appendChild(readingParagraph(`✓ ${answerText}`));
+            return;
+        }
+
+        questionEl.classList.add('is-wrong');
+        if (answerLabel) answerLabel.classList.add('is-answer');
+        host.className = 'question-feedback is-wrong';
+
+        // 1. THE CONTRAST and the fix, in one line and on this screen.
+        host.appendChild(readingParagraph(
+            `✗ You chose "${chosenLabel ? chosenLabel.textContent.trim() : chosen.value}". The answer is "${answerText}".`,
+            'question-verdict'));
+
+        // 2. THE REASON — where it says so, when that can be pointed at without
+        //    guessing, and an honest note when it cannot.
+        const evidence = passageEvidenceFor(passage, answerText);
+        host.appendChild(readingParagraph(
+            evidence
+                ? `In the passage: "${evidence}"`
+                : 'The passage does not put it in those words, so this one is a matter of adding two things together rather than finding a sentence.',
+            'question-reason'));
+
+        // 3. THE RETRY. Nothing is disabled; choosing again and pressing Check
+        //    Answers re-marks the whole set.
+        host.appendChild(readingParagraph(
+            'Try again — find the part of the passage this question is about, then choose again and check.',
+            'question-retry'));
+
+        wrong.push({
+            element: questionEl,
+            given: chosenLabel ? chosenLabel.textContent.trim() : chosen.value,
+            expected: answerText
+        });
+    });
+
+    if (questions.length && correct === questions.length) {
+        showFeedback('comprehensionFeedback',
+            `✓ All ${questions.length} answers right.`, 'success');
+        state.dailyGoals.reading = true;
+        // A passage counts once, no matter which success path completes it.
+        if (!isExerciseCompleted('reading', state.currentPassageIndex)) {
+            updateStatistics('reading');
+            markExerciseComplete('reading', state.currentPassageIndex);
+        }
+        updateDashboard();
+        saveProgress();
+        return;
+    }
+
+    const parts = [`${correct} of ${questions.length} right`];
+    if (unanswered) parts.push(`${unanswered} still to answer`);
+    showFeedback('comprehensionFeedback',
+        `${parts.join(', ')}. Each one to look at again is marked below, with the answer and where the passage says it.`,
+        'info');
+
+    recordComprehensionMistakes(wrong);
 }
 
 function initializeReadingButtons() {
@@ -5111,27 +5845,43 @@ function initializeReadingButtons() {
     };
     
     document.getElementById('checkComprehension').onclick = () => {
+        checkComprehensionAnswers();
+    };
+
+    document.getElementById('playDictation').onclick = function() { speechAPI.speak(this.dataset.text, 0.8); };
+
+    document.getElementById('checkDictation').onclick = () => {
         // Clear previous feedback
-        document.getElementById('comprehensionFeedback').classList.remove('visible');
-        
-        const questions = document.querySelectorAll('.question-item');
-        let correct = 0;
-        questions.forEach(q => {
-            // Reset background before checking
-            q.style.background = '';
-            const sel = q.querySelector('input:checked');
-            if (sel && parseInt(sel.value) === parseInt(sel.dataset.correct)) {
-                correct++;
-                q.style.background = '#e8f5e9';
-            } else {
-                q.style.background = '#ffebee';
-            }
-        });
-        const msg = `${correct}/${questions.length} correct!`;
-        if (correct === questions.length) {
-            showFeedback('comprehensionFeedback', `✓ Perfect! ${msg}`, 'success');
+        document.getElementById('dictationFeedback').classList.remove('visible');
+
+        const input = document.getElementById('dictationInput').value;
+        const target = document.getElementById('playDictation').dataset.text || '';
+
+        // Validate input
+        let typed;
+        try {
+            typed = AppErrorHandler.validateInput(input, {
+                required: true,
+                minLength: 1,
+                maxLength: 500
+            });
+        } catch (error) {
+            showFeedback('dictationFeedback', error.message, 'error');
+            Toast.error('Please enter your answer before checking');
+            return;
+        }
+
+        // Word by word, not string against string — see the block comment above
+        // markDictation(). `right` is still "every word, nothing extra", so this
+        // passes exactly what the old exact comparison passed.
+        const mark = markDictation(target, typed);
+        renderDictationResult(mark);
+
+        if (mark.right) {
+            Toast.success('Dictation complete.');
             state.dailyGoals.reading = true;
-            // A passage counts once, no matter which success path completes it.
+            // Dictation is a separate exercise, so it must not re-count a passage
+            // that comprehension already completed.
             if (!isExerciseCompleted('reading', state.currentPassageIndex)) {
                 updateStatistics('reading');
                 markExerciseComplete('reading', state.currentPassageIndex);
@@ -5139,46 +5889,7 @@ function initializeReadingButtons() {
             updateDashboard();
             saveProgress();
         } else {
-            showFeedback('comprehensionFeedback', msg, 'info');
-        }
-    };
-    
-    document.getElementById('playDictation').onclick = function() { speechAPI.speak(this.dataset.text, 0.8); };
-    
-    document.getElementById('checkDictation').onclick = () => {
-        // Clear previous feedback
-        document.getElementById('dictationFeedback').classList.remove('visible');
-
-        const input = document.getElementById('dictationInput').value;
-        const correct = document.getElementById('playDictation').dataset.text;
-
-        // Validate input
-        try {
-            const sanitizedInput = AppErrorHandler.validateInput(input, {
-                required: true,
-                minLength: 1,
-                maxLength: 500
-            });
-
-            const sim = sanitizedInput.trim().toLowerCase() === correct.toLowerCase() ? 1 : 0.5;
-            if (sim > 0.8) {
-                showFeedback('dictationFeedback', '✓ Excellent!', 'success');
-                Toast.success('Dictation completed successfully!');
-                state.dailyGoals.reading = true;
-                // Dictation is a separate exercise, so it must not re-count a passage
-                // that comprehension already completed.
-                if (!isExerciseCompleted('reading', state.currentPassageIndex)) {
-                    updateStatistics('reading');
-                    markExerciseComplete('reading', state.currentPassageIndex);
-                }
-                updateDashboard();
-                saveProgress();
-            } else {
-                showFeedback('dictationFeedback', `Correct: "${correct}"`, 'info');
-            }
-        } catch (error) {
-            showFeedback('dictationFeedback', error.message, 'error');
-            Toast.error('Please enter your answer before checking');
+            recordDictationMistakes(mark, target);
         }
     };
 }
