@@ -7,30 +7,35 @@ on:
     branches: [ main, test, develop ]
 
 # ---------------------------------------------------------------------------
-# TEST JOB DISABLED — 2026-09-09
+# TEST JOB DISABLED — 2026-09-09, still disabled 2026-09-12 BY CHOICE
 #
 # The `test` job is commented out rather than deleted, so restoring it is a
 # matter of removing the comment markers.
 #
-# It could not pass, for two independent reasons:
+# It was originally disabled because it could not pass, for two independent
+# reasons. BOTH ARE NOW FIXED (US-001):
 #
-#   1. `npm ci` requires a committed package-lock.json. The lockfile is
-#      gitignored (.gitignore:3), so every job failed at "Install
-#      dependencies" — including build and deploy, which is why GitHub Pages
-#      deployment was also blocked.
-#   2. `jest` is not in devDependencies (only http-server is), so even with a
+#   1. `npm ci` requires a committed package-lock.json, and the lockfile was
+#      gitignored — so every job failed at "Install dependencies", including
+#      build and deploy, which is why GitHub Pages deployment was also blocked.
+#      FIXED: the lockfile is no longer ignored. See the comment in .gitignore.
+#   2. `jest` was not in devDependencies (only http-server was), so even with a
 #      lockfile, `npm run test:unit` / `test:integration` / `npm test` would
 #      all fail with "jest: not found".
+#      FIXED: jest@30 and jest-environment-jsdom are declared and installed.
 #
-# TO RESTORE (tracked as US-001 in docs/PRODUCT_BACKLOG.md):
-#   - npm i -D jest jest-environment-jsdom
-#   - un-ignore package-lock.json in .gitignore and commit it
+# So the reason it stays off is no longer technical: the owner asked for it off
+# while the suites were still churning. `npm test` passes locally — 9 suites,
+# 1046 tests, 77.4% statement coverage — so re-enabling it should now be a
+# one-line change rather than a project.
+#
+# TO RESTORE:
 #   - uncomment the test job below
 #   - add `needs: test` back to the build job
 #
-# Until then the 112 unit assertions in __tests__/unit/ exist but nothing runs
-# them automatically. The syntax-check job below is a deliberately minimal
-# stand-in, not a replacement.
+# Until then those 1046 assertions exist but nothing runs them on push, so a
+# regression reaches main unchallenged. The syntax-check job below is a
+# deliberately minimal stand-in, not a replacement.
 # ---------------------------------------------------------------------------
 
 jobs:

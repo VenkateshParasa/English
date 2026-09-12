@@ -1,6 +1,10 @@
 # Dependencies
 node_modules/
-package-lock.json
+# package-lock.json is TRACKED deliberately. `.github/workflows/ci-cd.yml` runs
+# `npm ci` in its test job, and `npm ci` refuses to install without a committed
+# lockfile — so ignoring the lockfile is why CI could never install jest. The
+# test job is currently commented out by choice, so nothing runs `npm ci` today;
+# committing the lockfile removes the blocker ahead of re-enabling it (US-001).
 
 # Testing
 coverage/
