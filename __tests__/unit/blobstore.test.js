@@ -30,6 +30,10 @@
  *
  * WHAT A FAKE CANNOT PROVE — read this before trusting a green run
  * ---------------------------------------------------------------
+ * Re-audited when US-227/US-228 landed. Two entries were wrong in the SAFE
+ * direction — they claimed less proof than this suite actually has — which is
+ * still misleading, because it points the next reader at the wrong risk.
+ *
  *   1. STRUCTURED CLONE OF A REAL BLOB. The fake stores blob references by
  *      identity. `available({deep:true})` exists exactly because some WebKit
  *      builds fail to clone a Blob into IndexedDB while IndexedDB itself works;
@@ -40,20 +44,34 @@
  *      A real quota is dynamic, shared with Cache API + localStorage, can shrink
  *      mid-session, and may be reported at a different granularity. "Freeing 3x
  *      what we need is enough" is untestable here by construction.
- *   3. STORAGE-PRESSURE EVICTION. A real browser can evict the whole origin
- *      between two calls. Nothing here models that.
+ *   3. STORAGE-PRESSURE EVICTION — NARROWED. The *symptom* that matters is
+ *      reproduced and proven: a payload disappearing from under its metadata row
+ *      is what the orphan tests do (`store.db._store('audio').records.delete`),
+ *      and readRecord()'s repair is exercised on it. What is NOT modelled is the
+ *      origin being emptied WHOLESALE mid-session — every row, both stores, or
+ *      the schema itself gone between two calls. So "a partly-eaten archive" is
+ *      covered; "the archive vanished" is not.
  *   4. SAFARI PRIVATE BROWSING. Modelled as "open() throws", which is what it
  *      historically did. Whether today's builds fail the same way is unproven.
  *   5. CROSS-TAB `versionchange` / `blocked`. `onblocked` is fired on command;
  *      no second connection actually exists, so the close-and-reopen handshake
  *      in openDb()'s `db.onversionchange` is exercised only by calling it.
- *   6. TRANSACTION AUTO-COMMIT TIMING. The fake drains its request queue in one
- *      microtask and then commits. A real transaction commits the moment its
- *      queue drains, which is why runTx() forbids awaiting mid-transaction —
- *      that hazard cannot be reproduced here, so this suite cannot prove the
- *      module is free of it. It can only prove the chaining it does use works.
+ *   6. TRANSACTION AUTO-COMMIT TIMING — WAS WRONG. This said the hazard "cannot
+ *      be reproduced here, so this suite cannot prove the module is free of it".
+ *      It can be, and the suite now proves it: the fake commits the moment its
+ *      request queue drains and then throws TransactionInactiveError on any
+ *      further request, so a single `await` between two requests is already fatal
+ *      — see "a transaction commits as soon as its queue drains" in section 0.
+ *      What the fake cannot reproduce is a real engine's commit boundary
+ *      relative to timers and I/O, i.e. the exact width of the window, and it
+ *      can only speak for the paths this suite exercises.
  *   7. WEBKIT'S SILENT open(). Modelled as "fire no event", which is the
  *      observable symptom; the 8s OPEN_TIMEOUT_MS is exercised with fake timers.
+ *   8. THE TRUE SIZE OF A STRANDED PAYLOAD (US-228). `strandedBytes` reports the
+ *      `size` a metadata row CLAIMS, because measuring the payload means
+ *      deserialising every blob in STORE_AUDIO. Here the two always agree,
+ *      because the fixtures write both; on a real device a lying or absent
+ *      `size` on a foreign row is an under-count nothing in this suite can catch.
  *
  * DEFECTS THIS SUITE FOUND — see the `⚠️ DEFECT` blocks, pinned as current
  * behaviour in the house style of srs.test.js / portability.test.js so the suite
@@ -89,18 +107,41 @@
  *      yet counted by usage()/prompts() — is now rejected by usableRows() instead
  *      of coerced to the epoch, and put() coerces its own createdAt so it can
  *      never write one.
+ *   F. FIXED (US-227). `removeForPrompt()` of a prompt holding nothing reported
+ *      `message:'Recording deleted.'`. Resolved as a COPY fix, not a logic fix:
+ *      the result stays `{ ok:true, removed:0 }`, because this method names a
+ *      STATE that already holds rather than a thing that was not there, and a
+ *      `ok:false` for a satisfied request would make a caller paint an error over
+ *      a no-op. `MESSAGES.nothingToRemove` says what is true instead. See
+ *      "US-227 —" in the remove() section for the argument in full.
+ *   G. FIXED (US-228). An unindexable row's bytes were invisible to usage() and
+ *      unreachable by eviction, so a device could fill with bytes the module
+ *      could see and could not free. Resolved by COUNTING and reporting them —
+ *      `usage().strandedCount/strandedBytes`, `clear().strandedRemoved`, and the
+ *      50MB cap now computed over them — and by touching them in no other way.
+ *      Repair was rejected because rewriting `createdAt` invents a date on what
+ *      may be a learner's month-one recording; deletion was rejected under BR-7.
+ *      See the "US-228" describe block.
  *
  * Also once pinned here, now fixed: the `size > MAX_TOTAL_BYTES` guard in put() was
  * unreachable (the 10MB per-recording check always fired first) and has been removed
  * in favour of clamping MAX_RECORDING_BYTES to MAX_TOTAL_BYTES (US-221); and
  * planRetention()/evictionCandidates() disagreed about which row counted as a
  * baseline once the real one was deleted, and now share isPinnedBaseline() (US-222).
- * Still true and still only defensive: the `if (keep[row.id]) return;` guard in
- * planRetention (the early return at the top makes a revisit impossible).
+ *
+ * WITHDRAWN, and worth knowing why: this block used to call the
+ * `if (keep[row.id]) return;` guard in planRetention "only defensive… the early
+ * return at the top makes a revisit impossible". That is false. When the flagged
+ * baseline is not the OLDEST row — a clock corrected backwards after the first
+ * recording, or a foreign row — the forward pass keeps it and the backward pass
+ * walks over it again, and without the guard the revisit would spend a second
+ * retention slot on one row and evict one recording more than the cap asks for.
+ * Pinned by "the `keep[row.id]` guard is load-bearing, not defensive".
  *
  * Requirements under test: FR-DATA-6 (blobs in IndexedDB, size cap, eviction),
  * NFR-10 (quota handled with a clear message, never silent data loss),
- * CURRICULUM.md Strand E.7 (hear month-one against month-three).
+ * BR-3 (never overstate what the app knows), BR-7 (learner data never silently
+ * lost), CURRICULUM.md Strand E.7 (hear month-one against month-three).
  */
 
 'use strict';
@@ -813,6 +854,31 @@ describe('the fake IndexedDB honours the parts of the spec this module leans on'
         expect(store.usedBytes()).toBe(0);
         expect(await write(3, 9)).toBe(null);
     });
+
+    /**
+     * Caveat 6 used to say the auto-commit hazard "cannot be reproduced here".
+     * It can: the fake commits the moment its request queue drains and then
+     * refuses further work, so ONE await between two requests is already fatal.
+     * What the fake cannot reproduce is a real engine's commit boundary relative
+     * to timers and I/O — not the hazard itself.
+     */
+    test('a transaction commits as soon as its queue drains, so awaiting mid-transaction is fatal here too', async () => {
+        await BlobStore.available();
+        const tx = store.db.transaction(['recordings'], 'readwrite');
+        const outcome = new Promise((resolve) => {
+            tx.oncomplete = () => resolve('complete');
+            tx.onabort = () => resolve('abort');
+        });
+        tx.objectStore('recordings').add({ promptId: 'a', createdAt: 1, size: 1 });
+
+        await Promise.resolve();      // exactly what runTx() forbids its work() from doing
+
+        let caught = null;
+        try { tx.objectStore('recordings'); } catch (e) { caught = e; }
+        expect(caught && caught.name).toBe('TransactionInactiveError');
+        expect(await outcome).toBe('complete');
+        expect(store.ids()).toEqual([1]);
+    });
 });
 
 // ===========================================================================
@@ -866,6 +932,20 @@ describe('retention: the pure planner', () => {
         // Oldest by (createdAt, id) is 3 — and it is the flagged baseline;
         // newest kept are 5 and the new row.
         expect(BlobStore._planRetention(projected)).toEqual([4]);
+    });
+
+    test('the `keep[row.id]` guard is load-bearing, not defensive', () => {
+        // The header used to call this guard unreachable. It is reachable whenever
+        // the flagged baseline is NOT the oldest row — a clock corrected backwards
+        // after the first recording, or a foreign row — because the forward pass
+        // keeps it and the backward pass then walks over it again. Without the
+        // guard that revisit spends a second slot on the same row and evicts one
+        // more recording than the cap asks for.
+        const projected = [row(2, 100), row(3, 200), row(4, 300), row(9, 400, { baseline: true })];
+        expect(BlobStore._planRetention(projected)).toEqual([2]);
+        // Three rows kept, as MAX_PER_PROMPT says: 9, 4 and 3. Drop the guard and
+        // the answer becomes [2, 3] — only two kept.
+        expect(BlobStore.MAX_PER_PROMPT).toBe(3);
     });
 
     test('US-222 — planRetention and evictionCandidates agree on which row is the baseline', () => {
@@ -1840,7 +1920,7 @@ describe('object URLs', () => {
     test('removeForPrompt() with nothing to delete does not disturb live urls', async () => {
         await BlobStore.openUrl(rec.record.id);
         const res = await BlobStore.removeForPrompt('nosuchprompt');
-        expect(res).toEqual({ ok: true, removed: 0, message: BlobStore.MESSAGES.removed });
+        expect(res).toEqual({ ok: true, removed: 0, message: BlobStore.MESSAGES.nothingToRemove });
         expect(revokedUrls).toEqual([]);
         expect(BlobStore.liveUrlCount()).toBe(1);
     });
@@ -2166,6 +2246,72 @@ describe('remove() / removeForPrompt() / clear()', () => {
         expect(store.openCount).toBe(0);
     });
 
+    /**
+     * US-227. The same family as US-217 and deliberately NOT the same answer.
+     *
+     * remove(id) names one recording, which either existed or did not, so a UI
+     * acting on a stale list has to be told its list is stale — hence ok:false.
+     * removeForPrompt(promptId) names a STATE, "this prompt keeps nothing", and
+     * that state holds when it returns: the request succeeded. Reporting ok:false
+     * would make the caller being wired in US-136 paint an error over a no-op,
+     * and would force every caller to treat one failure code as success.
+     *
+     * So the logic is unchanged and only the CLAIM is fixed: MESSAGES.removed
+     * ("Recording deleted.") is no longer used when nothing was deleted (BR-3).
+     */
+    test('US-227 — an empty prompt succeeds without claiming a deletion', async () => {
+        const kept = await putAt('p1', 100, 100);
+
+        const res = await BlobStore.removeForPrompt('p2');
+
+        expect(res).toEqual({
+            ok: true, removed: 0, message: BlobStore.MESSAGES.nothingToRemove
+        });
+        expect(res.message).not.toMatch(/deleted/i);
+        expect(store.ids()).toEqual([kept.record.id]);
+    });
+
+    test('US-227 — remove() and removeForPrompt() answer an absent target differently, on purpose', async () => {
+        await putAt('p1', 100, 100);
+        // A named thing that is not there: the caller's list is stale.
+        expect(await BlobStore.remove(4242)).toEqual({
+            ok: false, code: 'missing', message: BlobStore.MESSAGES.missing
+        });
+        // A state that already holds: the caller has nothing to apologise for.
+        expect((await BlobStore.removeForPrompt('nope')).ok).toBe(true);
+    });
+
+    test('US-227 — emptying a prompt twice reports the deletion once', async () => {
+        await putAt('p1', 100, 100);
+        await putAt('p1', 100, 200);
+
+        expect(await BlobStore.removeForPrompt('p1'))
+            .toEqual({ ok: true, removed: 2, message: BlobStore.MESSAGES.removed });
+        // Idempotent by nature: the second call changes nothing and says so.
+        expect(await BlobStore.removeForPrompt('p1'))
+            .toEqual({ ok: true, removed: 0, message: BlobStore.MESSAGES.nothingToRemove });
+    });
+
+    test('US-227 — a row another tab deleted mid-call is reported as nothing deleted', async () => {
+        // The ids come from the ledger read; the deleting transaction is what
+        // decides. `gone.length === 0` after a non-empty plan means the other tab
+        // won the race, and the copy must not report a deletion for it either.
+        const rec = await putAt('p1', 100, 100);
+        store.errorHook = (s, op) => {
+            if (s === 'recordings' && op === 'get') {
+                store.db._store('recordings').records.delete(rec.record.id);
+            }
+            return null;   // a spy with a side effect, not an injected failure
+        };
+
+        const res = await BlobStore.removeForPrompt('p1');
+        store.errorHook = null;
+
+        expect(res).toEqual({
+            ok: true, removed: 0, message: BlobStore.MESSAGES.nothingToRemove
+        });
+    });
+
     test('a failed removeForPrompt() changes nothing', async () => {
         await putAt('p1', 100, 100);
         await putAt('p1', 100, 200);
@@ -2181,7 +2327,9 @@ describe('remove() / removeForPrompt() / clear()', () => {
         await putAt('p1', 100, 100);
         await putAt('p2', 100, 200);
         const res = await BlobStore.clear();
-        expect(res).toEqual({ ok: true, removed: 2, message: BlobStore.MESSAGES.cleared });
+        expect(res).toEqual({
+            ok: true, removed: 2, strandedRemoved: 0, message: BlobStore.MESSAGES.cleared
+        });
         expect(store.ids()).toEqual([]);
         expect(store.audioIds()).toEqual([]);
     });
@@ -2199,8 +2347,9 @@ describe('remove() / removeForPrompt() / clear()', () => {
     });
 
     test('clear() on an empty archive is a no-op success', async () => {
-        expect(await BlobStore.clear())
-            .toEqual({ ok: true, removed: 0, message: BlobStore.MESSAGES.cleared });
+        expect(await BlobStore.clear()).toEqual({
+            ok: true, removed: 0, strandedRemoved: 0, message: BlobStore.MESSAGES.cleared
+        });
     });
 
     test('a failed clear() reports failure and leaves the archive alone', async () => {
@@ -2234,6 +2383,8 @@ describe('usage()', () => {
                 available: true,
                 count: 2,
                 bytes: 5 * MB,
+                strandedCount: 0,
+                strandedBytes: 0,
                 promptCount: 2,
                 maxPerPrompt: 3,
                 maxTotalBytes: 50 * MB,
@@ -2339,8 +2490,229 @@ describe('prompts()', () => {
 });
 
 // ===========================================================================
-// Metadata sanitisation and the learner-facing copy
+// US-228. Bytes the module can see and cannot free
 // ===========================================================================
+
+/**
+ * After US-220 an unindexable row is ignored rather than acted on, which made
+ * every method agree about it — and left its bytes stranded: uncounted by
+ * usage(), unreachable by eviction.
+ *
+ * The resolution is the middle option of three: COUNT them and report them, and
+ * touch nothing.
+ *
+ *   - Repair (rewrite createdAt) invents a date. A row that is genuinely a
+ *     learner's month-one recording would then sort as though it were made at a
+ *     time it was not, which is the one harm the pinned baseline exists to
+ *     prevent, and the absence we overwrote is the only evidence that we do not
+ *     know. It also merely makes the row expendable, so it is deletion with a
+ *     fabricated date on the way.
+ *   - Delete breaks BR-7 outright: we do not know the row is not the learner's,
+ *     and a row with a real promptId and a real size and no createdAt is exactly
+ *     what a build of this module from BEFORE US-220 wrote when the clock was
+ *     unavailable.
+ *
+ * Counting fails toward a refusal; ignoring fails toward the browser's own quota
+ * error, whose retry pays for the invisible bytes with the learner's real
+ * in-between recordings. Refusal is the direction this whole file errs in.
+ */
+describe('US-228 — bytes this module can see and cannot free', () => {
+    /** A correct promptId, a real size, no createdAt: not ours, and not garbage. */
+    const foreign = (over) => Object.assign(
+        { id: 700, promptId: 'p9', createdAt: null, size: 6 * MB, v: 1 }, over
+    );
+
+    async function seedForeignRow(over) {
+        await BlobStore.available();          // build the schema without writing a row
+        const row = foreign(over);
+        store.seedMeta([row]);
+        store.seedAudio([{ id: row.id, promptId: row.promptId, blob: fakeBlob(row.size) }]);
+        return row;
+    }
+
+    test('usage() reports them instead of pretending they are not there', async () => {
+        await seedForeignRow();
+        const real = await putAt('p1', 1 * MB, 100);
+        expect(real.ok).toBe(true);
+
+        const u = await BlobStore.usage();
+
+        // `count` and `bytes` still describe the recordings list() can show, so
+        // the storage line and the archive screen cannot disagree (US-220)...
+        expect(u.count).toBe(1);
+        expect(u.bytes).toBe(1 * MB);
+        expect(u.promptCount).toBe(1);
+        expect(await BlobStore.list('p9')).toEqual([]);
+        // ...and the remainder is named rather than dropped on the floor.
+        expect(u.strandedCount).toBe(1);
+        expect(u.strandedBytes).toBe(6 * MB);
+        // percentOfCap is the whole cost to the device, because that is the total
+        // put() refuses on: 7MB of 50MB.
+        expect(u.percentOfCap).toBe(14);
+    });
+
+    test('a row that claims no size is counted as a row and as zero bytes', async () => {
+        // All we have is the metadata. Learning the true payload size means
+        // deserialising every blob in STORE_AUDIO, which is the cost the two-store
+        // split exists to avoid — so the row count is honest and the byte count is
+        // an admitted under-count, rather than a number we made up.
+        await seedForeignRow({ size: null });
+        const u = await BlobStore.usage();
+        expect(u.strandedCount).toBe(1);
+        expect(u.strandedBytes).toBe(0);
+    });
+
+    test('NEVER repaired: the row keeps the date it does not have', async () => {
+        await seedForeignRow();
+        for (let i = 1; i <= 4; i++) await putAt('p9', 100, i * 100);
+
+        const still = store.metaRows().filter((r) => r.id === 700)[0];
+        expect(still.createdAt).toBeNull();
+        // And it is not silently promoted into p9's archive either: four writes
+        // leave p9 with its own three, and no later recording inherits the
+        // stranded row's identity.
+        const rows = await BlobStore.list('p9');
+        expect(rows).toHaveLength(3);
+        expect(rows.some((r) => r.id === 700)).toBe(false);
+    });
+
+    test('NEVER deleted: retention and cap eviction both leave it alone (BR-7)', async () => {
+        await seedForeignRow({ size: 1 });
+        // The shape that forces BOTH kinds of eviction in one write: p1 is at the
+        // per-prompt cap with a small middle row, and the archive is close enough
+        // to 50MB that the write also has to free space from p2.
+        await putAt('p1', 10 * MB, 100);
+        const p1mid = await putAt('p1', 1 * MB, 200);
+        await putAt('p1', 10 * MB, 300);
+        await putAt('p2', 9 * MB, 400);
+        const p2mid = await putAt('p2', 9 * MB, 500);
+        await putAt('p2', 9 * MB, 600);
+
+        const res = await putAt('p1', 10 * MB, 700);
+        expect(res.ok).toBe(true);
+        expect(res.evicted).toEqual([p1mid.record.id, p2mid.record.id]);
+        // Neither plan could see the stranded row, and neither took it.
+        expect(store.ids()).toContain(700);
+        expect(store.audioIds()).toContain(700);
+    });
+
+    test('the 50MB cap is computed over what the device actually holds', async () => {
+        // 45MB stranded plus one 5MB recording. A 6MB recording does not fit, and
+        // the eviction that would have made room cannot touch the stranded row, so
+        // the write is refused instead of quietly taking the archive past the cap
+        // and leaving the browser to complain later.
+        await BlobStore.available();
+        store.seedMeta([{ id: 800, promptId: 'ghost', createdAt: null, size: 45 * MB, v: 1 }]);
+        const kept = await putAt('p1', 5 * MB, 100);
+        const idsBefore = store.ids();
+
+        const res = await putAt('p1', 6 * MB, 200);
+
+        expect(res.ok).toBe(false);
+        expect(res.code).toBe('full');
+        // MESSAGES.full's advice — "delete a few from this prompt" — would not
+        // free one byte of this, so the copy says what would (BR-3).
+        expect(res.message).toBe(BlobStore.MESSAGES.fullUnmanaged);
+        expect(res.message).toContain('cannot open or delete on its own');
+        expect(res.message).toContain('Your existing recordings are safe');
+        // Refuse, never lose: nothing deleted, nothing written.
+        expect(store.ids()).toEqual(idsBefore);
+        expect(await BlobStore.list('p1')).toHaveLength(1);
+        expect((await BlobStore.get(kept.record.id)).blob.size).toBe(5 * MB);
+    });
+
+    test('an archive that is over cap on its own account still gets the ordinary refusal', async () => {
+        // One stranded byte must not turn every "no room" into "this app cannot
+        // free the space" — that would be the overstatement facing the other way.
+        await BlobStore.available();
+        store.seedMeta([{ id: 801, promptId: 'ghost', createdAt: null, size: 1, v: 1 }]);
+        for (let i = 1; i <= 6; i++) await putAt('p' + i, 8 * MB, i * 100);   // 48MB, all protected
+
+        const res = await putAt('p7', 8 * MB, 9999);
+
+        expect(res.ok).toBe(false);
+        expect(res.code).toBe('full');
+        expect(res.message).toBe(BlobStore.MESSAGES.full);
+    });
+
+    test('clear() is the recovery path, and reports that it took them', async () => {
+        await seedForeignRow();
+        await putAt('p1', 1 * MB, 100);
+
+        const res = await BlobStore.clear();
+
+        // `removed` still counts only the recordings the learner could see;
+        // `strandedRemoved` is what a UI needs to say the invisible space is gone.
+        expect(res).toEqual({
+            ok: true, removed: 1, strandedRemoved: 1, message: BlobStore.MESSAGES.cleared
+        });
+        expect(store.ids()).toEqual([]);
+        expect(store.audioIds()).toEqual([]);
+        const u = await BlobStore.usage();
+        expect(u.strandedCount).toBe(0);
+        expect(u.strandedBytes).toBe(0);
+        expect(u.percentOfCap).toBe(0);
+    });
+
+    test('remove(id) can still take exactly one — the only targeted way back', async () => {
+        await seedForeignRow();
+        // Worth stating rather than "fixing": remove() is documented as
+        // learner-initiated and unprotected, and it names ONE id. Targeted
+        // recovery is strictly better than clear(), which takes everything. No
+        // learner-facing path can produce the id — list() is the only source of
+        // ids and never returns this row — so this is a repair tool, not a second
+        // answer a UI can trip over.
+        expect(await BlobStore.remove(700))
+            .toEqual({ ok: true, removed: 1, message: BlobStore.MESSAGES.removed });
+        expect(store.ids()).toEqual([]);
+        expect(store.audioIds()).toEqual([]);
+        expect((await BlobStore.usage()).strandedCount).toBe(0);
+    });
+
+    test('every other method still gives exactly one answer about it', async () => {
+        await seedForeignRow();
+        expect(await BlobStore.list('p9')).toEqual([]);
+        expect(await BlobStore.get(700)).toBeNull();
+        expect(await BlobStore.openUrl(700)).toMatchObject({ ok: false, code: 'missing' });
+        expect(await BlobStore.prompts()).toEqual([]);
+        expect(await BlobStore.removeForPrompt('p9')).toEqual({
+            ok: true, removed: 0, message: BlobStore.MESSAGES.nothingToRemove
+        });
+        // Reported in exactly one place, under the one name that is true of it.
+        expect((await BlobStore.usage()).strandedCount).toBe(1);
+        expect(store.ids()).toEqual([700]);
+    });
+
+    test('_strandedSummary counts what a row claims, and skips the write probe', () => {
+        expect(BlobStore._strandedSummary([
+            { id: 1, promptId: 'p', createdAt: 1, size: 10 },              // usable
+            { id: 2, promptId: 'p', createdAt: null, size: 20 },           // no index key
+            { id: 3, promptId: 'p', createdAt: undefined, size: 30 },      // ditto
+            { id: 4, promptId: '', createdAt: 1, size: 40 },               // no prompt
+            { id: 5, createdAt: 1, size: 50 },                            // ditto
+            { id: 'x', promptId: 'p', createdAt: 1, size: 60 },           // no usable key
+            { id: 0, promptId: '__probe__', createdAt: null, size: 999 },  // PROBE_ID
+            { id: 6, promptId: 'p', createdAt: null },                     // claims no size
+            null,
+            'nonsense'
+        ])).toEqual({ count: 6, bytes: 200 });
+
+        expect(BlobStore._strandedSummary([])).toEqual({ count: 0, bytes: 0 });
+        expect(BlobStore._strandedSummary(null)).toEqual({ count: 0, bytes: 0 });
+    });
+
+    test('a device this module wrote reports zero stranded, whatever it holds', async () => {
+        // The whole mechanism is inert on healthy data: put() cannot produce an
+        // unindexable row (US-220), so none of these numbers move.
+        BlobStore._now = () => undefined;                 // even with a broken clock
+        for (let i = 0; i < 8; i++) await BlobStore.put('p' + (i % 3), fakeBlob(1 * MB));
+        const u = await BlobStore.usage();
+        expect(u.strandedCount).toBe(0);
+        expect(u.strandedBytes).toBe(0);
+        expect(u.percentOfCap).toBe(Math.round((u.bytes / u.maxTotalBytes) * 100));
+    });
+});
+
 
 describe('metadata is advisory, sanitised, and never trusted', () => {
     test('mimeType falls back to the blob type, and meta wins when given', async () => {
@@ -2401,7 +2773,7 @@ describe('metadata is advisory, sanitised, and never trusted', () => {
 describe('the learner-facing copy', () => {
     test('every message says what did NOT happen', async () => {
         // The one question that matters when reading an error here.
-        ['full', 'writeFailed', 'removeFailed', 'clearFailed', 'tooLong'].forEach((k) => {
+        ['full', 'fullUnmanaged', 'writeFailed', 'removeFailed', 'clearFailed', 'tooLong'].forEach((k) => {
             expect(BlobStore.MESSAGES[k]).toMatch(/safe|unchanged|Nothing has changed|nothing else has changed/i);
         });
     });
@@ -2542,10 +2914,11 @@ describe('the learner-facing copy', () => {
         expect(await BlobStore.get(700)).toBeNull();
         expect(await BlobStore.openUrl(700)).toMatchObject({ ok: false, code: 'missing' });
 
-        // Documented consequence: the row is still physically there, so its bytes
-        // are neither reported nor reclaimable by eviction. clear() is what
-        // removes it, because it empties the stores rather than deleting rows.
+        // Consequence, since US-228 reported rather than hidden: the row is still
+        // physically there and no read admits it exists, but its bytes are now
+        // counted and named as stranded, and clear() is the whole-archive way out.
         expect(store.ids()).toEqual([700]);
+        expect(await BlobStore.usage()).toMatchObject({ strandedCount: 1, strandedBytes: 0 });
         expect((await BlobStore.clear()).ok).toBe(true);
         expect(store.ids()).toEqual([]);
         expect(store.audioIds()).toEqual([]);

@@ -49,8 +49,8 @@
  *   revoke(url) / revokeAll()            -> object-URL lifecycle
  *   remove(id)                           -> Promise<{ ok, removed }>
  *   removeForPrompt(promptId)            -> Promise<{ ok, removed }>
- *   clear()                              -> Promise<{ ok, removed }>
- *   usage()                              -> Promise<{ count, bytes, ... }>
+ *   clear()                              -> Promise<{ ok, removed, strandedRemoved }>
+ *   usage()                              -> Promise<{ count, bytes, strandedBytes, ... }>
  *   prompts()                            -> Promise<[{ promptId, count, ... }]>
  *   MESSAGES, MAX_PER_PROMPT, MAX_TOTAL_BYTES, MAX_RECORDING_BYTES
  */
@@ -163,12 +163,23 @@
         tooLong: 'That recording is too long to keep. Stop the recording when you have finished speaking and try again — nothing else has changed.',
 
         full: 'There is no room left on this device for another recording. Your existing recordings are safe. Delete a few from this prompt and record again.',
+        // Same refusal, but the space is held by rows this module cannot manage —
+        // see strandedSummary(). MESSAGES.full's advice ("delete a few from this
+        // prompt") would not free a single byte of it, so saying so would be an
+        // instruction that cannot work (US-228, BR-3). Deleting everything is the
+        // only thing that does, and that is the learner's call, not ours.
+        fullUnmanaged: 'There is no room left on this device. Some of the space is used by recordings this app cannot open or delete on its own. Your existing recordings are safe. Deleting all your recordings is the only way to free that space.',
         writeFailed: 'That recording could not be saved. Your existing recordings are unchanged.',
 
         missing: 'That recording is no longer on this device.',
         playbackFailed: 'That recording could not be opened for playback.',
 
         removed: 'Recording deleted.',
+        // removeForPrompt() asks for a STATE — "this prompt keeps nothing" — and
+        // that state can already hold. Reporting MESSAGES.removed there claimed a
+        // deletion that did not happen (US-227, BR-3), so the no-op says what is
+        // true instead: the request was satisfied and nothing was deleted for it.
+        nothingToRemove: 'There was nothing to delete — this prompt has no saved recordings on this device.',
         removeFailed: 'That recording could not be deleted. Nothing has changed.',
         cleared: 'All your recordings have been deleted from this device.',
         clearFailed: 'Your recordings could not be deleted. Nothing has changed.'
@@ -323,37 +334,36 @@
     }
 
     /**
-     * Rows we can trust: anything else in the store is ignored, never thrown on.
+     * The ONE test for "this module can manage this row" (same reason
+     * isPinnedBaseline() is one function: two copies of a predicate eventually
+     * disagree, and then the answer depends on which caller you asked — US-222).
      *
-     * "Trust" includes being FINDABLE. A row whose createdAt is not a number is
+     * "Manage" includes being FINDABLE. A row whose createdAt is not a number is
      * absent from IDX_PROMPT_TIME — a compound key containing null or undefined
      * is not a valid key, so IndexedDB skips the record entirely — and list()
-     * reads through that index. Coercing such a row to the epoch here would have
+     * reads through that index. Coercing such a row to the epoch would have
      * usage() and prompts() count a recording, and eviction act on it, while the
      * archive screen could never show it and the learner could never play it
-     * (US-220). So it is rejected on the same footing as a row with no promptId:
-     * one answer everywhere, rather than two answers depending on which method
-     * was asked.
-     *
-     * Consequence, stated rather than hidden: bytes held by such a row are not
-     * counted by usage() and cannot be reclaimed by eviction. Only clear(), which
-     * empties the stores wholesale, removes it. put() can never create one (see
-     * the createdAt guard there), so this is a foreign-write / corruption case,
-     * and under-reporting a row we refuse to manage is safer than acting on one
-     * we cannot show.
+     * (US-220). So it fails here on the same footing as a row with no promptId.
      */
+    function isUsableRow(r) {
+        if (!r || typeof r !== 'object') return false;
+        if (typeof r.id !== 'number' || r.id === PROBE_ID) return false;
+        if (typeof r.promptId !== 'string' || !r.promptId) return false;
+        // Any value the index can hold is fine, including a garbage string that
+        // cleanNumber turns into 0 — such a row IS indexed, just dated to the
+        // epoch. Only "no key at all" is unusable.
+        if (r.createdAt === null || r.createdAt === undefined) return false;
+        return true;
+    }
+
+    /** Rows we can trust: anything else in the store is ignored, never thrown on. */
     function usableRows(rows) {
         if (!rows || typeof rows.length !== 'number') return [];
         const out = [];
         for (let i = 0; i < rows.length; i++) {
             const r = rows[i];
-            if (!r || typeof r !== 'object') continue;
-            if (typeof r.id !== 'number' || r.id === PROBE_ID) continue;
-            if (typeof r.promptId !== 'string' || !r.promptId) continue;
-            // Any value the index can hold is fine, including a garbage string
-            // that cleanNumber turns into 0 — such a row IS indexed, just dated
-            // to the epoch. Only "no key at all" is unusable.
-            if (r.createdAt === null || r.createdAt === undefined) continue;
+            if (!isUsableRow(r)) continue;
             out.push({
                 id: r.id,
                 promptId: r.promptId,
@@ -365,6 +375,61 @@
                 baseline: r.baseline === true,
                 v: cleanNumber(r.v) || 1
             });
+        }
+        return out;
+    }
+
+    /**
+     * Bytes this module can SEE and cannot FREE — the other half of the row
+     * usableRows() rejects (US-228).
+     *
+     * A row we refuse to manage does not stop existing. It is invisible to
+     * list(), get() and openUrl(), it is not an eviction candidate, and put()
+     * can never create one (see the createdAt guard there) — so it is a foreign
+     * write, a corruption, or a row from a build of this module that shipped
+     * before US-220 coerced createdAt. Its bytes are real either way.
+     *
+     * Ignoring them, which is what US-220 left behind, is a slow-motion
+     * FR-DATA-6 failure: usage() under-reports the archive, the 50MB cap is
+     * computed over a total that is not the total, and the module keeps writing
+     * until the BROWSER refuses — at which point the quota retry evicts the
+     * learner's real in-between recordings to make room for bytes nobody can
+     * see. So they are counted here and reported, and never touched:
+     *
+     *   - NOT repaired. Rewriting createdAt would invent a date. A row that is
+     *     genuinely a learner's month-one recording would then sort as though it
+     *     were made at a time it was not — the exact harm the pinned baseline
+     *     exists to prevent — and the one fact we are missing would be
+     *     unrecoverable, because the absence we overwrote is the evidence.
+     *     Repair also only makes the row expendable, so it is deletion with a
+     *     fabricated date on the way.
+     *   - NOT deleted. BR-7: learner data is never silently lost, and we do not
+     *     know the row is not theirs. Two things still remove one, and both are
+     *     the learner asking rather than this module deciding: clear(), which
+     *     empties the stores wholesale, and remove(id) aimed at that exact id —
+     *     remove() is documented as learner-initiated and unprotected, and a
+     *     targeted delete is better recovery than "delete everything". No
+     *     learner-facing path can produce the id, since list() is the only source
+     *     of ids and never returns such a row, so that is a repair tool rather
+     *     than a second answer a UI can trip over.
+     *
+     * What we can report is what the row CLAIMS. `size` is metadata; the only
+     * way to learn a payload's true byte count is to deserialise every blob in
+     * STORE_AUDIO, which is the cost the two-store split exists to avoid. A row
+     * claiming no size therefore counts as 0 bytes and 1 stranded row: an
+     * under-count of bytes we cannot measure, next to an honest count of rows we
+     * cannot manage.
+     */
+    function strandedSummary(rows) {
+        const out = { count: 0, bytes: 0 };
+        if (!rows || typeof rows.length !== 'number') return out;
+        for (let i = 0; i < rows.length; i++) {
+            const r = rows[i];
+            if (!r || typeof r !== 'object') continue;
+            if (r.id === PROBE_ID) continue;   // available({deep}) cleans up after itself
+            if (isUsableRow(r)) continue;
+            out.count += 1;
+            out.bytes += cleanNumber(r.size) || 0;
         }
         return out;
     }
@@ -573,12 +638,26 @@
         });
     }
 
-    /** Every metadata row in the store, cleaned. Reads no blobs. */
-    function readAllMeta(db) {
+    /**
+     * Every metadata row in the store, split into the rows this module can manage
+     * and a summary of the ones it cannot. Reads no blobs.
+     * -> { rows: [record...], stranded: { count, bytes } }
+     */
+    function readLedger(db) {
         return runTx(db, [STORE_META], 'readonly', function (tx, ctx) {
             const req = ctx.watch(tx.objectStore(STORE_META).getAll());
-            req.onsuccess = function () { ctx.resolveWith(usableRows(req.result)); };
+            req.onsuccess = function () {
+                ctx.resolveWith({
+                    rows: usableRows(req.result),
+                    stranded: strandedSummary(req.result)
+                });
+            };
         });
+    }
+
+    /** Just the manageable rows, for the callers that only need those. */
+    function readAllMeta(db) {
+        return readLedger(db).then(function (ledger) { return ledger.rows; });
     }
 
     // ------------------------------------------------------------------
@@ -967,7 +1046,12 @@
         }).catch(function (e) {
             logError(e, 'blobstore put');
             if (isQuotaError(e) || (e && (e.code === 'cap-full' || e.code === 'quota-full'))) {
-                return fail('full', MESSAGES.full);
+                // commit() chooses between MESSAGES.full and MESSAGES.fullUnmanaged
+                // depending on WHOSE bytes are in the way (US-228); a real
+                // QuotaExceededError carries no message of its own, so it gets the
+                // ordinary one. The code stays `full` either way — the refusal is
+                // the same refusal, and callers switch on the code.
+                return fail('full', (e && e.learnerMessage) || MESSAGES.full);
             }
             if (isCloneError(e)) {
                 return fail('no-blob-storage', MESSAGES.unavailable);
@@ -1006,6 +1090,17 @@
             const readAll = ctx.watch(metaStore.getAll());
             readAll.onsuccess = function () {
                 const all = usableRows(readAll.result);
+                // Rows in OUR database that we can see and cannot free (US-228).
+                // They are part of what this app is costing the device, so they
+                // are part of the cap this app enforces on itself; a cap computed
+                // over a total that is not the total is a number that describes
+                // nothing, and excluding them lets the archive quietly grow past
+                // 50MB until the BROWSER refuses — and then the quota retry pays
+                // for those invisible bytes with the learner's real recordings.
+                // They cannot be evicted, so counting them can only ever make
+                // this write refuse earlier, which is the direction this whole
+                // file errs in (see put()'s quota note).
+                const stranded = strandedSummary(readAll.result);
                 const mine = all.filter(function (r) { return r.promptId === row.promptId; }).sort(byAge);
 
                 // The first recording for a prompt is its pinned baseline, and
@@ -1021,13 +1116,24 @@
                 const remainingBytes = totalBytes(all) - totalBytes(all.filter(function (r) {
                     return retentionVictims.indexOf(r.id) !== -1;
                 }));
-                const overCap = (remainingBytes + row.size) - MAX_TOTAL_BYTES;
+                const ownBytes = remainingBytes + row.size;
+                const overCap = (ownBytes + stranded.bytes) - MAX_TOTAL_BYTES;
                 const spacePlan = planForSpace(all, retentionVictims, overCap);
 
                 if (!spacePlan.ok) {
                     // Refuse. Aborting here means not one byte was deleted, so
                     // "there is no room" costs the learner nothing they had.
-                    ctx.refuse(storeError('cap-full', MESSAGES.full));
+                    //
+                    // Which refusal, though: if this write would have fitted but
+                    // for the stranded bytes, MESSAGES.full's "delete a few from
+                    // this prompt" is advice that cannot free them, so say what
+                    // can (BR-3). When the manageable archive is over cap on its
+                    // own account, the ordinary copy is the true one and blaming
+                    // the stranded rows would be the overstatement.
+                    ctx.refuse(storeError('cap-full',
+                        (stranded.bytes > 0 && ownBytes <= MAX_TOTAL_BYTES)
+                            ? MESSAGES.fullUnmanaged
+                            : MESSAGES.full));
                     return;
                 }
 
@@ -1348,7 +1454,23 @@
         });
     }
 
-    /** Delete every recording for one prompt. */
+    /**
+     * Delete every recording for one prompt.
+     *
+     * A prompt that already holds nothing is `{ ok:true, removed:0 }` — NOT
+     * `{ ok:false }`, which is where this deliberately parts company with
+     * remove(id) (US-217 / US-227). remove(id) names a specific recording, which
+     * either existed or did not, and a UI acting on a stale list needs to be told
+     * its list is stale. This method names a STATE — "this prompt keeps nothing"
+     * — and that state holds when it returns, so the request succeeded; reporting
+     * failure for a satisfied request would make a caller show an error over a
+     * no-op, and would force every caller to treat one failure code as success.
+     *
+     * What was wrong was only the copy: MESSAGES.removed asserts a deletion.
+     * `removed === 0` now carries MESSAGES.nothingToRemove instead, so nothing
+     * claims something that did not happen (BR-3). Callers decide from `ok` and
+     * `removed`, never by comparing the message.
+     */
     function removeForPrompt(promptId) {
         const key = normalizePromptId(promptId);
         if (!key) return Promise.resolve(fail('bad-prompt', MESSAGES.removeFailed));
@@ -1356,13 +1478,20 @@
             return readAllMeta(db).then(function (all) {
                 const ids = all.filter(function (r) { return r.promptId === key; })
                                .map(function (r) { return r.id; });
-                if (ids.length === 0) return { ok: true, removed: 0, message: MESSAGES.removed };
+                if (ids.length === 0) {
+                    return { ok: true, removed: 0, message: MESSAGES.nothingToRemove };
+                }
                 return removeIds(db, ids).then(function (gone) {
                     // `gone` rather than `ids`: another tab may have deleted a row
                     // between the ledger read and this transaction, and this
-                    // method reports what it removed (US-217).
+                    // method reports what it removed (US-217) — including saying
+                    // so when that turns out to be nothing.
                     if (gone.length) revokeAll();
-                    return { ok: true, removed: gone.length, message: MESSAGES.removed };
+                    return {
+                        ok: true,
+                        removed: gone.length,
+                        message: gone.length ? MESSAGES.removed : MESSAGES.nothingToRemove
+                    };
                 });
             });
         }).catch(function (e) {
@@ -1378,19 +1507,31 @@
      * blocked by any other tab holding the database open, so it can hang
      * indefinitely, and the schema would have to be rebuilt afterwards.
      * Clearing both stores in one transaction is atomic and cannot be blocked.
+     *
+     * This is also the ONLY thing that frees a stranded row (US-228), because it
+     * empties the stores instead of deleting rows it has to be able to name. It
+     * therefore reports `strandedRemoved` alongside `removed`, so a caller can
+     * say that the space usage() attributed to recordings this app could not open
+     * is genuinely gone. `removed` still counts only the recordings the learner
+     * could see, so it means what it always meant.
      */
     function clear() {
         return openDb().then(function (db) {
-            return readAllMeta(db).then(function (all) {
+            return readLedger(db).then(function (ledger) {
                 return runTx(db, [STORE_META, STORE_AUDIO], 'readwrite', function (tx, ctx) {
                     ctx.watch(tx.objectStore(STORE_META).clear());
                     ctx.watch(tx.objectStore(STORE_AUDIO).clear());
-                    ctx.resolveWith(all.length);
+                    ctx.resolveWith({ removed: ledger.rows.length, stranded: ledger.stranded.count });
                 });
             });
-        }).then(function (removed) {
+        }).then(function (out) {
             revokeAll();
-            return { ok: true, removed: removed, message: MESSAGES.cleared };
+            return {
+                ok: true,
+                removed: out.removed,
+                strandedRemoved: out.stranded,
+                message: MESSAGES.cleared
+            };
         }).catch(function (e) {
             logError(e, 'blobstore clear');
             return fail('clear-failed', (e && e.learnerMessage) || MESSAGES.clearFailed);
@@ -1406,6 +1547,20 @@
      * zeroes when storage is unavailable, which is honest and lets the
      * Dashboard say so instead of showing a lie.
      *
+     * `count` and `bytes` describe the SAME set — the recordings list() can show
+     * and remove() can delete — so the storage line and the archive screen can
+     * never disagree about how many recordings exist (US-220).
+     *
+     * `strandedCount` / `strandedBytes` are the remainder: rows in this database
+     * that no method can show, play or evict (US-228, and see strandedSummary()).
+     * They are reported separately rather than folded into `count`, because
+     * folding them in would put a recording in the storage line that the archive
+     * screen cannot list. `percentOfCap` DOES include them, because the cap is
+     * about what this app costs the device and put() refuses on the same total —
+     * a Dashboard reading 60% while put() reports "no room left" would be the
+     * same two-answers defect one level up. On any device this module wrote,
+     * both stranded figures are 0 and every number here is what it always was.
+     *
      * `estimate` is the BROWSER's view (navigator.storage.estimate), which
      * covers every store this origin uses — Cache API, localStorage,
      * IndexedDB — not just recordings. Reported separately from our own cap for
@@ -1416,6 +1571,8 @@
             available: false,
             count: 0,
             bytes: 0,
+            strandedCount: 0,
+            strandedBytes: 0,
             promptCount: 0,
             maxPerPrompt: MAX_PER_PROMPT,
             maxTotalBytes: MAX_TOTAL_BYTES,
@@ -1424,20 +1581,24 @@
         };
 
         return openDb().then(function (db) {
-            return readAllMeta(db);
-        }).then(function (all) {
+            return readLedger(db);
+        }).then(function (ledger) {
+            const all = ledger.rows;
             const prompts = Object.create(null);
             all.forEach(function (r) { prompts[r.promptId] = true; });
             const bytes = totalBytes(all);
+            const held = bytes + ledger.stranded.bytes;
             return browserEstimate().then(function (estimate) {
                 return {
                     available: true,
                     count: all.length,
                     bytes: bytes,
+                    strandedCount: ledger.stranded.count,
+                    strandedBytes: ledger.stranded.bytes,
                     promptCount: Object.keys(prompts).length,
                     maxPerPrompt: MAX_PER_PROMPT,
                     maxTotalBytes: MAX_TOTAL_BYTES,
-                    percentOfCap: Math.min(100, Math.round((bytes / MAX_TOTAL_BYTES) * 100)),
+                    percentOfCap: Math.min(100, Math.round((held / MAX_TOTAL_BYTES) * 100)),
                     estimate: estimate
                 };
             });
@@ -1522,6 +1683,7 @@
         _planRetention: planRetention,
         _planForSpace: planForSpace,
         _evictionCandidates: evictionCandidates,
+        _strandedSummary: strandedSummary,
         _reset: function () { dbPromise = null; capability = null; deepProbe = null; }
     };
 
