@@ -1963,6 +1963,15 @@ function initializeNavigation() {
 }
 
 function switchSection(sectionName) {
+    // Leaving a section releases the object urls it owns, per surface, so a
+    // recording is not pinned in memory for the rest of the session by a learner
+    // who wandered off mid-comparison (NFR-6: 3GB Android devices). Each release
+    // touches only its own surface — see the RecordingArchive header.
+    if (state.currentSection !== sectionName && window.RecordingArchive) {
+        if (state.currentSection === 'listening') RecordingArchive.release('listening');
+        if (state.currentSection === 'pronunciation') releasePronCompare();
+    }
+
     document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     document.getElementById(sectionName).classList.add('active');
@@ -5504,9 +5513,7 @@ function readingParagraph(text, className) {
 
 /** `"a", "b" and "c"` — for listing words back without a bare comma soup. */
 function quotedList(words) {
-    const quoted = words.map(word => `"${word}"`);
-    if (quoted.length <= 1) return quoted.join('');
-    return quoted.slice(0, -1).join(', ') + ' and ' + quoted[quoted.length - 1];
+    return joinWithAnd(words.map(word => `"${word}"`));
 }
 
 /**
@@ -5981,6 +5988,879 @@ function initializeReadingButtons() {
     };
 }
 
+// ===== BEGIN RECORDING ARCHIVE (US-136) =====
+/**
+ * RecordingArchive — the caller js/core/blobstore.js never had (US-136 / US-605).
+ * ===========================================================================
+ *
+ * WHAT THIS IS FOR. blobstore.js keeps a learner's recordings in IndexedDB, per
+ * prompt, with the FIRST recording ever made pinned forever. Nothing called it, so
+ * TEACHING_METHODOLOGY.md §2's "keep the recording; progress over weeks is the
+ * reward" was untrue: both recording paths did URL.revokeObjectURL() on Prev/Next
+ * and the recording died with the navigation. This module is the seam between the
+ * store and the two surfaces that record — Listening & Speaking, and the
+ * pronunciation production task (FR-PRN-4, US-404).
+ *
+ * WHY IT IS A SELF-CONTAINED IIFE INSIDE app.js. app.js cannot be required by the
+ * test suite (see __tests__/README.md) and the promptId rule below is the one
+ * thing in this story that MUST be proved rather than asserted about source text.
+ * Everything here depends on `window.BlobStore`, `document`, `navigator` and
+ * nothing else in app.js, so __tests__/unit/sections.test.js extracts the source
+ * between the BEGIN/END markers and evaluates it against a fake IndexedDB. Do not
+ * reach for an app.js global from inside this block; pass it in.
+ *
+ * ---------------------------------------------------------------------------
+ * `promptId` IS STABLE CONTENT IDENTITY. THIS IS THE WHOLE STORY.
+ * ---------------------------------------------------------------------------
+ *
+ * The obvious key is `state.currentListeningIndex`, and it is the one thing that
+ * must not be used. Indices RENUMBER: insert one sentence at the front of a tier
+ * and every recording made after it silently belongs to the next learner's
+ * sentence — so the month-one/month-three comparison that Strand E.7 calls its
+ * strongest motivator would be comparing two different sentences, and the app
+ * would have no way to notice. `completedExercises` stamps are positional and
+ * that is survivable (a lost tick), but a recording is the learner's own voice.
+ *
+ * So the id is derived FROM THE CONTENT ITSELF:
+ *
+ *   promptId = '<kind>:' + ID_VERSION + ':' + digest(contentKey(text))
+ *
+ *   contentKey()  the spoken words, and only the words: NFKC-normalised,
+ *                 apostrophes dropped so "don't" / "don’t" / "dont" agree,
+ *                 everything that is not a letter or digit collapsed to one
+ *                 space, lowercased, trimmed. What survives is what the learner
+ *                 actually said, which is what the recording is a recording OF.
+ *   digest()      two independent 32-bit hashes of that key, base-36. ~64 bits
+ *                 over a few hundred authored sentences; the suite asserts that
+ *                 no two sentences in this repo collide.
+ *   ID_VERSION    bumping it is how a future change to contentKey() becomes a
+ *                 visible new namespace instead of silently orphaning archives.
+ *
+ * The properties that buys, each of which the suite pins:
+ *   - INSERTION AND REORDERING ARE FREE. The id of "Hello, how are you today?"
+ *     does not mention where in the array it sits, so inserting a sentence in
+ *     front of it moves the index and not the archive.
+ *   - AN EDIT TO AN UNRELATED FIELD IS FREE. `rate`, `seconds`, `situation`,
+ *     `focus`, `notes`, `shadow`, `questions` and `tier` are not in the key.
+ *     Authoring a comprehension question onto a sentence a learner recorded in
+ *     month one must not cost them the recording.
+ *   - PUNCTUATION AND CASING ARE FREE, because they are not the utterance.
+ *   - TIER IS DELIBERATELY NOT IN THE KEY. A sentence promoted from `foundation`
+ *     to `everyday` is the same sentence and keeps its recordings. The cost is
+ *     stated rather than hidden: the same sentence authored into two tiers shares
+ *     one archive. For a recording of a learner saying that sentence, sharing is
+ *     the correct answer, and getListeningItem() already serves one curated
+ *     sentence at several indices — content identity is the only key under which
+ *     those are the same prompt.
+ *   - EDITING THE SENTENCE ITSELF DOES change the id, and must. A different
+ *     sentence is a different prompt; keeping the old recordings under it would
+ *     put the learner's voice against words they never said.
+ *
+ * Pronunciation prompts do not need any of this: `pair.id` ('iː-ɪ', 'v-w') is
+ * already an authored stable content id and every comment in that section
+ * protects it. It is used verbatim, so an archive row stays readable.
+ *
+ * ---------------------------------------------------------------------------
+ * NOTHING HERE MAY BLOCK AN EXERCISE (NFR-8's principle, FR-A11Y-4)
+ * ---------------------------------------------------------------------------
+ * available() can answer 'no-indexeddb', 'blocked', 'blocked-by-other-tab',
+ * 'timeout', 'full', 'no-blob', 'no-blob-storage' or 'blob-roundtrip-failed', and
+ * no method of the store rejects. So: the attempt is marked BEFORE the save is
+ * attempted, every failure is reported as a note beside the exercise and never as
+ * a modal or a thrown error, and on a browser with no IndexedDB the learner keeps
+ * exactly today's behaviour — record, play back, until they leave the sentence.
+ * The archive is an enhancement and is never a precondition for anything.
+ *
+ * The failure copy is BlobStore.MESSAGES, used verbatim. That module's messages
+ * say which prompt lost a recording and what did NOT happen; a generic "Error
+ * saving" written over the top of them would be a downgrade.
+ *
+ * ---------------------------------------------------------------------------
+ * OBJECT-URL DISCIPLINE
+ * ---------------------------------------------------------------------------
+ * openUrl() hands back a revoke() that the CALLER owns, and the store caps live
+ * urls at 8 (revoking the oldest past that, which is a net for a caller that
+ * forgot). Handles here are tracked PER SURFACE — 'listening', 'pron' — and a
+ * surface holds at most one at a time, so:
+ *   - leaving a sentence releases that surface's url and nothing else's, so a
+ *     Prev/Next in Listening cannot revoke a url the pronunciation task is
+ *     playing;
+ *   - two surfaces at once is 2 live urls against a cap of 8, so the net never
+ *     has to fire and no walk can leak.
+ * BlobStore.revokeAll() is deliberately never called from here: it would reach
+ * across surfaces. (remove() calls it internally, which is why deleting drops
+ * every tracked handle below.)
+ */
+(function (global) {
+    'use strict';
+
+    // Bump ONLY when contentKey() changes. See the header: a bump orphans old
+    // archives visibly, under a new namespace, rather than silently.
+    const ID_VERSION = '1';
+
+    const KIND_LISTENING = 'lsn';
+    const KIND_PRONUNCIATION = 'pron';
+
+    function store() {
+        return global.BlobStore || null;
+    }
+
+    function messages() {
+        const s = store();
+        return (s && s.MESSAGES) || {};
+    }
+
+    function logError(e, context) {
+        try {
+            if (global.AppErrorHandler && typeof global.AppErrorHandler.logError === 'function') {
+                global.AppErrorHandler.logError(e, context);
+            } else if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[archive] ' + context + ':', e);
+            }
+        } catch (ignored) { /* a hostile console must never break an exercise */ }
+    }
+
+    // ------------------------------------------------------------------
+    // Stable content identity
+    // ------------------------------------------------------------------
+
+    /**
+     * The spoken words, and nothing else. See the header for why each step is
+     * here. Returns '' when there is no usable text, which callers treat as
+     * "this item cannot be archived" rather than as a key.
+     */
+    function contentKey(text) {
+        if (typeof text !== 'string') return '';
+        let out = text;
+        try {
+            if (typeof out.normalize === 'function') out = out.normalize('NFKC');
+        } catch (e) { /* an engine without NFKC still gets a stable key */ }
+        out = out.toLowerCase()
+            // Apostrophes vanish rather than becoming a space: "don't" and "dont"
+            // are the same utterance, and a straight-to-curly copy-edit is not a
+            // content change.
+            .replace(/['‘’ʼ`´]/g, '')
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim();
+        if (out) return out;
+        // Nothing ASCII survived (a non-Latin script, or punctuation only). Fall
+        // back to the trimmed original so such an item still gets ONE stable key
+        // instead of colliding with every other unusable one on ''.
+        const raw = text.trim();
+        return raw ? 'u+' + raw.toLowerCase() : '';
+    }
+
+    /** FNV-1a over char codes, avalanched. Two seeds give ~64 bits. */
+    function hash32(str, seed) {
+        let h = seed >>> 0;
+        for (let i = 0; i < str.length; i++) {
+            h ^= str.charCodeAt(i);
+            h = Math.imul(h, 16777619) >>> 0;
+        }
+        h ^= h >>> 13;
+        h = Math.imul(h, 0x5bd1e995) >>> 0;
+        h ^= h >>> 15;
+        return h >>> 0;
+    }
+
+    function base36(n) {
+        return ('000000' + n.toString(36)).slice(-7);
+    }
+
+    function digest(key) {
+        return base36(hash32(key, 0x811c9dc5)) + base36(hash32(key, 0x01000193));
+    }
+
+    /** '<kind>:<version>:<digest>', or '' when there is nothing to key on. */
+    function promptIdFor(kind, text) {
+        const key = contentKey(text);
+        if (!key || !kind) return '';
+        return kind + ':' + ID_VERSION + ':' + digest(key);
+    }
+
+    /**
+     * The promptId of a NORMALISED listening item (data.js normaliseListeningItem).
+     * Keyed on `transcript`, which is the words the learner is asked to say back —
+     * it defaults to `text` and is the field FR-A11Y-2 guarantees is never empty.
+     */
+    function listeningPromptId(item) {
+        if (!item) return '';
+        return promptIdFor(KIND_LISTENING, item.transcript || item.text || '');
+    }
+
+    /** A pronunciation pair's promptId. `pair.id` is already stable content id. */
+    function pronunciationPromptId(pair) {
+        if (!pair || !pair.id) return '';
+        return KIND_PRONUNCIATION + ':' + ID_VERSION + ':' + String(pair.id);
+    }
+
+    // ------------------------------------------------------------------
+    // Naming a prompt the learner cannot see
+    // ------------------------------------------------------------------
+    //
+    // put() reports `evictedPrompts`, and BR-3 means we say WHICH sentence lost a
+    // recording rather than letting the learner assume it was this one. Ids are
+    // hashes, so app.js registers a catalogue — every authored prompt and its
+    // label — and it is rebuilt lazily because content files self-register at load.
+
+    let catalogueSource = null;
+    let catalogueMap = null;
+
+    function setCatalogue(fn) {
+        catalogueSource = typeof fn === 'function' ? fn : null;
+        catalogueMap = null;
+    }
+
+    function catalogue() {
+        if (catalogueMap) return catalogueMap;
+        catalogueMap = Object.create(null);
+        if (!catalogueSource) return catalogueMap;
+        try {
+            (catalogueSource() || []).forEach(function (entry) {
+                if (entry && entry.promptId && entry.label) {
+                    catalogueMap[entry.promptId] = String(entry.label);
+                }
+            });
+        } catch (e) {
+            logError(e, 'archive catalogue');
+        }
+        return catalogueMap;
+    }
+
+    /**
+     * A learner-readable name for a promptId. Falls back honestly: an id we
+     * cannot resolve is an algorithmically generated sentence or one whose text
+     * has since been edited, and inventing a name for it would be worse than
+     * saying so.
+     */
+    function describePrompt(promptId) {
+        const label = catalogue()[promptId];
+        if (label) return '“' + label + '”';
+        return 'another sentence you have recorded';
+    }
+
+    // ------------------------------------------------------------------
+    // Availability, asked once
+    // ------------------------------------------------------------------
+    //
+    // available({deep:true}) costs one 1-byte round trip and is the only way to
+    // catch the WebKit builds where IndexedDB works and Blob storage does not. So
+    // it is asked once per page and cached here, not per render.
+
+    let availabilityPromise = null;
+
+    // Failures the module deliberately does NOT cache, because they can clear
+    // without the learner reloading: another tab, a slow open, a full disk.
+    const TRANSIENT = ['blocked', 'blocked-by-other-tab', 'timeout', 'full', 'unavailable'];
+
+    function availability() {
+        if (availabilityPromise) return availabilityPromise;
+        const s = store();
+        if (!s || typeof s.available !== 'function') {
+            availabilityPromise = Promise.resolve({
+                ok: false, code: 'no-blobstore',
+                message: messages().unavailable ||
+                    'This browser will not let the app keep recordings, so this one lasts until you leave the page. Everything else works normally.'
+            });
+            return availabilityPromise;
+        }
+        availabilityPromise = s.available({ deep: true }).then(function (result) {
+            // A transient failure (another tab, a timeout, a full disk) must be
+            // retryable without a page reload — the module deliberately does not
+            // cache those, so neither do we.
+            if (result && !result.ok && TRANSIENT.indexOf(result.code) !== -1) {
+                availabilityPromise = null;
+            }
+            return result;
+        }).catch(function (e) {
+            // available() documents that it never rejects. Belt and braces: if it
+            // ever did, an exercise still must not break.
+            logError(e, 'archive availability');
+            availabilityPromise = null;
+            return { ok: false, code: 'unavailable', message: messages().unavailable };
+        });
+        return availabilityPromise;
+    }
+
+    /** Test seam: forget the cached answer. */
+    function resetAvailability() {
+        availabilityPromise = null;
+    }
+
+    // ------------------------------------------------------------------
+    // Object urls, one live handle per surface
+    // ------------------------------------------------------------------
+
+    const handles = Object.create(null);   // surface -> { url, revoke } | null
+    const players = Object.create(null);   // surface -> HTMLAudioElement | null
+
+    function release(surface) {
+        const player = players[surface];
+        if (player) {
+            try { player.pause(); } catch (e) { /* nothing playing */ }
+            players[surface] = null;
+        }
+        const handle = handles[surface];
+        handles[surface] = null;
+        if (handle && typeof handle.revoke === 'function') {
+            try { handle.revoke(); } catch (e) { /* already gone */ }
+            return true;
+        }
+        return false;
+    }
+
+    /** Every surface. Called when the store deletes rows out from under us. */
+    function releaseAll() {
+        Object.keys(handles).forEach(release);
+    }
+
+    function liveUrls(surface) {
+        if (surface) return handles[surface] ? 1 : 0;
+        return Object.keys(handles).filter(function (k) { return !!handles[k]; }).length;
+    }
+
+    /**
+     * A playable url for one stored recording, owned by `surface`.
+     * Releases that surface's previous url first — never another surface's — so a
+     * walk cannot leak and a second surface's playback cannot be cut off.
+     * @returns {Promise<Object>} { ok:true, url, record, done() } | { ok:false, code, message }
+     */
+    function open(surface, id) {
+        const s = store();
+        if (!s || typeof s.openUrl !== 'function') {
+            return Promise.resolve({
+                ok: false, code: 'no-blobstore',
+                message: messages().playbackFailed || 'That recording could not be opened for playback.'
+            });
+        }
+        release(surface);
+        return s.openUrl(id).then(function (result) {
+            if (!result || !result.ok) return result || { ok: false, code: 'read-failed', message: messages().playbackFailed };
+            handles[surface] = result;
+            return {
+                ok: true,
+                url: result.url,
+                record: result.record,
+                done: function () { if (handles[surface] === result) release(surface); }
+            };
+        });
+    }
+
+    /**
+     * Open, play, and release on the way out.
+     * @param {Function} [onStatus] called with (text, ok) for the status line.
+     */
+    function play(surface, id, onStatus) {
+        return open(surface, id).then(function (opened) {
+            if (!opened.ok) {
+                if (onStatus) onStatus(opened.message, false);
+                return opened;
+            }
+            if (typeof global.Audio !== 'function') {
+                opened.done();
+                if (onStatus) onStatus(messages().playbackFailed, false);
+                return { ok: false, code: 'no-audio-element', message: messages().playbackFailed };
+            }
+            const audio = new global.Audio(opened.url);
+            players[surface] = audio;
+            audio.onended = function () { opened.done(); };
+            audio.onerror = function () {
+                opened.done();
+                if (onStatus) onStatus(messages().playbackFailed, false);
+            };
+            try {
+                const started = audio.play();
+                if (started && typeof started.catch === 'function') {
+                    started.catch(function (e) {
+                        logError(e, 'archive playback');
+                        opened.done();
+                        if (onStatus) onStatus(messages().playbackFailed, false);
+                    });
+                }
+            } catch (e) {
+                logError(e, 'archive playback');
+                opened.done();
+                if (onStatus) onStatus(messages().playbackFailed, false);
+            }
+            return opened;
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Recording capture, shared by both surfaces
+    // ------------------------------------------------------------------
+    //
+    // One capture at a time, on purpose: two MediaRecorders on one microphone is
+    // not a state any learner asked for, and it is a state that leaks a stream.
+
+    let activeRecorder = null;
+    let activeSurface = null;
+
+    function stopTracks(stream) {
+        try {
+            (stream.getTracks() || []).forEach(function (t) {
+                try { t.stop(); } catch (e) { /* already stopped */ }
+            });
+        } catch (e) { /* no tracks */ }
+    }
+
+    function isRecording(surface) {
+        if (!activeRecorder || activeRecorder.state !== 'recording') return false;
+        return surface ? activeSurface === surface : true;
+    }
+
+    function recorderMissing() {
+        const nav = global.navigator;
+        return !nav || !nav.mediaDevices ||
+            typeof nav.mediaDevices.getUserMedia !== 'function' ||
+            typeof global.MediaRecorder !== 'function';
+    }
+
+    /**
+     * Start recording for `surface`.
+     * @param {Object} handlers { onstart, onstop(blob, meta), onerror(err) }
+     * @returns {Promise<boolean>} whether recording actually started. Never rejects:
+     *          a refused microphone is FR-A11Y-4's case, not an error to throw.
+     */
+    function startCapture(surface, handlers) {
+        const h = handlers || {};
+        if (recorderMissing()) {
+            const err = new Error('no-recorder');
+            err.code = 'no-recorder';
+            if (h.onerror) h.onerror(err);
+            return Promise.resolve(false);
+        }
+        return global.navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+            let rec;
+            try {
+                rec = new global.MediaRecorder(stream);
+            } catch (e) {
+                stopTracks(stream);
+                if (h.onerror) h.onerror(e);
+                return false;
+            }
+            const chunks = [];
+            const startedAt = Date.now();
+            rec.ondataavailable = function (event) {
+                if (event && event.data && event.data.size > 0) chunks.push(event.data);
+            };
+            rec.onstop = function () {
+                stopTracks(stream);
+                activeRecorder = null;
+                activeSurface = null;
+                const type = (typeof rec.mimeType === 'string' && rec.mimeType) ? rec.mimeType : 'audio/webm';
+                let blob = null;
+                try {
+                    blob = new global.Blob(chunks, { type: type });
+                } catch (e) {
+                    logError(e, 'archive capture blob');
+                }
+                if (h.onstop) {
+                    h.onstop(blob, { durationMs: Math.max(0, Date.now() - startedAt), mimeType: type });
+                }
+            };
+            activeRecorder = rec;
+            activeSurface = surface;
+            rec.start();
+            if (h.onstart) h.onstart();
+            return true;
+        }).catch(function (e) {
+            if (h.onerror) h.onerror(e);
+            return false;
+        });
+    }
+
+    function stopCapture() {
+        if (!activeRecorder || activeRecorder.state !== 'recording') return false;
+        activeRecorder.stop();
+        return true;
+    }
+
+    // ------------------------------------------------------------------
+    // Saving
+    // ------------------------------------------------------------------
+
+    /**
+     * Keep a recording, or say honestly why not.
+     *
+     * @returns {Promise<Object>} { ok, code?, message, elsewhere:[names] }. Never
+     *          rejects, and never throws over BlobStore's own copy: `message` is
+     *          the store's, and `elsewhere` names the OTHER prompts that lost a
+     *          recording so the caller can add that instead of implying it was
+     *          this one (US-218 / BR-3).
+     */
+    function save(promptId, blob, meta) {
+        const s = store();
+        if (!promptId) {
+            return Promise.resolve({ ok: false, code: 'bad-prompt', message: null, elsewhere: [] });
+        }
+        if (!s || typeof s.put !== 'function') {
+            return Promise.resolve({
+                ok: false, code: 'no-blobstore',
+                message: messages().unavailable, elsewhere: []
+            });
+        }
+        return availability().then(function (can) {
+            if (!can.ok) {
+                // Not attempted. Reporting the availability message rather than a
+                // write failure is the difference between "this browser will not
+                // keep recordings" and "your recording was lost".
+                return { ok: false, code: can.code, message: can.message, elsewhere: [] };
+            }
+            return s.put(promptId, blob, meta).then(function (result) {
+                const elsewhere = (result && result.evictedPrompts ? result.evictedPrompts : [])
+                    .filter(function (id) { return id !== promptId; })
+                    .map(describePrompt);
+                return {
+                    ok: !!(result && result.ok),
+                    code: result && result.code,
+                    message: result && result.message,
+                    record: result && result.record,
+                    elsewhere: elsewhere
+                };
+            });
+        }).catch(function (e) {
+            logError(e, 'archive save');
+            return { ok: false, code: 'write-failed', message: messages().writeFailed, elsewhere: [] };
+        });
+    }
+
+    function remove(id) {
+        const s = store();
+        if (!s || typeof s.remove !== 'function') {
+            return Promise.resolve({ ok: false, code: 'no-blobstore', message: messages().removeFailed });
+        }
+        // remove() calls revokeAll() internally when it deletes something, so every
+        // handle we hold may already be dead. Drop them rather than hand a revoked
+        // url to an <audio> element.
+        return s.remove(id).then(function (result) {
+            releaseAll();
+            return result;
+        });
+    }
+
+    function list(promptId) {
+        const s = store();
+        if (!promptId || !s || typeof s.list !== 'function') return Promise.resolve([]);
+        return s.list(promptId);
+    }
+
+    // ------------------------------------------------------------------
+    // Drawing the archive
+    // ------------------------------------------------------------------
+
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    function two(n) {
+        return (n < 10 ? '0' : '') + n;
+    }
+
+    /** '12 Sep 2026, 14:03'. Formatted by hand: a locale-dependent string is one
+     *  the suite cannot pin, and the learner only needs "which try was this". */
+    function whenText(ms) {
+        const d = new Date(ms);
+        if (isNaN(d.getTime())) return '';
+        return d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear() +
+               ', ' + two(d.getHours()) + ':' + two(d.getMinutes());
+    }
+
+    /** '0:04', or '' when nothing measured the length (never '0:00' — US-220). */
+    function durationText(ms) {
+        if (typeof ms !== 'number' || !isFinite(ms) || ms <= 0) return '';
+        const seconds = Math.max(1, Math.round(ms / 1000));
+        return Math.floor(seconds / 60) + ':' + two(seconds % 60);
+    }
+
+    const NUMBER_WORDS = ['no', 'one', 'two', 'three', 'four', 'five'];
+
+    /** The retention rule in words, read off the store's own constant. */
+    function retentionText() {
+        const s = store();
+        const n = (s && typeof s.MAX_PER_PROMPT === 'number') ? s.MAX_PER_PROMPT : 3;
+        const later = n - 1;
+        const word = NUMBER_WORDS[later] || String(later);
+        return later === 1
+            ? 'This keeps your first recording and your most recent one.'
+            : 'This keeps your first recording and your ' + word + ' most recent.';
+    }
+
+    function para(text, className) {
+        const p = document.createElement('p');
+        p.className = className || 'archive-note';
+        p.textContent = text;
+        return p;
+    }
+
+    function button(label, className, ariaLabel, onClick) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = className;
+        b.textContent = label;
+        if (ariaLabel) b.setAttribute('aria-label', ariaLabel);
+        b.addEventListener('click', onClick);
+        return b;
+    }
+
+    /**
+     * Draw one prompt's archive.
+     *
+     * @param {Object} opts
+     *   hostId    element to draw into. Missing element is not an error: offline
+     *             can serve a new app.js against an older index.html.
+     *   promptId  stable content id, from listeningPromptId / pronunciationPromptId
+     *   surface   'listening' | 'pron' — the object-url owner
+     *   thing     what one recording is of, for the copy: 'sentence' | 'pair'
+     *   status    optional element id for the surface's status line
+     * @returns {Promise<Object>} { records, availability } for the caller/tests.
+     */
+    function render(opts) {
+        const o = opts || {};
+        const host = document.getElementById(o.hostId);
+        if (!host) return Promise.resolve({ records: [], availability: null });
+
+        const surface = o.surface || 'listening';
+        const thing = o.thing || 'sentence';
+
+        host.textContent = '';
+        if (!o.promptId) {
+            host.hidden = true;
+            return Promise.resolve({ records: [], availability: null });
+        }
+        host.hidden = false;
+
+        return availability().then(function (can) {
+            if (!can.ok) {
+                // The store's own copy, verbatim, plus what still works. Never a
+                // generic error: MESSAGES.otherTab tells the learner to close a
+                // tab, and 'unavailable' promises the exercise is unaffected.
+                host.appendChild(para(can.message || messages().unavailable, 'archive-note archive-unavailable'));
+                host.appendChild(para(
+                    'Recording still works. You can play back what you just said until you leave this ' +
+                    thing + ' — nothing is kept after that.', 'archive-note'));
+                return { records: [], availability: can };
+            }
+            return list(o.promptId).then(function (records) {
+                drawList(host, records, o, surface, thing);
+                return { records: records, availability: can };
+            });
+        }).catch(function (e) {
+            logError(e, 'archive render');
+            host.textContent = '';
+            host.appendChild(para(messages().unavailable, 'archive-note archive-unavailable'));
+            return { records: [], availability: null };
+        });
+    }
+
+    function setStatus(o, text, ok) {
+        if (!o.status) return;
+        const el = document.getElementById(o.status);
+        if (!el) return;
+        el.textContent = text || '';
+        el.className = 'recording-status' + (ok === false ? ' info' : (ok === true ? ' success' : ''));
+    }
+
+    function drawList(host, records, o, surface, thing) {
+        const heading = document.createElement('h4');
+        heading.className = 'archive-head';
+        heading.textContent = thing === 'pair'
+            ? 'Your recordings of this pair'
+            : 'Your recordings of this sentence';
+        host.appendChild(heading);
+
+        if (!records.length) {
+            host.appendChild(para(
+                'Nothing is kept for this ' + thing + ' yet. Record yourself and it stays on this device, ' +
+                'so next month you can hear today against then.'));
+            return;
+        }
+
+        const baseline = records.filter(function (r) { return r.baseline; })[0] || null;
+        const newest = records[0];
+
+        // Strand E.7 in one button: the comparison the whole feature exists for.
+        if (baseline && newest && baseline.id !== newest.id) {
+            host.appendChild(button(
+                '▶ Your first try, then your latest',
+                'btn-primary archive-compare',
+                'Play your first recording and then your most recent one',
+                function () {
+                    playPair(surface, [baseline.id, newest.id], function (text, ok) {
+                        setStatus(o, text, ok);
+                    });
+                    setStatus(o, 'Playing your first try, then your latest.', true);
+                }));
+        }
+
+        const ul = document.createElement('ul');
+        ul.className = 'archive-list';
+
+        records.forEach(function (record) {
+            const li = document.createElement('li');
+            li.className = 'archive-item' + (record.baseline ? ' is-baseline' : '');
+
+            const label = document.createElement('span');
+            label.className = 'archive-when';
+            const when = whenText(record.createdAt);
+            const length = durationText(record.durationMs);
+            label.textContent = (record.baseline ? 'Your first try' : 'A later try') +
+                (when ? ' — ' + when : '') + (length ? ' (' + length + ')' : '');
+            li.appendChild(label);
+
+            li.appendChild(button('▶ Play', 'btn-secondary archive-play',
+                'Play this recording', function () {
+                    setStatus(o, 'Playing your recording.', true);
+                    play(surface, record.id, function (text, ok) { setStatus(o, text, ok); });
+                }));
+
+            // Deleting a pinned baseline is allowed — remove() deliberately allows
+            // it and the store then keeps this prompt's most recent N instead. The
+            // label says which one it is, so the learner is not deleting blind.
+            li.appendChild(button('🗑 Delete', 'btn-secondary archive-delete',
+                'Delete this recording', function () {
+                    remove(record.id).then(function (result) {
+                        setStatus(o, result && result.message, result && result.ok !== false);
+                        render(o);
+                    });
+                }));
+
+            ul.appendChild(li);
+        });
+
+        host.appendChild(ul);
+        host.appendChild(para(retentionText()));
+    }
+
+    /**
+     * Play several stored recordings back to back, one live url at a time.
+     * Used by the E.7 first-then-latest button.
+     */
+    function playPair(surface, ids, onStatus) {
+        const queue = ids.slice();
+        function step() {
+            if (!queue.length) return Promise.resolve(true);
+            const id = queue.shift();
+            return open(surface, id).then(function (opened) {
+                if (!opened.ok) {
+                    if (onStatus) onStatus(opened.message, false);
+                    return false;
+                }
+                if (typeof global.Audio !== 'function') {
+                    opened.done();
+                    if (onStatus) onStatus(messages().playbackFailed, false);
+                    return false;
+                }
+                return new Promise(function (resolve) {
+                    const audio = new global.Audio(opened.url);
+                    players[surface] = audio;
+                    const next = function () { opened.done(); resolve(true); };
+                    audio.onended = next;
+                    audio.onerror = function () {
+                        opened.done();
+                        if (onStatus) onStatus(messages().playbackFailed, false);
+                        resolve(false);
+                    };
+                    try {
+                        const started = audio.play();
+                        if (started && typeof started.catch === 'function') {
+                            started.catch(function () { next(); });
+                        }
+                    } catch (e) {
+                        next();
+                    }
+                }).then(function (ok) { return ok ? step() : false; });
+            });
+        }
+        return step();
+    }
+
+    global.RecordingArchive = {
+        ID_VERSION: ID_VERSION,
+        KIND_LISTENING: KIND_LISTENING,
+        KIND_PRONUNCIATION: KIND_PRONUNCIATION,
+
+        // Identity
+        contentKey: contentKey,
+        promptIdFor: promptIdFor,
+        listeningPromptId: listeningPromptId,
+        pronunciationPromptId: pronunciationPromptId,
+        setCatalogue: setCatalogue,
+        describePrompt: describePrompt,
+
+        // Store
+        availability: availability,
+        save: save,
+        list: list,
+        remove: remove,
+
+        // Object urls
+        open: open,
+        play: play,
+        playPair: playPair,
+        release: release,
+        releaseAll: releaseAll,
+        liveUrls: liveUrls,
+
+        // Microphone
+        startCapture: startCapture,
+        stopCapture: stopCapture,
+        isRecording: isRecording,
+        recorderMissing: recorderMissing,
+
+        // Drawing
+        render: render,
+        whenText: whenText,
+        durationText: durationText,
+        retentionText: retentionText,
+
+        _resetAvailability: resetAvailability
+    };
+})(typeof window !== 'undefined' ? window : globalThis);
+// ===== END RECORDING ARCHIVE (US-136) =====
+
+/**
+ * Every authored prompt that can hold recordings, so `evictedPrompts` can be
+ * reported as SENTENCES rather than as hashes (US-218 / BR-3).
+ *
+ * A function, not a literal: the pronunciation content files self-register as
+ * classic scripts, and `pronunciationPairs()` drops anything it cannot draw
+ * honestly, so the catalogue has to be built when it is asked for. It is asked
+ * for only after an eviction, and it is 30 sentences plus a dozen pairs.
+ *
+ * Algorithmically generated listening sentences are deliberately NOT in here.
+ * They are stable for a given (index, tier) but they are not authored content,
+ * and describePrompt() falls back to "another sentence you have recorded" rather
+ * than inventing a name for one.
+ */
+RecordingArchive.setCatalogue(function () {
+    const out = [];
+    if (typeof listeningExercises !== 'undefined' && listeningExercises) {
+        Object.keys(listeningExercises).forEach(tier => {
+            (listeningExercises[tier] || []).forEach(raw => {
+                const item = normaliseListeningItem(raw, tier);
+                if (!item) return;
+                out.push({
+                    promptId: RecordingArchive.listeningPromptId(item),
+                    label: item.transcript
+                });
+            });
+        });
+    }
+    try {
+        pronunciationPairs().forEach(pair => {
+            const words = (pair.phonemes || []).map(p => p.keyword).filter(Boolean);
+            out.push({
+                promptId: RecordingArchive.pronunciationPromptId(pair),
+                label: words.length ? words.join(' and ') : pair.id
+            });
+        });
+    } catch (e) {
+        // A content file that is not loaded is not a reason to fail a lookup.
+        AppErrorHandler.logError(e, 'recording catalogue');
+    }
+    return out;
+});
+
 // ============================================
 // LISTENING SECTION
 // ============================================
@@ -6065,8 +6945,91 @@ function listeningRateFor(item) {
  *   route      how the transcript was reached: 'attempt' | 'no-audio' | null
  *   plays      how many times this item has been played (FR-LSN-1 wants "once
  *              for gist, twice for detail"; counted now, unused until US-702)
+ *   promptId   US-136. The recording archive's key for this sentence, derived
+ *              from the sentence itself — NOT from state.currentListeningIndex,
+ *              which renumbers the moment content is inserted and would hand a
+ *              learner's month-one recording to somebody else's sentence. See the
+ *              RecordingArchive header for the derivation.
  */
 let listeningSession = null;
+
+/** The archive key for the sentence on screen, or '' when there is nothing to key. */
+function listeningPromptId() {
+    return (listeningSession && listeningSession.promptId) || '';
+}
+
+/**
+ * Redraw the archive for the sentence on screen.
+ *
+ * Fire-and-forget on purpose: every RecordingArchive method resolves, none of them
+ * reject, and no part of the listening exercise waits on storage (NFR-8's
+ * principle, FR-A11Y-4). A device with no IndexedDB draws one honest note here and
+ * the section behaves exactly as it did before this story.
+ */
+function refreshListeningArchive() {
+    if (!window.RecordingArchive) return;
+    RecordingArchive.render({
+        hostId: 'recordingArchive',
+        promptId: listeningPromptId(),
+        surface: 'listening',
+        thing: 'sentence',
+        status: 'recordingStatus'
+    });
+}
+
+/**
+ * Report the outcome of a save in BlobStore's own words.
+ *
+ * The module already has carefully-written copy for every outcome — eviction at
+ * this prompt, eviction elsewhere to free space, quota, unavailability — and each
+ * message says what did NOT happen, which is the only question a learner reading
+ * an error here has. So it is used verbatim; nothing here writes a generic
+ * "Error saving" over the top of it. The one thing added is WHICH other prompts
+ * lost a recording, because `evictedPrompts` names them and BR-3 means we do not
+ * let the learner assume it was the sentence in front of them (US-218).
+ */
+function reportArchiveSave(result, statusId, baseClass) {
+    const el = document.getElementById(statusId);
+    if (!el || !result || !result.message) return;
+    let text = result.message;
+    if (result.elsewhere && result.elsewhere.length) {
+        text += ' The recordings that were removed were at ' +
+            joinWithAnd(result.elsewhere) + '.';
+    }
+    el.textContent = text;
+    el.className = (baseClass || 'recording-status') + (result.ok ? ' success' : ' info');
+}
+
+/** "a", "a and b", "a, b and c". The joiner quotedList() also uses, so the two
+ *  cannot drift into two different Oxford-comma habits. */
+function joinWithAnd(list) {
+    if (!list || list.length === 0) return '';
+    if (list.length === 1) return list[0];
+    return list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1];
+}
+
+/**
+ * Keep the recording just made for the sentence on screen (FR-SPK-6, FR-DATA-6).
+ *
+ * Fire-and-forget, and deliberately after markListeningAttempt(): the exercise is
+ * already finished by the time this runs, so every failure mode here is a note and
+ * never a block.
+ */
+function keepListeningRecording(blob, meta) {
+    if (!window.RecordingArchive) return;
+    const promptId = listeningPromptId();
+    if (!promptId || !blob || !blob.size) return;
+    RecordingArchive.save(promptId, blob, {
+        durationMs: meta && meta.durationMs,
+        mimeType: meta && meta.mimeType,
+        // The sentence itself, so a row in the store says what it is a recording
+        // of without a lookup. Never rendered while the transcript is masked.
+        label: (listeningSession && listeningSession.item) ? listeningSession.item.transcript : null
+    }).then(result => {
+        reportArchiveSave(result, 'recordingStatus');
+        refreshListeningArchive();
+    });
+}
 
 /** True when the learner has declared they cannot use the audio (FR-A11Y-2). */
 function listeningTextRouteOn() {
@@ -6181,7 +7144,21 @@ function markListeningAttempt(route, complete) {
 function loadListeningExercise() {
     const item = getListeningItem(state.currentListeningIndex, state.currentDifficulty);
 
-    listeningSession = { item: item, attempted: false, revealed: false, route: null, plays: 0 };
+    listeningSession = {
+        item: item,
+        attempted: false,
+        revealed: false,
+        route: null,
+        plays: 0,
+        // US-136. Content identity, computed once per load so every later call
+        // site reads the same key and none of them can reach for the index.
+        promptId: window.RecordingArchive ? RecordingArchive.listeningPromptId(item) : ''
+    };
+
+    // Leaving a sentence releases THIS surface's object url and nothing else's.
+    // Not BlobStore.revokeAll(), which would reach across and kill a url the
+    // pronunciation task may be playing right now.
+    if (window.RecordingArchive) RecordingArchive.release('listening');
 
     const host = document.getElementById('listenSentence');
     const target = document.getElementById('targetWord');
@@ -6199,6 +7176,10 @@ function loadListeningExercise() {
     if (lock) lock.hidden = false;
     paintListeningSpeedButtons();
     updateNavigationButtons('listening');
+
+    // The archive for THIS sentence, whatever the item turns out to be: an
+    // unrenderable item has no promptId and render() hides the region.
+    refreshListeningArchive();
 
     if (!item) {
         // normaliseListeningItem() returned null: an authored entry with no text.
@@ -6292,8 +7273,12 @@ function appendLapseNote(id, lapsed) {
 }
 
 function initializeListeningButtons() {
-    let mediaRecorder = null;
-    let recordedAudioBlob = null;
+    // `mediaRecorder` used to live here. The recorder is now
+    // RecordingArchive.startCapture()'s, so both surfaces that record share one
+    // implementation and one microphone-stream teardown. What is still local is the
+    // IN-SESSION playback url: it belongs to this card, it is revoked on Prev/Next
+    // below, and it is deliberately NOT the archive's — see the object-url note in
+    // the RecordingArchive header.
     let recordedAudioURL = null;
 
     /**
@@ -6382,82 +7367,86 @@ function initializeListeningButtons() {
         loadListeningExercise();
     }, 'onchange');
 
-    document.getElementById('startRecording').onclick = async () => {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            const audioChunks = [];
-            
-            mediaRecorder.ondataavailable = (event) => {
-                if (event.data.size > 0) {
-                    audioChunks.push(event.data);
+    document.getElementById('startRecording').onclick = () => {
+        // The microphone, the stream teardown and the Blob assembly all moved into
+        // RecordingArchive.startCapture() so the pronunciation task (US-404) runs
+        // the same recorder rather than a second copy of it. What stays here is
+        // this section's UI and this section's copy.
+        RecordingArchive.startCapture('listening', {
+            onstart: () => {
+                document.getElementById('startRecording').disabled = true;
+                document.getElementById('stopRecording').disabled = false;
+                document.getElementById('recordingStatus').textContent = '🔴 Recording...';
+                document.getElementById('recordingStatus').className = 'recording-status recording';
+
+                // Hide replay button while recording
+                const replayBtn = document.getElementById('replayRecording');
+                if (replayBtn) {
+                    replayBtn.style.display = 'none';
                 }
-            };
-            
-            mediaRecorder.onstop = () => {
-                // Create blob from recorded chunks
-                recordedAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                
+            },
+            onstop: (blob, meta) => {
                 // Revoke previous URL if exists
                 if (recordedAudioURL) {
                     URL.revokeObjectURL(recordedAudioURL);
+                    recordedAudioURL = null;
                 }
-                
-                // Create new URL for the blob
-                recordedAudioURL = URL.createObjectURL(recordedAudioBlob);
-                
-                // Update UI
-                document.getElementById('recordingStatus').textContent = 'Recording saved!';
-                document.getElementById('recordingStatus').className = 'recording-status success';
-                
-                // Show replay button
-                const replayBtn = document.getElementById('replayRecording');
-                if (replayBtn) {
-                    replayBtn.style.display = 'inline-block';
+
+                // In-session playback, exactly as before this story: this url is
+                // this closure's, it is not the archive's, and it is revoked on
+                // Prev/Next below. On a browser with no IndexedDB it is the whole
+                // of the feature and the exercise is unchanged (NFR-8, FR-A11Y-4).
+                if (blob && blob.size > 0) {
+                    recordedAudioURL = URL.createObjectURL(blob);
+                    const replayBtn = document.getElementById('replayRecording');
+                    if (replayBtn) {
+                        replayBtn.style.display = 'inline-block';
+                    }
                 }
-                
+
+                document.getElementById('startRecording').disabled = false;
+                document.getElementById('stopRecording').disabled = true;
+
                 // US-701: this used to inline the four completion lines. It now
                 // goes through markListeningAttempt(), which does the same
                 // counting AND opens the FR-LSN-3 transcript gate — one call site
                 // for "the learner attempted this", so a route cannot count and
                 // fail to unlock, or unlock and fail to count.
+                //
+                // US-136: called BEFORE the archive is touched, and never inside
+                // the save's .then(). Keeping the recording is an enhancement and
+                // may fail on any device; finishing the exercise may not depend on
+                // it in any way.
                 markListeningAttempt('recorded', true);
-            };
 
-            mediaRecorder.start();
-            document.getElementById('startRecording').disabled = true;
-            document.getElementById('stopRecording').disabled = false;
-            document.getElementById('recordingStatus').textContent = '🔴 Recording...';
-            document.getElementById('recordingStatus').className = 'recording-status recording';
-            
-            // Hide replay button while recording
-            const replayBtn = document.getElementById('replayRecording');
-            if (replayBtn) {
-                replayBtn.style.display = 'none';
+                document.getElementById('recordingStatus').textContent =
+                    '▶ Recorded. Press "🔄 Replay Recording" to hear it.';
+                document.getElementById('recordingStatus').className = 'recording-status success';
+
+                keepListeningRecording(blob, meta);
+            },
+            onerror: (e) => {
+                // Was `alert('Microphone access denied')` and nothing else, which was
+                // a dead end: recording was the only way to finish an item, so a
+                // refused microphone ended the section (R-7, FR-A11Y-4). Say what the
+                // other route is, in the place the learner is looking.
+                AppErrorHandler.logError(e, 'listening recording');
+                document.getElementById('recordingStatus').textContent =
+                    'No microphone, so nothing was recorded. Say the sentence out loud anyway, then press "✓ I said it" — that finishes this item, and the transcript follows.';
+                document.getElementById('recordingStatus').className = 'recording-status info';
+                document.getElementById('startRecording').disabled = false;
+                document.getElementById('stopRecording').disabled = true;
             }
-        } catch (e) {
-            // Was `alert('Microphone access denied')` and nothing else, which was
-            // a dead end: recording was the only way to finish an item, so a
-            // refused microphone ended the section (R-7, FR-A11Y-4). Say what the
-            // other route is, in the place the learner is looking.
-            AppErrorHandler.logError(e, 'listening recording');
-            document.getElementById('recordingStatus').textContent =
-                'No microphone, so nothing was recorded. Say the sentence out loud anyway, then press "✓ I said it" — that finishes this item, and the transcript follows.';
-            document.getElementById('recordingStatus').className = 'recording-status info';
-            document.getElementById('startRecording').disabled = false;
-            document.getElementById('stopRecording').disabled = true;
-        }
+        });
     };
-    
+
     document.getElementById('stopRecording').onclick = () => {
-        if (mediaRecorder?.state === 'recording') {
-            mediaRecorder.stop();
-            mediaRecorder.stream.getTracks().forEach(t => t.stop());
+        if (RecordingArchive.stopCapture()) {
             document.getElementById('startRecording').disabled = false;
             document.getElementById('stopRecording').disabled = true;
         }
     };
-    
+
     // Replay recorded audio
     document.getElementById('replayRecording').onclick = () => {
         if (recordedAudioURL) {
@@ -6465,9 +7454,10 @@ function initializeListeningButtons() {
             audio.play();
             document.getElementById('recordingStatus').textContent = '▶️ Playing recording...';
             document.getElementById('recordingStatus').className = 'recording-status info';
-            
+
             audio.onended = () => {
-                document.getElementById('recordingStatus').textContent = 'Recording saved!';
+                document.getElementById('recordingStatus').textContent =
+                    '▶ Recorded. Press "🔄 Replay Recording" to hear it.';
                 document.getElementById('recordingStatus').className = 'recording-status success';
             };
         }
@@ -6481,7 +7471,6 @@ function initializeListeningButtons() {
             if (recordedAudioURL) {
                 URL.revokeObjectURL(recordedAudioURL);
                 recordedAudioURL = null;
-                recordedAudioBlob = null;
             }
             
             document.getElementById('recordingStatus').textContent = '';
@@ -6506,7 +7495,6 @@ function initializeListeningButtons() {
         if (recordedAudioURL) {
             URL.revokeObjectURL(recordedAudioURL);
             recordedAudioURL = null;
-            recordedAudioBlob = null;
         }
         
         document.getElementById('recordingStatus').textContent = '';
@@ -8093,6 +9081,420 @@ function pronPlayButton(label, texts, rate, ariaLabel) {
     return btn;
 }
 
+// ---------------------------------------------------------------------------
+// A -> B -> A self-comparison (US-404 / FR-PRN-4), built on US-136's archive
+// ---------------------------------------------------------------------------
+//
+// FR-PRN-4: "Model plays, learner records, both replay A→B→A at matched speed."
+// Until US-136 there was no recorder, so this section printed the honest note
+// "This app does not record you, so nothing is played back and nothing is scored".
+// That note was correct and is now gone, because the thing it apologised for
+// exists.
+//
+// THE THREE RULES THIS CODE IS SHAPED BY, and none of them is a style choice:
+//
+//  1. MATCHED SPEED. Both model plays are PRON_RATE_SLOW, the same rate, and the
+//     learner's own clip is played at its natural rate with no playbackRate
+//     applied. PROGRESS.md §6.aa rule 4: comparing a fast model against a slow
+//     attempt tells the learner about the speed and nothing about the sound.
+//  2. NO SCORE, EVER (FR-PRN-5, BR-3). Nothing here measures, compares, thresholds
+//     or grades anything. The app has no way to judge a learner's voice and says
+//     so; what it does is put the two clips next to each other and hand the
+//     judgement to the person who can feel their own mouth.
+//  3. THE QUESTION IS FEELABLE (FR-PRN-5, §6.aa rule 2). The self-check is the
+//     AUTHORED `feelChecks[0]` — "Did your top teeth touch your bottom lip, or not
+//     touch it at all?" — never "did it sound right?", which is unanswerable by
+//     exactly the person who needs the answer. The comparison block names that
+//     question rather than inventing a second one, so there is one question per
+//     pair and it is the content author's.
+//
+// FR-A11Y-4 is not negotiable here: a learner who cannot or will not use a
+// microphone must still finish. So the recorder is ADDITIVE — the "Yes, I felt
+// that" / "Not yet / skip this" pair below is untouched and needs no microphone,
+// no archive and no audio at all — and every failure in this block is a note
+// beside a task that is already completable.
+
+/**
+ * Per-pair comparison state, rebuilt by renderPronunciationProduce().
+ *
+ *   promptId  the archive key for this pair (RecordingArchive.pronunciationPromptId)
+ *   url       an object url for THIS session's recording, ours to revoke
+ *   recordId  the archive row to compare against when there is no session url —
+ *             which is what makes the month-one/month-three comparison work across
+ *             sessions rather than only within one
+ *   playing   guard, so a second press cannot start a second A->B->A over the first
+ */
+let pronCompare = { promptId: '', url: null, recordId: null, playing: false };
+
+/** Release this section's own object url. Not BlobStore's — see the archive header. */
+function releasePronCompare() {
+    if (pronCompare.url) {
+        URL.revokeObjectURL(pronCompare.url);
+        pronCompare.url = null;
+    }
+    if (window.RecordingArchive) RecordingArchive.release('pron');
+    pronCompare.playing = false;
+}
+
+/** The two keywords of a pair, in authored order. */
+function pronKeywords(pair) {
+    return (pair && pair.phonemes ? pair.phonemes : []).map(p => p.keyword).filter(Boolean);
+}
+
+function pronCompareStatus(text) {
+    const el = document.getElementById('pronCompareStatus');
+    if (el) el.textContent = text || '';
+}
+
+/**
+ * Speak several short texts back to back at ONE rate, and call back when the last
+ * one has finished.
+ *
+ * pronSpeak() cannot be reused: it queues utterances and returns, so the caller
+ * never learns when the model stopped — and A->B->A is exactly "start B when A has
+ * finished". Own utterances, chained on `onend`.
+ *
+ * The watchdog is not paranoia. `onend` has been observed never to fire on some
+ * Android WebView voices, and without it the sequence would stop halfway with the
+ * status line saying "Now you" forever. The estimate is deliberately generous;
+ * finishing early is a small ugliness, stalling is a broken feature.
+ */
+function pronSpeakSequence(texts, rate, onDone) {
+    const list = (Array.isArray(texts) ? texts : [texts]).filter(Boolean);
+    if (!list.length || !pronAudioUsable()) {
+        onDone(false);
+        return false;
+    }
+    try {
+        window.speechSynthesis.cancel();
+    } catch (e) { /* a cancel that throws is not a reason not to try speaking */ }
+
+    let index = 0;
+    const speakNext = () => {
+        if (index >= list.length) {
+            onDone(true);
+            return;
+        }
+        const text = list[index++];
+        let advanced = false;
+        const advance = () => {
+            if (advanced) return;
+            advanced = true;
+            speakNext();
+        };
+        try {
+            const u = new SpeechSynthesisUtterance(text);
+            u.rate = rate;
+            u.lang = 'en-US';
+            u.onend = advance;
+            u.onerror = advance;
+            window.speechSynthesis.speak(u);
+            // ~450ms a word at 1x, scaled by the rate, plus a second of slack.
+            const words = text.split(/\s+/).length;
+            setTimeout(advance, 1000 + (words * 450) / Math.max(0.25, rate));
+        } catch (e) {
+            AppErrorHandler.logError(e, 'pronunciation comparison playback');
+            onDone(false);
+        }
+    };
+    speakNext();
+    return true;
+}
+
+/**
+ * Play the learner's own recording once, then call back.
+ *
+ * Prefers this session's url — it is already in memory and needs no store — and
+ * falls back to the archive, which is what lets a learner compare against a
+ * recording they made weeks ago (FR-SPK-6, Strand E.7).
+ */
+function pronPlayLearner(onDone) {
+    if (pronCompare.url) {
+        pronPlayUrl(pronCompare.url, onDone, null);
+        return;
+    }
+    if (!pronCompare.recordId || !window.RecordingArchive) {
+        onDone(false);
+        return;
+    }
+    RecordingArchive.open('pron', pronCompare.recordId).then(opened => {
+        if (!opened.ok) {
+            pronCompareStatus(opened.message);
+            onDone(false);
+            return;
+        }
+        pronPlayUrl(opened.url, onDone, opened.done);
+    });
+}
+
+/** One clip, at its natural rate, released exactly once however it ends. */
+function pronPlayUrl(url, onDone, release) {
+    let finished = false;
+    const finish = (ok) => {
+        if (finished) return;
+        finished = true;
+        if (release) release();
+        onDone(ok);
+    };
+    try {
+        const audio = new Audio(url);
+        audio.onended = () => finish(true);
+        audio.onerror = () => finish(false);
+        const started = audio.play();
+        if (started && typeof started.catch === 'function') {
+            started.catch(() => finish(false));
+        }
+    } catch (e) {
+        AppErrorHandler.logError(e, 'pronunciation comparison playback');
+        finish(false);
+    }
+}
+
+/**
+ * The whole of A -> B -> A: model, the learner, the model again.
+ *
+ * Every step narrates itself into the aria-live status line, because a learner
+ * hearing three clips needs to know which one is playing — and the last line is a
+ * pointer at the FEELABLE question, not a verdict.
+ */
+function pronRunComparison(pair) {
+    if (pronCompare.playing) return false;
+    const words = pronKeywords(pair);
+    if (!words.length) return false;
+    if (!pronCompare.url && !pronCompare.recordId) return false;
+
+    pronCompare.playing = true;
+    pronCompareStatus('The model first, slowly. Watch what your own mouth wants to do.');
+
+    const done = (note) => {
+        pronCompare.playing = false;
+        pronCompareStatus(note);
+    };
+
+    const modelAgain = () => {
+        pronCompareStatus('And the model again, at exactly the same speed.');
+        pronSpeakSequence(words, PRON_RATE_SLOW, () => {
+            // No verdict. The question below is the whole of the assessment, and
+            // it is about what the learner felt (FR-PRN-5).
+            done('That is the comparison. Nothing was scored — now answer the question below, ' +
+                 'which is about what you felt, not about how it sounded.');
+        });
+    };
+
+    const spoke = pronSpeakSequence(words, PRON_RATE_SLOW, (ok) => {
+        if (!ok) {
+            done('This device could not play the model, so there is nothing to compare against. ' +
+                 'The written exercise and the question below need no sound.');
+            return;
+        }
+        pronCompareStatus('Now you.');
+        pronPlayLearner((played) => {
+            if (!played) {
+                done('Your recording could not be played, so the comparison stopped. ' +
+                     'Nothing else has changed.');
+                return;
+            }
+            modelAgain();
+        });
+    });
+
+    if (!spoke) {
+        done('This device cannot play audio, so the comparison is not available. ' +
+             'The question below needs no sound.');
+    }
+    return spoke;
+}
+
+/**
+ * Keep a pronunciation recording, and redraw this pair's archive.
+ *
+ * Same shape as keepListeningRecording(): fire-and-forget, after the task is
+ * already completable, reporting BlobStore's own copy.
+ */
+function keepPronunciationRecording(pair, blob, meta) {
+    if (!window.RecordingArchive) return;
+    const promptId = pronCompare.promptId;
+    if (!promptId || !blob || !blob.size) return;
+    RecordingArchive.save(promptId, blob, {
+        durationMs: meta && meta.durationMs,
+        mimeType: meta && meta.mimeType,
+        label: pronKeywords(pair).join(' and ') || pair.id
+    }).then(result => {
+        if (result.message) {
+            let text = result.message;
+            if (result.elsewhere && result.elsewhere.length) {
+                text += ' The recordings that were removed were at ' +
+                    joinWithAnd(result.elsewhere) + '.';
+            }
+            pronCompareStatus(text);
+        }
+        if (result.record) pronCompare.recordId = result.record.id;
+        refreshPronunciationArchive();
+    });
+}
+
+function refreshPronunciationArchive() {
+    if (!window.RecordingArchive) return;
+    RecordingArchive.render({
+        hostId: 'pronCompareArchive',
+        promptId: pronCompare.promptId,
+        surface: 'pron',
+        thing: 'pair',
+        status: 'pronCompareStatus'
+    }).then(drawn => {
+        // Enable the comparison against a recording from a PREVIOUS session: the
+        // month-one half of the comparison this feature exists for is usually not
+        // one the learner made two minutes ago.
+        if (!pronCompare.recordId && drawn.records.length) {
+            pronCompare.recordId = drawn.records[0].id;
+        }
+        const compare = document.getElementById('pronComparePlay');
+        if (compare) compare.disabled = !(pronCompare.url || pronCompare.recordId);
+    });
+}
+
+/**
+ * The comparison card: record, compare, and the archive of what is kept.
+ *
+ * Appended to the production task, never in front of it. The self-check below is
+ * complete without any of this (FR-A11Y-4), and on a device with no microphone
+ * this block is one sentence saying so.
+ */
+function appendPronunciationComparison(host, pair) {
+    const box = document.createElement('div');
+    box.className = 'pron-compare';
+
+    const heading = document.createElement('h4');
+    heading.textContent = 'Hear yourself between two models';
+    box.appendChild(heading);
+
+    box.appendChild(pronParagraph(
+        'Record yourself saying ' + pronKeywords(pair).map(w => '*' + w + '*').join(' and then ') +
+        '. Then play the model, your own voice and the model again — all three at the same slow ' +
+        'speed, so the only thing that changes is whose mouth made the sound.'));
+
+    const feel = (pair.feelChecks || [])[0];
+    if (feel) {
+        // The question is the authored one, named here so the learner listens FOR
+        // something. Never "did it sound right?" — see rule 3 above.
+        box.appendChild(pronParagraph(
+            'While it plays, keep one question in mind, and it is not "did it sound right?" — ' +
+            'that is the one thing you cannot judge yet. It is this: ' + feel,
+            'pron-selfcheck-q'));
+    }
+
+    const status = document.createElement('div');
+    status.className = 'pron-compare-status';
+    status.id = 'pronCompareStatus';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+
+    if (window.RecordingArchive && RecordingArchive.recorderMissing()) {
+        // FR-A11Y-4. Not a dead button and not an error: the task below is
+        // untouched, and saying so is the whole of what this device needs to hear.
+        box.appendChild(pronParagraph(
+            'This device has no microphone the app can use, so there is nothing to play back. ' +
+            'Say the words out loud anyway and answer the question below — that is the task, and ' +
+            'it was never the recording.'));
+        box.appendChild(status);
+        host.appendChild(box);
+        return;
+    }
+
+    const row = document.createElement('div');
+    row.className = 'button-group';
+    row.setAttribute('role', 'group');
+    row.setAttribute('aria-label', 'Record and compare');
+
+    const record = document.createElement('button');
+    record.type = 'button';
+    record.id = 'pronStartRecording';
+    record.className = 'btn-primary';
+    record.textContent = '🎤 Record yourself';
+    record.setAttribute('aria-label', 'Record yourself saying these words');
+
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.id = 'pronStopRecording';
+    stop.className = 'btn-secondary';
+    stop.textContent = '⏹ Stop';
+    stop.disabled = true;
+    stop.setAttribute('aria-label', 'Stop recording');
+
+    const compare = document.createElement('button');
+    compare.type = 'button';
+    compare.id = 'pronComparePlay';
+    compare.className = 'btn-primary';
+    compare.textContent = '▶ Model, you, model';
+    compare.disabled = true;
+    compare.setAttribute('aria-label',
+        'Play the model, then your recording, then the model again, all at the same speed');
+
+    record.addEventListener('click', () => {
+        RecordingArchive.startCapture('pron', {
+            onstart: () => {
+                record.disabled = true;
+                stop.disabled = false;
+                pronCompareStatus('🔴 Recording. Say both words, then press Stop.');
+            },
+            onstop: (blob, meta) => {
+                record.disabled = false;
+                stop.disabled = true;
+                if (pronCompare.url) {
+                    URL.revokeObjectURL(pronCompare.url);
+                    pronCompare.url = null;
+                }
+                if (blob && blob.size > 0) {
+                    // This session's url, ours to revoke. It is what makes the
+                    // comparison work on a device that cannot keep anything.
+                    pronCompare.url = URL.createObjectURL(blob);
+                    compare.disabled = false;
+                    pronCompareStatus('Recorded. Press "▶ Model, you, model" to hear the three in a row.');
+                } else {
+                    pronCompareStatus('Nothing was recorded, so there is nothing to compare. Try again.');
+                }
+                keepPronunciationRecording(pair, blob, meta);
+            },
+            onerror: (e) => {
+                AppErrorHandler.logError(e, 'pronunciation recording');
+                record.disabled = false;
+                stop.disabled = true;
+                // FR-A11Y-4 again, at the moment it actually bites: the microphone
+                // was refused and the task is still finishable below.
+                pronCompareStatus(
+                    'No microphone, so nothing was recorded. Say the words out loud anyway and ' +
+                    'answer the question below — nothing here is scored either way.');
+            }
+        });
+    });
+
+    stop.addEventListener('click', () => {
+        if (RecordingArchive.stopCapture()) {
+            record.disabled = false;
+            stop.disabled = true;
+        }
+    });
+
+    compare.addEventListener('click', () => { pronRunComparison(pair); });
+
+    row.appendChild(record);
+    row.appendChild(stop);
+    row.appendChild(compare);
+    box.appendChild(row);
+    box.appendChild(status);
+
+    const archive = document.createElement('div');
+    archive.className = 'recording-archive';
+    archive.id = 'pronCompareArchive';
+    archive.setAttribute('role', 'region');
+    archive.setAttribute('aria-label', 'Your kept recordings of this pair');
+    archive.hidden = true;
+    box.appendChild(archive);
+
+    host.appendChild(box);
+    refreshPronunciationArchive();
+}
+
 /**
  * How far the audio can be trusted for this pair, stated before the learner
  * answers anything rather than after they have collected a miss.
@@ -8905,11 +10307,27 @@ function completePronunciationDrill(pair) {
  * voice (FR-PRN-5). The self-check is the AUTHORED articulatory question — what
  * did your mouth do — never "did it sound right?", which is unanswerable by
  * exactly the person who needs the answer (PROGRESS.md §6.aa rule 2).
+ *
+ * US-404 added the A->B->A comparison at the end (appendPronunciationComparison).
+ * It is APPENDED, deliberately: everything above it is unchanged and completable
+ * with no microphone, no audio and no storage, which is FR-A11Y-4's floor and the
+ * reason the recorder could be added without a second skip path.
  */
 function renderPronunciationProduce(pair) {
     const host = document.getElementById('pronunciationProduce');
     if (!host) return;
     host.textContent = '';
+
+    // Leaving a pair releases this section's own url and the archive handle it
+    // owns. Done before anything is drawn, so a redraw can never leave the last
+    // pair's recording pinned in memory.
+    releasePronCompare();
+    pronCompare = {
+        promptId: window.RecordingArchive ? RecordingArchive.pronunciationPromptId(pair) : '',
+        url: null,
+        recordId: null,
+        playing: false
+    };
 
     const gate = pronGate(pair);
 
@@ -9024,11 +10442,23 @@ function renderPronunciationProduce(pair) {
         }));
     }
 
-    // The honest limit, stated rather than implied. §6.aa rule 3 wants A→B→A —
-    // model, your own recording, model again — and this build cannot record you,
-    // so it does not pretend to have done the comparison.
+    // US-404 / FR-PRN-4. The A->B->A comparison, last, after the task is already
+    // complete without it. This is where the line
+    //
+    //   "This app does not record you, so nothing is played back and nothing is
+    //    scored."
+    //
+    // used to be. It was honest for as long as there was no recorder, and PROGRESS.md
+    // §6.aa rule 3 says a build that cannot record must not imply the comparison
+    // happened — but the right way to stop needing the disclaimer was to build the
+    // thing, not to keep apologising for it. US-136 wired the recorder, so it is gone.
+    appendPronunciationComparison(host, pair);
+
+    // What is still true and still stated: nothing here is scored, and the app has
+    // no way to tell the learner whether a stranger would understand them. That is
+    // not a limitation of this build, it is a limitation of any app (BR-3).
     host.appendChild(pronParagraph(
-        'This app does not record you, so nothing is played back and nothing is scored. What it can do is tell you what to feel — and when you want to know whether a stranger would understand you, the only honest test is to ask one.',
+        'Nothing on this screen is scored, and nothing you do here is marked right or wrong. The app can play you the model and play you back to yourself; what it cannot do is judge your voice, so it does not try. When you want to know whether a stranger would understand you, the only honest test is to ask one.',
         'pron-note'
     ));
 }
@@ -10174,7 +11604,7 @@ if (typeof Session !== 'undefined' && Session && typeof Session.registerSurfaces
                 return {
                     available: true,
                     requirement: 'FR-PRN-6',
-                    note: open.length + ' sound pair(s) have passed the FR-PRN-6 discrimination gate, so renderPronunciationProduce() draws the self-comparison task rather than the locked card.'
+                    note: open.length + ' sound pair(s) have passed the FR-PRN-6 discrimination gate, so renderPronunciationProduce() draws the self-comparison task rather than the locked card. Since US-404 that task is the full FR-PRN-4 A→B→A — model, the learner\'s own recording, model again, all at PRON_RATE_SLOW — with the recording kept per pair by RecordingArchive/blobstore.js. Still nothing scored (FR-PRN-5), and still completable with no microphone (FR-A11Y-4).'
                 };
             }
             return {

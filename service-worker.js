@@ -2,6 +2,21 @@
 // Provides offline functionality and caching
 
 const CACHE_NAME = 'english-portal-v1.0.2';
+// v19 -> v20 (US-136 / US-404 — the recording archive gets a caller; plus US-236
+// and US-237). Two content files were added to STATIC_ASSETS below, the modals and
+// register grammar points. js/core/blobstore.js was already precached in v18 and
+// simply had nothing calling it. What changed besides the content is app.js,
+// styles.css and index.html together, and the
+// cache split makes that combination the reason this line must move: index.html is
+// network-first while app.js and styles.css go through cacheFirstStrategy(
+// STATIC_CACHE). A returning learner would fetch the NEW index.html — which has
+// `#recordingArchive` in the listening card — and run the OLD app.js, which
+// defines no RecordingArchive, never draws into that div and never keeps a
+// recording, so the archive region would sit empty and permanently hidden while
+// the markup claimed it was there. In the other direction a new app.js against an
+// old cached index.html is survivable by design: render() treats a missing host as
+// "nothing to draw" rather than throwing, so the exercise still completes.
+//
 // v18 -> v19 (US-701 / US-703 / US-704 / US-711, plus US-225 / US-226). Two
 // content files WERE added to STATIC_ASSETS below — the prepositions and
 // past-simple grammar points; question-formation.js was already precached in v18.
@@ -24,7 +39,7 @@ const CACHE_NAME = 'english-portal-v1.0.2';
 // The previous bumps, for the record: v14 -> v15 -> v16 (US-177 / US-181,
 // #reviewCard and #mistakePanel) and v16 -> v17 (US-179, the pronunciation
 // group switcher).
-const STATIC_CACHE = 'english-portal-static-v19';
+const STATIC_CACHE = 'english-portal-static-v20';
 const DYNAMIC_CACHE = 'english-portal-dynamic-v3';
 const API_CACHE = 'english-portal-api-v3';
 
@@ -70,7 +85,9 @@ const STATIC_ASSETS = [
     '/data/grammar/question-formation.js',
     '/data/grammar/prepositions.js',
     '/data/grammar/past-simple.js',
+    '/data/grammar/modals.js',
     '/data/grammar/present-perfect.js',
+    '/data/grammar/register.js',
     '/data/pronunciation/vowels-stress.js',
     '/data/pronunciation/consonants.js',
     '/app.js',

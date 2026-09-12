@@ -3511,3 +3511,110 @@ header h1 {
 .mistake-empty {
     color: var(--text-secondary, #555);
 }
+
+/* ---------------------------------------------------------------------------
+   Recording archive — US-136 / FR-SPK-6
+   ---------------------------------------------------------------------------
+   The kept recordings for one prompt, drawn by RecordingArchive.render() into
+   #recordingArchive (Listening) and #pronCompareArchive (Pronunciation).
+
+   `is-baseline` is a LEFT BORDER and a weight, not a colour badge: the pinned
+   first recording is the half of the comparison Strand E.7 exists for, and it
+   has to be findable at 200% zoom and in a high-contrast mode where a background
+   tint disappears. The row already says "Your first try" in words, so nothing
+   here is the only carrier of that fact (FR-A11Y-1). */
+.recording-archive {
+    margin: var(--space-4, 1rem) 0 0;
+    padding: var(--space-3, 0.75rem);
+    border: 1px solid var(--border-color, #e0e0e0);
+    border-radius: 10px;
+    background: var(--bg-secondary, #f9f9f9);
+    text-align: left;
+}
+
+.recording-archive[hidden] {
+    display: none;
+}
+
+.archive-head {
+    margin: 0 0 var(--space-2, 0.5rem);
+    font-size: var(--text-base, 1rem);
+}
+
+.archive-note {
+    margin: var(--space-2, 0.5rem) 0 0;
+    font-size: var(--text-sm, 0.875rem);
+    color: var(--text-secondary, #555);
+}
+
+/* The unavailable case. Deliberately not red: nothing has gone wrong for the
+   learner, and TEACHING_METHODOLOGY.md §5 forbids a ✗ without a fix. */
+.archive-unavailable {
+    color: var(--text-primary, #333);
+    font-weight: 600;
+}
+
+.archive-list {
+    list-style: none;
+    margin: var(--space-2, 0.5rem) 0 0;
+    padding: 0;
+}
+
+.archive-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2, 0.5rem);
+    padding: var(--space-2, 0.5rem);
+    border-left: 4px solid transparent;
+    border-bottom: 1px solid var(--border-color, #e0e0e0);
+}
+
+.archive-item:last-child {
+    border-bottom: none;
+}
+
+.archive-item.is-baseline {
+    border-left-color: #667eea;
+}
+
+.archive-item.is-baseline .archive-when {
+    font-weight: 700;
+}
+
+.archive-when {
+    flex: 1 1 12rem;
+    font-size: var(--text-sm, 0.875rem);
+}
+
+.archive-play,
+.archive-delete,
+.archive-compare {
+    padding: 6px 12px;
+    font-size: var(--text-sm, 0.875rem);
+}
+
+.archive-compare {
+    margin: 0 0 var(--space-2, 0.5rem);
+}
+
+/* app.js has written this class since the microphone-refusal fix (US-701) and it
+   was never styled, so an "info" status rendered as an unstyled bold line. */
+.recording-status.info {
+    background: #eef1fb;
+    color: #333;
+}
+
+/* --- Self-comparison, A -> B -> A (US-404 / FR-PRN-4) ------------------- */
+.pron-compare {
+    margin: var(--space-4, 1rem) 0 0;
+    padding: var(--space-3, 0.75rem);
+    border: 1px solid var(--border-color, #e0e0e0);
+    border-radius: 10px;
+}
+
+.pron-compare-status {
+    margin: var(--space-2, 0.5rem) 0 0;
+    font-size: var(--text-sm, 0.875rem);
+    min-height: 1.4em;
+}

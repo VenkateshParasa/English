@@ -1068,7 +1068,13 @@ describe('listening transcript gate, speed and text route (US-703 / US-704 / US-
 
         it('re-masks on every load, so Next -> closes the gate again', () => {
             const body = functionBody('function loadListeningExercise(');
-            expect(body).toMatch(/listeningSession = \{ item: item, attempted: false, revealed: false/);
+            // A FRESH session object per load, with the gate shut. Asserted field
+            // by field rather than as one source line: US-136 added `promptId` to
+            // the literal and broke it across lines, and a test that pins the
+            // formatting forbids ever adding a field to it.
+            expect(body).toMatch(/listeningSession = \{/);
+            ['item: item', 'attempted: false', 'revealed: false', 'route: null', 'plays: 0']
+                .forEach(field => expect(body).toContain(field));
             expect(body).toContain("host.classList.add('is-masked')");
             expect(body).toContain('if (reveal) reveal.hidden = true;');
             expect(body).toContain('if (speak) speak.disabled = true;');
@@ -1181,5 +1187,1708 @@ describe('listening transcript gate, speed and text route (US-703 / US-704 / US-
             const Mistakes = require(path.join(ROOT, 'js', 'core', 'mistakes.js'));
             expect(Mistakes.unknownCategories(['lsn.gist'])).toEqual([]);
         });
+    });
+});
+
+// ===========================================================================
+// RECORDING ARCHIVE (US-136 / US-404) — the fake IndexedDB, and why it is here
+// ===========================================================================
+//
+// COPIED VERBATIM from __tests__/unit/blobstore.test.js, whose header explains
+// every design decision in it and, just as importantly, the seven things a fake
+// cannot prove (structured-cloning a real Blob, a real per-origin quota, storage
+// pressure, Safari private browsing, cross-tab versionchange, transaction
+// auto-commit timing, WebKit's silent open()). Read that header before trusting a
+// green run here; none of it is restated.
+//
+// Copied rather than imported because that file is a suite, not a module: it
+// exports nothing, and requiring it would re-run 224 tests inside this one. It is
+// not modified. If it changes, this copy is stale and should be re-copied.
+//
+// What it is for HERE: js/core/blobstore.js is 100% IndexedDB and jsdom has none,
+// so the only way to walk the archive the way a learner does — record, leave the
+// sentence, come back, delete one — is to inject this and drive the REAL store.
+// ===========================================================================
+// ===========================================================================
+// The fake IndexedDB
+// ===========================================================================
+
+function domError(name, message) {
+    const e = new Error(message || name);
+    e.name = name;
+    return e;
+}
+
+/**
+ * IndexedDB key ordering, per spec §key-construct: number < date < string <
+ * binary < array; arrays compare element-wise and a shorter array that is a
+ * prefix of a longer one sorts first. `list()` depends on this being right:
+ * `bound([key], [key, []])` only isolates one prompt because every number sorts
+ * before every array, so `[key, <any createdAt>]` < `[key, []]`.
+ */
+function keyRank(k) {
+    if (Array.isArray(k)) return 4;
+    if (typeof k === 'number') return 1;
+    if (k instanceof Date) return 2;
+    if (typeof k === 'string') return 3;
+    return 0;
+}
+
+function compareKeys(a, b) {
+    const ra = keyRank(a);
+    const rb = keyRank(b);
+    if (ra !== rb) return ra < rb ? -1 : 1;
+    if (ra === 4) {
+        const n = Math.min(a.length, b.length);
+        for (let i = 0; i < n; i++) {
+            const c = compareKeys(a[i], b[i]);
+            if (c !== 0) return c;
+        }
+        if (a.length === b.length) return 0;
+        return a.length < b.length ? -1 : 1;
+    }
+    if (ra === 2) return a.getTime() - b.getTime();
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
+}
+
+class FakeKeyRange {
+    constructor(lower, upper, lowerOpen, upperOpen) {
+        this.lower = lower;
+        this.upper = upper;
+        this.lowerOpen = !!lowerOpen;
+        this.upperOpen = !!upperOpen;
+    }
+    includes(key) {
+        if (this.lower !== undefined) {
+            const c = compareKeys(key, this.lower);
+            if (c < 0 || (c === 0 && this.lowerOpen)) return false;
+        }
+        if (this.upper !== undefined) {
+            const c = compareKeys(key, this.upper);
+            if (c > 0 || (c === 0 && this.upperOpen)) return false;
+        }
+        return true;
+    }
+    static bound(lower, upper, lowerOpen, upperOpen) {
+        if (lower === undefined || upper === undefined) throw domError('DataError');
+        if (compareKeys(lower, upper) > 0) throw domError('DataError');
+        return new FakeKeyRange(lower, upper, lowerOpen, upperOpen);
+    }
+    static only(value) { return new FakeKeyRange(value, value, false, false); }
+    static lowerBound(v, open) { return new FakeKeyRange(v, undefined, open, false); }
+    static upperBound(v, open) { return new FakeKeyRange(undefined, v, false, open); }
+}
+
+/** Blob-shaped things pass by reference; everything else is copied, as a
+ *  structured clone would be (see caveat 1 in the header). */
+function isBlobLike(v) {
+    return !!v && typeof v === 'object' &&
+        typeof v.size === 'number' && typeof v.type === 'string' &&
+        typeof v.promptId === 'undefined';
+}
+
+function cloneValue(v) {
+    if (Array.isArray(v)) return v.map(cloneValue);
+    if (v && typeof v === 'object') {
+        if (isBlobLike(v)) return v;
+        if (v instanceof Date) return new Date(v.getTime());
+        const out = {};
+        Object.keys(v).forEach((k) => { out[k] = cloneValue(v[k]); });
+        return out;
+    }
+    return v;
+}
+
+/** Only blob payload bytes count against the fake budget; metadata rows are
+ *  free. That keeps the quota arithmetic in the tests readable. */
+function bytesOf(value) {
+    if (value && value.blob && typeof value.blob.size === 'number') return value.blob.size;
+    return 0;
+}
+
+class FakeObjectStore {
+    constructor(db, name, options) {
+        this.db = db;
+        this.name = name;
+        this.keyPath = (options && options.keyPath) || null;
+        this.autoIncrement = !!(options && options.autoIncrement);
+        this.nextKey = 1;
+        this.records = new Map();      // key -> { value, bytes }
+        this.indexes = new Map();
+    }
+
+    createIndex(name, keyPath, options) {
+        const idx = { name: name, keyPath: keyPath, unique: !!(options && options.unique) };
+        this.indexes.set(name, idx);
+        return idx;
+    }
+
+    _write(key, value) {
+        const factory = this.db.factory;
+        // Models an engine that accepts the write but loses the Blob — the exact
+        // WebKit failure available({deep:true}) exists to detect.
+        if (factory.dropBlobs && value && value.blob) value.blob = null;
+        const incoming = bytesOf(value);
+        const existing = this.records.has(key) ? this.records.get(key).bytes : 0;
+        const used = this.db._usedBytes();
+        if (used - existing + incoming > factory.budget) {
+            throw domError('QuotaExceededError', 'The quota has been exceeded.');
+        }
+        this.records.set(key, { value: value, bytes: incoming });
+    }
+}
+
+class FakeRequest {
+    constructor(source, tx) {
+        this.source = source;
+        this.transaction = tx;
+        this.result = undefined;
+        this.error = null;
+        this.onsuccess = null;
+        this.onerror = null;
+    }
+}
+
+class FakeStoreHandle {
+    constructor(tx, store) {
+        this.tx = tx;
+        this.store = store;
+        this.name = store.name;
+    }
+
+    _readonlyGuard() {
+        if (this.tx.mode !== 'readwrite' && this.tx.mode !== 'versionchange') {
+            throw domError('ReadOnlyError');
+        }
+    }
+
+    index(name) {
+        const idx = this.store.indexes.get(name);
+        if (!idx) throw domError('NotFoundError');
+        return new FakeIndexHandle(this.tx, this.store, idx);
+    }
+
+    get(key) {
+        return this.tx._enqueue(this.store, 'get', key, () => {
+            const hit = this.store.records.get(key);
+            return hit ? cloneValue(hit.value) : undefined;
+        });
+    }
+
+    getAll() {
+        return this.tx._enqueue(this.store, 'getAll', null, () => {
+            return Array.from(this.store.records.keys())
+                .sort(compareKeys)
+                .map((k) => cloneValue(this.store.records.get(k).value));
+        });
+    }
+
+    add(value) {
+        this._readonlyGuard();
+        return this.tx._enqueue(this.store, 'add', null, () => {
+            const rec = cloneValue(value);
+            let key = this.store.keyPath ? rec[this.store.keyPath] : undefined;
+            if (key === undefined || key === null) {
+                if (!this.store.autoIncrement) throw domError('DataError');
+                key = this.store.nextKey;
+                this.store.nextKey += 1;
+                if (this.store.keyPath) rec[this.store.keyPath] = key;
+            } else if (this.store.autoIncrement && typeof key === 'number' && key >= this.store.nextKey) {
+                this.store.nextKey = Math.floor(key) + 1;
+            }
+            if (this.store.records.has(key)) throw domError('ConstraintError');
+            this.store._write(key, rec);
+            return key;
+        });
+    }
+
+    put(value) {
+        this._readonlyGuard();
+        return this.tx._enqueue(this.store, 'put', null, () => {
+            const rec = cloneValue(value);
+            let key = this.store.keyPath ? rec[this.store.keyPath] : undefined;
+            if (key === undefined || key === null) {
+                if (!this.store.autoIncrement) throw domError('DataError');
+                key = this.store.nextKey;
+                this.store.nextKey += 1;
+                if (this.store.keyPath) rec[this.store.keyPath] = key;
+            }
+            this.store._write(key, rec);
+            return key;
+        });
+    }
+
+    delete(key) {
+        this._readonlyGuard();
+        return this.tx._enqueue(this.store, 'delete', key, () => {
+            this.store.records.delete(key);
+            return undefined;
+        });
+    }
+
+    clear() {
+        this._readonlyGuard();
+        return this.tx._enqueue(this.store, 'clear', null, () => {
+            this.store.records.clear();
+            return undefined;
+        });
+    }
+}
+
+class FakeIndexHandle {
+    constructor(tx, store, idx) {
+        this.tx = tx;
+        this.store = store;
+        this.idx = idx;
+        this.name = idx.name;
+    }
+
+    _keyFor(value) {
+        const paths = Array.isArray(this.idx.keyPath) ? this.idx.keyPath : [this.idx.keyPath];
+        const parts = [];
+        for (let i = 0; i < paths.length; i++) {
+            const v = value[paths[i]];
+            if (v === undefined || v === null) return undefined;   // row not in the index
+            parts.push(v);
+        }
+        return Array.isArray(this.idx.keyPath) ? parts : parts[0];
+    }
+
+    getAll(range) {
+        return this.tx._enqueue(this.store, 'index.getAll', null, () => {
+            const hits = [];
+            this.store.records.forEach((entry) => {
+                const k = this._keyFor(entry.value);
+                if (k === undefined) return;
+                if (range && typeof range.includes === 'function' && !range.includes(k)) return;
+                hits.push({ k: k, value: entry.value });
+            });
+            hits.sort((a, b) => compareKeys(a.k, b.k));
+            return hits.map((h) => cloneValue(h.value));
+        });
+    }
+}
+
+class FakeTransaction {
+    constructor(db, names, mode) {
+        this.db = db;
+        this.mode = mode;
+        this.names = names;
+        this.error = null;
+        this.oncomplete = null;
+        this.onabort = null;
+        this.onerror = null;
+
+        this._queue = [];
+        this._finished = false;
+        this._scheduled = false;
+
+        // Rollback support: the fake writes live and restores on abort.
+        this._snapshots = new Map();
+        names.forEach((n) => {
+            const s = db._store(n);
+            this._snapshots.set(n, { records: new Map(s.records), nextKey: s.nextKey });
+        });
+
+        db.factory.txCount += 1;
+    }
+
+    objectStore(name) {
+        if (this.names.indexOf(name) === -1) throw domError('NotFoundError');
+        if (this._finished) throw domError('TransactionInactiveError');
+        return new FakeStoreHandle(this, this.db._store(name));
+    }
+
+    abort() {
+        if (this._finished) throw domError('InvalidStateError');
+        this._abort(domError('AbortError'), false);
+    }
+
+    _enqueue(store, op, key, run) {
+        if (this._finished) throw domError('TransactionInactiveError');
+        const req = new FakeRequest(store, this);
+        this.db.factory.ops.push({ store: store.name, op: op, key: key });
+        this._queue.push({ req: req, run: run, store: store.name, op: op, key: key });
+        this._schedule();
+        return req;
+    }
+
+    _schedule() {
+        if (this._scheduled) return;
+        this._scheduled = true;
+        Promise.resolve().then(() => {
+            this._scheduled = false;
+            this._drain();
+        });
+    }
+
+    _drain() {
+        let guard = 0;
+        while (!this._finished && this._queue.length) {
+            if (++guard > 5000) throw new Error('fake IndexedDB: runaway request queue');
+            const entry = this._queue.shift();
+            this._execute(entry);
+        }
+        if (!this._finished) this._commit();
+    }
+
+    _execute(entry) {
+        const req = entry.req;
+        let value;
+        let err = null;
+
+        // Per-operation error injection: DataCloneError on the payload, a generic
+        // request failure, etc. `errorHook(store, op, key)` returns an Error or null.
+        const hook = this.db.factory.errorHook;
+        if (typeof hook === 'function') {
+            err = hook(entry.store, entry.op, entry.key) || null;
+        }
+
+        if (!err) {
+            try {
+                value = entry.run();
+            } catch (e) {
+                err = e;
+            }
+        }
+
+        if (err) {
+            req.error = err;
+            let prevented = false;
+            const ev = {
+                target: req,
+                type: 'error',
+                preventDefault: function () { prevented = true; },
+                stopPropagation: function () {}
+            };
+            if (typeof req.onerror === 'function') {
+                try { req.onerror(ev); } catch (e2) { /* a throwing handler still aborts */ }
+            }
+            // Real IndexedDB: an unhandled request error aborts the transaction.
+            if (!prevented) this._abort(err, true);
+            return;
+        }
+
+        req.result = value;
+        if (typeof req.onsuccess === 'function') {
+            try {
+                req.onsuccess({ target: req, type: 'success' });
+            } catch (e3) {
+                this._abort(e3, true);
+            }
+        }
+    }
+
+    _commit() {
+        this._finished = true;
+        const fn = this.oncomplete;
+        Promise.resolve().then(() => { if (typeof fn === 'function') fn({ type: 'complete' }); });
+    }
+
+    _abort(err, fromRequest) {
+        if (this._finished) return;
+        this._finished = true;
+        this._queue.length = 0;
+        this._snapshots.forEach((snap, name) => {
+            const s = this.db._store(name);
+            s.records = new Map(snap.records);
+            s.nextKey = snap.nextKey;
+        });
+        this.error = err || domError('AbortError');
+        const onError = this.onerror;
+        const onAbort = this.onabort;
+        Promise.resolve().then(() => {
+            // Real order for a failed request: request error -> tx error -> tx abort.
+            if (fromRequest && typeof onError === 'function') onError({ type: 'error' });
+            if (typeof onAbort === 'function') onAbort({ type: 'abort' });
+        });
+    }
+}
+
+class FakeDatabase {
+    constructor(factory, name) {
+        this.factory = factory;
+        this.name = name;
+        this.version = 0;
+        this.stores = new Map();
+        this.onversionchange = null;
+        this.onclose = null;
+        this._closed = false;
+    }
+
+    get objectStoreNames() {
+        const names = Array.from(this.stores.keys());
+        names.contains = (n) => names.indexOf(n) !== -1;
+        return names;
+    }
+
+    _store(name) {
+        const s = this.stores.get(name);
+        if (!s) throw domError('NotFoundError');
+        return s;
+    }
+
+    _usedBytes() {
+        let sum = 0;
+        this.stores.forEach((s) => { s.records.forEach((e) => { sum += e.bytes; }); });
+        return sum;
+    }
+
+    createObjectStore(name, options) {
+        const s = new FakeObjectStore(this, name, options);
+        this.stores.set(name, s);
+        return s;
+    }
+
+    transaction(names, mode) {
+        if (this.factory.txThrows) throw domError(this.factory.txThrows);
+        if (this._closed) throw domError('InvalidStateError');
+        const list = typeof names === 'string' ? [names] : Array.prototype.slice.call(names);
+        list.forEach((n) => { if (!this.stores.has(n)) throw domError('NotFoundError'); });
+        return new FakeTransaction(this, list, mode || 'readonly');
+    }
+
+    close() { this._closed = true; }
+}
+
+/**
+ * @param {Object} [opts]
+ *   openMode: 'ok' | 'throw' | 'error' | 'blocked' | 'silent'
+ *   budget:   bytes of blob payload the whole database may hold
+ */
+class FakeIndexedDB {
+    constructor(opts) {
+        const o = opts || {};
+        this.openMode = o.openMode || 'ok';
+        this.budget = typeof o.budget === 'number' ? o.budget : Infinity;
+        this.txThrows = o.txThrows || null;
+        this.errorHook = o.errorHook || null;
+        this.dropBlobs = !!o.dropBlobs;
+        this.extraErrorAfterSuccess = !!o.extraErrorAfterSuccess;
+        this.openCount = 0;
+        this.txCount = 0;
+        this.ops = [];
+        this.db = null;
+        this.schemaThrows = !!o.schemaThrows;
+    }
+
+    open(name, version) {
+        this.openCount += 1;
+        if (this.openMode === 'throw') throw domError('InvalidStateError', 'private browsing');
+
+        const req = new FakeRequest(null, null);
+        req.onupgradeneeded = null;
+        req.onblocked = null;
+
+        const mode = this.openMode;
+        Promise.resolve().then(() => {
+            if (mode === 'silent') return;                 // WebKit: no event, ever
+            if (mode === 'blocked') {
+                if (typeof req.onblocked === 'function') req.onblocked({ type: 'blocked' });
+                return;
+            }
+            if (mode === 'error') {
+                req.error = domError('UnknownError', 'open failed');
+                if (typeof req.onerror === 'function') req.onerror({ type: 'error', target: req });
+                return;
+            }
+
+            if (!this.db) this.db = new FakeDatabase(this, name);
+            const db = this.db;
+            db._closed = false;
+            req.result = db;
+
+            const oldVersion = db.version;
+            if (version > db.version) {
+                // A versionchange transaction, so a throwing upgrade can abort it.
+                const upgradeTx = new FakeTransaction(db, [], 'versionchange');
+                req.transaction = upgradeTx;
+                let aborted = false;
+                upgradeTx.abort = function () { aborted = true; };
+                db.version = version;
+                if (this.schemaThrows) {
+                    // Simulate createObjectStore blowing up inside onupgradeneeded.
+                    const realCreate = db.createObjectStore.bind(db);
+                    db.createObjectStore = function () { throw domError('InvalidStateError'); };
+                    if (typeof req.onupgradeneeded === 'function') {
+                        req.onupgradeneeded({ type: 'upgradeneeded', oldVersion: oldVersion, target: req });
+                    }
+                    db.createObjectStore = realCreate;
+                } else if (typeof req.onupgradeneeded === 'function') {
+                    req.onupgradeneeded({ type: 'upgradeneeded', oldVersion: oldVersion, target: req });
+                }
+                if (aborted) {
+                    db.version = oldVersion;
+                    db.stores.clear();
+                    req.error = domError('AbortError');
+                    if (typeof req.onerror === 'function') req.onerror({ type: 'error', target: req });
+                    return;
+                }
+            }
+            if (typeof req.onsuccess === 'function') req.onsuccess({ type: 'success', target: req });
+            if (this.extraErrorAfterSuccess) {
+                // A misbehaving engine firing a second event on an already-settled
+                // request. openDb()'s `settled` latch has to absorb it.
+                req.error = domError('UnknownError', 'late error');
+                if (typeof req.onerror === 'function') req.onerror({ type: 'error', target: req });
+                if (typeof req.onblocked === 'function') req.onblocked({ type: 'blocked' });
+            }
+        });
+
+        return req;
+    }
+
+    // ---- test-side inspection -------------------------------------------
+    metaRows() {
+        if (!this.db || !this.db.stores.has('recordings')) return [];
+        return Array.from(this.db.stores.get('recordings').records.values())
+            .map((e) => e.value)
+            .sort((a, b) => a.id - b.id);
+    }
+    /** Write straight into the store, bypassing put() — for rows put() would
+     *  never produce (garbage, the reserved PROBE_ID, an over-cap archive). */
+    seedMeta(rows) {
+        const s = this.db._store('recordings');
+        rows.forEach((r) => {
+            s.records.set(r.id, { value: r, bytes: 0 });
+            if (typeof r.id === 'number' && r.id >= s.nextKey) s.nextKey = Math.floor(r.id) + 1;
+        });
+    }
+    seedAudio(entries) {
+        const s = this.db._store('audio');
+        entries.forEach((e) => { s.records.set(e.id, { value: e, bytes: bytesOf(e) }); });
+    }
+    audioIds() {
+        if (!this.db || !this.db.stores.has('audio')) return [];
+        return Array.from(this.db.stores.get('audio').records.keys()).sort((a, b) => a - b);
+    }
+    ids() { return this.metaRows().map((r) => r.id); }
+    usedBytes() { return this.db ? this.db._usedBytes() : 0; }
+    opsOn(storeName, op) {
+        return this.ops.filter((o) => o.store === storeName && (!op || o.op === op));
+    }
+}
+
+
+// ===========================================================================
+// US-136 — the recording archive gets a caller
+// ===========================================================================
+//
+// HOW app.js IS TESTED HERE, GIVEN THAT IT CANNOT BE REQUIRED
+// ----------------------------------------------------------
+// __tests__/README.md is right: app.js is one classic script with top-level side
+// effects and no exports. Every other app.js assertion in this file is therefore
+// a read over its SOURCE TEXT, and for wiring that is enough.
+//
+// It is NOT enough for the one thing US-136 turns on. `promptId` must be stable
+// content identity, and "the source mentions listeningPromptId" proves nothing
+// about whether inserting a sentence moves a learner's recording. So the archive
+// module in app.js is deliberately written as a self-contained IIFE between two
+// sentinel comments, depending on `window.BlobStore`, `document` and `navigator`
+// and on nothing else in app.js — and the block below extracts that source and
+// evaluates it. What runs in these tests is the shipped code, not a copy of it.
+//
+// The seam is load-bearing: if the module ever reaches for an app.js global, the
+// first test here fails with a ReferenceError, which is the correct outcome.
+
+describe('recording archive — stable content identity (US-136 / FR-SPK-6)', () => {
+    const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+    const Data = require(path.join(ROOT, 'data.js'));
+    const { normaliseListeningItem, listeningExercises } = Data;
+    const BlobStore = require(path.join(ROOT, 'js', 'core', 'blobstore.js'));
+
+    const BEGIN = '// ===== BEGIN RECORDING ARCHIVE (US-136) =====';
+    const END = '// ===== END RECORDING ARCHIVE (US-136) =====';
+
+    /** The body of one top-level function, by brace matching. */
+    function functionBody(header) {
+        const start = appSource.indexOf(header);
+        expect(start).toBeGreaterThan(-1);
+        let depth = 0;
+        for (let i = appSource.indexOf('{', start); i < appSource.length; i++) {
+            if (appSource[i] === '{') depth++;
+            else if (appSource[i] === '}' && --depth === 0) return appSource.slice(start, i + 1);
+        }
+        throw new Error('unbalanced braces after ' + header);
+    }
+
+    function archiveSource() {
+        const from = appSource.indexOf(BEGIN);
+        const to = appSource.indexOf(END);
+        expect(from).toBeGreaterThan(-1);
+        expect(to).toBeGreaterThan(from);
+        return appSource.slice(from, to);
+    }
+
+    /**
+     * Source with the comments stripped.
+     *
+     * Needed because the assertions below forbid particular CODE — an index near
+     * the archive, a cross-surface revokeAll() — and the module's own header
+     * explains at length why each of those would be wrong. A test that cannot tell
+     * code from a comment about the code forbids explaining the decision, which is
+     * the same reasoning the microphone-denied test above already uses.
+     */
+    function codeOnly(source) {
+        return source
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .split('\n')
+            .filter(line => !/^\s*\/\//.test(line))
+            .join('\n');
+    }
+
+    /**
+     * The real module, with an injected `window`. `document` inside it resolves to
+     * jsdom's, so render() draws into the live document.
+     */
+    function loadArchive(win) {
+        const factory = new Function('window',
+            archiveSource() + '\n;return window.RecordingArchive;');
+        return factory(win);
+    }
+
+    // --- stand-ins for the four browser APIs the module touches --------------
+
+    function FakeBlob(parts, opts) {
+        this.size = (parts || []).reduce((n, p) => n + ((p && p.size) || 0), 0);
+        this.type = (opts && opts.type) || '';
+    }
+
+    class FakeMediaRecorder {
+        constructor(stream) {
+            this.stream = stream;
+            this.state = 'inactive';
+            this.mimeType = 'audio/webm;codecs=opus';
+        }
+        start() { this.state = 'recording'; }
+        stop() {
+            this.state = 'inactive';
+            if (this.ondataavailable) {
+                this.ondataavailable({ data: { size: FakeMediaRecorder.chunkSize, type: this.mimeType } });
+            }
+            if (this.onstop) this.onstop();
+        }
+    }
+    FakeMediaRecorder.chunkSize = 2048;
+
+    /** Does NOT end by itself: the object-url tests need a url that stays live
+     *  while "playing", which is precisely the state a leak lives in. */
+    function FakeAudio(url) {
+        this.src = url;
+        this.paused = false;
+        FakeAudio.instances.push(this);
+    }
+    FakeAudio.instances = [];
+    FakeAudio.prototype.play = function () {
+        FakeAudio.played.push(this.src);
+        if (FakeAudio.autoEnd && this.onended) {
+            const self = this;
+            Promise.resolve().then(() => { if (self.onended) self.onended(); });
+        }
+        return Promise.resolve();
+    };
+    FakeAudio.prototype.pause = function () { this.paused = true; };
+    FakeAudio.played = [];
+    FakeAudio.autoEnd = false;
+    FakeAudio.reset = () => { FakeAudio.instances = []; FakeAudio.played = []; FakeAudio.autoEnd = false; };
+    FakeAudio.endAll = () => {
+        FakeAudio.instances.slice().forEach(a => { if (a.onended) a.onended(); });
+    };
+
+    const fakeStream = () => ({ getTracks: () => [{ stop() {} }] });
+
+    let logged;
+
+    function fakeWindow(extra) {
+        const win = {
+            BlobStore: BlobStore,
+            AppErrorHandler: { logError: (e, context) => logged.push(context) },
+            URL: global.URL,
+            Audio: FakeAudio,
+            Blob: FakeBlob,
+            MediaRecorder: FakeMediaRecorder,
+            navigator: { mediaDevices: { getUserMedia: () => Promise.resolve(fakeStream()) } }
+        };
+        Object.keys(extra || {}).forEach(k => { win[k] = extra[k]; });
+        return win;
+    }
+
+    /** Record and stop, resolving with what the recorder produced. */
+    function capture(Archive, surface) {
+        return new Promise(resolve => {
+            Archive.startCapture(surface, {
+                onstop: (blob, meta) => resolve({ blob: blob, meta: meta }),
+                onerror: e => resolve({ error: e })
+            }).then(started => { if (started) Archive.stopCapture(); });
+        });
+    }
+
+    const flush = () => new Promise(r => setTimeout(r, 0));
+
+    // ------------------------------------------------------------------
+    // Identity. No IndexedDB involved: this is arithmetic over content.
+    // ------------------------------------------------------------------
+
+    describe('the promptId is derived from the content, never from the index', () => {
+        let Archive;
+        beforeEach(() => { logged = []; Archive = loadArchive(fakeWindow()); });
+
+        it('extracts and runs without reaching for anything in app.js', () => {
+            // If the module ever closes over an app.js global, this throws.
+            expect(typeof Archive.listeningPromptId).toBe('function');
+            expect(typeof Archive.render).toBe('function');
+            expect(Archive.ID_VERSION).toBe('1');
+        });
+
+        it('survives a sentence being inserted at the front of a tier', () => {
+            // THE FAILURE THIS TEST EXISTS FOR. state.currentListeningIndex is
+            // positional: insert one sentence and index 0 is a different sentence,
+            // so an index-keyed archive would hand a learner's month-one recording
+            // to somebody else's words — silently, and in the one feature whose
+            // whole purpose is hearing month-one against month-three.
+            const tier = 'foundation';
+            const authored = listeningExercises[tier];
+            const before = normaliseListeningItem(authored[0], tier);
+            const recordedUnder = Archive.listeningPromptId(before);
+            expect(recordedUnder).toMatch(/^lsn:1:[0-9a-z]{14}$/);
+
+            // A content author inserts a sentence at the front of the tier.
+            const after = [{ text: 'Good morning. Did you sleep well?' }].concat(authored);
+
+            // Index 0 is now a DIFFERENT sentence...
+            const nowAtZero = normaliseListeningItem(after[0], tier);
+            expect(nowAtZero.text).toBe('Good morning. Did you sleep well?');
+            expect(nowAtZero.text).not.toBe(before.text);
+            expect(Archive.listeningPromptId(nowAtZero)).not.toBe(recordedUnder);
+
+            // ...and the learner's sentence has moved to index 1, with its archive
+            // key unchanged. The recording still belongs to the words it is of.
+            const movedTo = normaliseListeningItem(after[1], tier);
+            expect(movedTo.text).toBe(before.text);
+            expect(Archive.listeningPromptId(movedTo)).toBe(recordedUnder);
+
+            // And the id resolves BACK to the original sentence, which is what
+            // lets an eviction notice name it (US-218 / BR-3).
+            Archive.setCatalogue(() => after.map(raw => {
+                const item = normaliseListeningItem(raw, tier);
+                return { promptId: Archive.listeningPromptId(item), label: item.transcript };
+            }));
+            expect(Archive.describePrompt(recordedUnder)).toBe('“Hello, how are you today?”');
+        });
+
+        it('survives the whole tier being reversed', () => {
+            const tier = 'everyday';
+            const forward = listeningExercises[tier]
+                .map(raw => Archive.listeningPromptId(normaliseListeningItem(raw, tier)));
+            const backward = listeningExercises[tier].slice().reverse()
+                .map(raw => Archive.listeningPromptId(normaliseListeningItem(raw, tier)));
+            expect(backward).toEqual(forward.slice().reverse());
+        });
+
+        it('ignores every authored field that is not the utterance', () => {
+            // Authoring a comprehension question (US-702) onto a sentence a learner
+            // recorded in month one must not cost them the recording.
+            const plain = normaliseListeningItem({ text: 'The weather is beautiful outside.' }, 'foundation');
+            const id = Archive.listeningPromptId(plain);
+            const enriched = normaliseListeningItem({
+                text: 'The weather is beautiful outside.',
+                rate: 0.75,
+                seconds: 4,
+                situation: 'small talk with a neighbour',
+                focus: 'weather vocabulary',
+                notes: 'T-P1 rhythm',
+                shadow: true,
+                questions: [{ q: 'What is the weather like?' }]
+            }, 'confident');
+            expect(Archive.listeningPromptId(enriched)).toBe(id);
+            // Tier included: the same sentence promoted between tiers is the same
+            // sentence, and the learner keeps the recordings. Stated in the module
+            // header as a deliberate choice, not an accident.
+            expect(enriched.tier).not.toBe(plain.tier);
+        });
+
+        it('treats punctuation, casing, spacing and apostrophe style as not part of the utterance', () => {
+            const canonical = Archive.promptIdFor('lsn', "I don't know.");
+            expect(Archive.promptIdFor('lsn', 'I don’t know')).toBe(canonical);
+            expect(Archive.promptIdFor('lsn', '  I DON’T   know!  ')).toBe(canonical);
+            expect(Archive.promptIdFor('lsn', 'i dont know')).toBe(canonical);
+            expect(Archive.contentKey("I don't know.")).toBe('i dont know');
+        });
+
+        it('changes the id when the sentence itself changes, and must', () => {
+            // Not a wart. A different sentence is a different prompt, and keeping
+            // the old recordings under it would play a learner's voice against
+            // words they never said (BR-3).
+            const a = Archive.promptIdFor('lsn', 'I like to read books.');
+            const b = Archive.promptIdFor('lsn', 'I like to read magazines.');
+            expect(b).not.toBe(a);
+        });
+
+        it('gives every authored listening sentence in the repo a distinct id', () => {
+            const ids = [];
+            Object.keys(listeningExercises).forEach(tier => {
+                listeningExercises[tier].forEach(raw => {
+                    ids.push(Archive.listeningPromptId(normaliseListeningItem(raw, tier)));
+                });
+            });
+            expect(ids).toHaveLength(30);
+            expect(new Set(ids).size).toBe(ids.length);
+            // normalizePromptId() in blobstore.js refuses anything over 200 chars.
+            ids.forEach(id => expect(id.length).toBeLessThanOrEqual(200));
+        });
+
+        it('has no id for an item with no words, rather than one shared by all of them', () => {
+            expect(Archive.listeningPromptId(null)).toBe('');
+            expect(Archive.listeningPromptId({ text: '' })).toBe('');
+            expect(Archive.contentKey('   ')).toBe('');
+            // Punctuation-only or non-Latin text still gets ONE key each rather
+            // than colliding on ''.
+            expect(Archive.promptIdFor('lsn', 'నమస్కారం'))
+                .not.toBe(Archive.promptIdFor('lsn', 'ధన్యవాదాలు'));
+        });
+
+        it('uses the authored pair id for a pronunciation prompt, unhashed', () => {
+            // pair.id is already stable content identity and every comment in that
+            // section protects it, so hashing it would only make an archive row
+            // unreadable for no gain.
+            expect(Archive.pronunciationPromptId({ id: 'iː-ɪ' })).toBe('pron:1:iː-ɪ');
+            expect(Archive.pronunciationPromptId({ id: 'v-w' })).toBe('pron:1:v-w');
+            expect(Archive.pronunciationPromptId({})).toBe('');
+            // Different namespace from listening, so the two can never collide.
+            expect(Archive.pronunciationPromptId({ id: 'v-w' }).indexOf('pron:')).toBe(0);
+        });
+
+        it('never lets an index near the archive', () => {
+            // The single most important structural assertion in this story.
+            expect(codeOnly(archiveSource())).not.toContain('currentListeningIndex');
+            expect(codeOnly(archiveSource())).not.toContain('currentPronunciationIndex');
+            expect(codeOnly(appSource)).not.toMatch(/RecordingArchive\.[A-Za-z]+\([^)]*current\w*Index/);
+            const load = functionBody('function loadListeningExercise(');
+            expect(load).toContain('RecordingArchive.listeningPromptId(item)');
+        });
+
+        it('is loaded by index.html and drawn into a region that exists', () => {
+            const host = doc.getElementById('recordingArchive');
+            expect(host).not.toBeNull();
+            expect(doc.getElementById('listening').contains(host)).toBe(true);
+            // Starts hidden and empty: on a browser with no IndexedDB the region
+            // holds one honest note and nothing else changes.
+            expect(host.hasAttribute('hidden')).toBe(true);
+            expect(host.textContent.trim()).toBe('');
+            expect(host.getAttribute('role')).toBe('region');
+            expect(host.getAttribute('aria-label')).toBeTruthy();
+        });
+    });
+
+    // ------------------------------------------------------------------
+    // The archive, driven through the real store
+    // ------------------------------------------------------------------
+
+    describe('walking it: record, leave the sentence, come back', () => {
+        const REAL_NOW = BlobStore._now;
+        const MB = 1024 * 1024;
+
+        let idb;
+        let Archive;
+        let clock;
+        let createdUrls;
+        let revokedUrls;
+
+        const blobOf = (size) => ({ size: size, type: 'audio/webm;codecs=opus' });
+        const host = () => document.getElementById('recordingArchive');
+        const status = () => document.getElementById('recordingStatus');
+        const texts = (selector) =>
+            Array.from(host().querySelectorAll(selector)).map(el => el.textContent);
+
+        function renderFor(promptId) {
+            return Archive.render({
+                hostId: 'recordingArchive',
+                promptId: promptId,
+                surface: 'listening',
+                thing: 'sentence',
+                status: 'recordingStatus'
+            });
+        }
+
+        beforeEach(() => {
+            logged = [];
+            // blobstore.js binds to the jsdom window, so its logError() looks for
+            // AppErrorHandler there. Routing both layers to one spy exercises that
+            // branch and keeps the suite's output readable.
+            global.AppErrorHandler = { logError: (e, context) => logged.push(context) };
+            FakeAudio.reset();
+            createdUrls = [];
+            revokedUrls = [];
+            let n = 0;
+            // jsdom implements neither of these.
+            global.URL.createObjectURL = () => {
+                const url = 'blob:archive/' + (++n);
+                createdUrls.push(url);
+                return url;
+            };
+            global.URL.revokeObjectURL = (url) => { revokedUrls.push(url); };
+
+            clock = new Date(2026, 8, 12, 14, 3).getTime();
+            BlobStore._now = () => clock;
+            BlobStore.revokeAll();
+            revokedUrls = [];
+            BlobStore._reset();
+
+            idb = new FakeIndexedDB({});
+            BlobStore._useEnvironment({ indexedDB: idb, IDBKeyRange: FakeKeyRange });
+
+            document.body.innerHTML =
+                '<div class="recording-status" id="recordingStatus"></div>' +
+                '<div class="recording-archive" id="recordingArchive" hidden></div>';
+
+            Archive = loadArchive(fakeWindow());
+        });
+
+        afterEach(() => {
+            BlobStore._useEnvironment(null);
+            BlobStore._now = REAL_NOW;
+        });
+
+        it('keeps the recording when the learner leaves the sentence and comes back', async () => {
+            const tier = 'foundation';
+            const mine = normaliseListeningItem(listeningExercises[tier][0], tier);
+            const other = normaliseListeningItem(listeningExercises[tier][1], tier);
+            const promptId = Archive.listeningPromptId(mine);
+
+            // 1. Record. This is the recorder app.js actually calls.
+            const recorded = await capture(Archive, 'listening');
+            expect(recorded.blob.size).toBe(2048);
+            expect(recorded.meta.mimeType).toBe('audio/webm;codecs=opus');
+
+            const saved = await Archive.save(promptId, blobOf(2048), {
+                durationMs: 4200, mimeType: recorded.meta.mimeType, label: mine.transcript
+            });
+            expect(saved.ok).toBe(true);
+            // BlobStore's own copy, verbatim. Nothing here writes over it.
+            expect(saved.message)
+                .toBe('Saved. You can play it back and compare it with your earlier tries.');
+            expect(saved.elsewhere).toEqual([]);
+
+            // 2. Next → : app.js releases this surface and redraws for the new
+            //    sentence. Before this story the recording died here.
+            Archive.release('listening');
+            let drawn = await renderFor(Archive.listeningPromptId(other));
+            expect(drawn.records).toHaveLength(0);
+            expect(texts('p')).toEqual([
+                'Nothing is kept for this sentence yet. Record yourself and it stays on this device, ' +
+                'so next month you can hear today against then.'
+            ]);
+
+            // 3. ← Previous : and it is still there.
+            drawn = await renderFor(promptId);
+            expect(drawn.records).toHaveLength(1);
+            expect(host().hidden).toBe(false);
+            expect(host().querySelector('.archive-head').textContent)
+                .toBe('Your recordings of this sentence');
+            expect(texts('.archive-when')).toEqual([
+                'Your first try — 12 Sep 2026, 14:03 (0:04)'
+            ]);
+            expect(texts('.archive-item button')).toEqual(['▶ Play', '🗑 Delete']);
+            expect(host().querySelector('.archive-item').className)
+                .toBe('archive-item is-baseline');
+            expect(texts('p')).toEqual([
+                'This keeps your first recording and your two most recent.'
+            ]);
+            // One recording is not a comparison, so no compare button yet.
+            expect(host().querySelector('.archive-compare')).toBeNull();
+            expect(logged).toEqual([]);
+        });
+
+        it('plays a kept recording back, and says what it is doing', async () => {
+            const promptId = 'lsn:1:playbackcase';
+            await Archive.save(promptId, blobOf(1024), { durationMs: 3000 });
+            await renderFor(promptId);
+
+            host().querySelector('.archive-play').click();
+            await flush();
+
+            expect(FakeAudio.played).toEqual([createdUrls[createdUrls.length - 1]]);
+            expect(status().textContent).toBe('Playing your recording.');
+            expect(Archive.liveUrls('listening')).toBe(1);
+
+            FakeAudio.endAll();
+            expect(Archive.liveUrls('listening')).toBe(0);
+            expect(revokedUrls).toContain(createdUrls[createdUrls.length - 1]);
+        });
+
+        it('keeps the pinned baseline and drops the second-oldest on the fourth try', async () => {
+            // FR-DATA-6 as amended: one pinned baseline plus the N-1 most recent.
+            // A plain ring buffer would delete recording #1 here, which is the half
+            // of the comparison Strand E.7 exists for.
+            const promptId = 'lsn:1:fourthtry';
+            const base = clock;
+            const at = ms => { clock = ms; };
+
+            at(base);           await Archive.save(promptId, blobOf(1000), { durationMs: 1000 });
+            at(base + 60000);   await Archive.save(promptId, blobOf(1000), { durationMs: 2000 });
+            at(base + 120000);  await Archive.save(promptId, blobOf(1000), { durationMs: 3000 });
+            at(base + 180000);
+            const fourth = await Archive.save(promptId, blobOf(1000), { durationMs: 4000 });
+
+            // The fourth write is the one that evicts, and it says so — about THIS
+            // prompt, which is where the recording actually went from.
+            expect(fourth.ok).toBe(true);
+            expect(fourth.message).toBe(
+                'Saved. This prompt keeps your first recording and your two most recent, so an ' +
+                'in-between one was removed.');
+            expect(fourth.elsewhere).toEqual([]);
+
+            const rows = await Archive.list(promptId);
+            expect(rows).toHaveLength(3);
+            // Newest first. The baseline (id 1) is kept; the SECOND-oldest (id 2,
+            // the in-between one) is what went.
+            expect(rows.map(r => r.id)).toEqual([4, 3, 1]);
+            expect(rows.map(r => r.createdAt))
+                .toEqual([base + 180000, base + 120000, base]);
+            expect(rows.map(r => r.baseline)).toEqual([false, false, true]);
+            expect(idb.ids()).toEqual([1, 3, 4]);
+            expect(idb.audioIds()).toEqual([1, 3, 4]);
+
+            // The row created SECOND is the one that is gone, and the learner's very
+            // first try is not.
+            expect(rows.some(r => r.durationMs === 2000)).toBe(false);
+            expect(rows.some(r => r.durationMs === 1000)).toBe(true);
+
+            // And the learner is offered the comparison the whole feature is for.
+            await renderFor(promptId);
+            expect(host().querySelector('.archive-compare').textContent)
+                .toBe('▶ Your first try, then your latest');
+            expect(texts('.archive-when').map(t => t.split(' — ')[0]))
+                .toEqual(['A later try', 'A later try', 'Your first try']);
+        });
+
+        it('plays first-then-latest as two clips, one live url at a time', async () => {
+            const promptId = 'lsn:1:comparecase';
+            const base = clock;
+            await Archive.save(promptId, blobOf(1000), { durationMs: 1000 });
+            clock = base + 60000;
+            await Archive.save(promptId, blobOf(1000), { durationMs: 2000 });
+            await renderFor(promptId);
+
+            FakeAudio.autoEnd = true;
+            host().querySelector('.archive-compare').click();
+            await flush();
+            await flush();
+
+            expect(FakeAudio.played).toHaveLength(2);
+            // Oldest first: the point is hearing where you started, then where you
+            // are. And every url handed out has been given back.
+            expect(Archive.liveUrls('listening')).toBe(0);
+            expect(revokedUrls.length).toBe(createdUrls.length);
+        });
+
+        it('lets the learner delete one, and refuses to confirm a deletion twice', async () => {
+            const promptId = 'lsn:1:deletecase';
+            await Archive.save(promptId, blobOf(1000), { durationMs: 1000 });
+            await renderFor(promptId);
+            expect(texts('.archive-when')).toHaveLength(1);
+
+            host().querySelector('.archive-delete').click();
+            await flush();
+            await flush();
+
+            expect(status().textContent).toBe('Recording deleted.');
+            expect(await Archive.list(promptId)).toEqual([]);
+            expect(idb.ids()).toEqual([]);
+            expect(idb.audioIds()).toEqual([]);
+            expect(texts('p')).toContain(
+                'Nothing is kept for this sentence yet. Record yourself and it stays on this device, ' +
+                'so next month you can hear today against then.');
+
+            // remove() of an absent id reports `missing` rather than confirming a
+            // deletion that never happened (US-217), and the learner is told the
+            // recording is gone rather than that it was just deleted.
+            const again = await Archive.remove(1);
+            expect(again.ok).toBe(false);
+            expect(again.code).toBe('missing');
+            expect(again.message).toBe('That recording is no longer on this device.');
+        });
+
+        it('names the OTHER sentences when the cap frees space from them', async () => {
+            // US-218 / BR-3. The 50MB cap takes from other prompts, and telling the
+            // learner "an in-between one at this prompt was removed" would name the
+            // wrong sentence entirely.
+            const mine = normaliseListeningItem(listeningExercises.foundation[0], 'foundation');
+            const owner = Archive.listeningPromptId(mine);
+            const filler = 'lsn:1:fillerprompt';
+            const theirs = 'lsn:1:otherprompt';
+            Archive.setCatalogue(() => [{ promptId: owner, label: mine.transcript }]);
+
+            // 45MB against a 50MB cap, with exactly one expendable row in it: the
+            // in-between recording at `owner`. Every recording is 9MB, because
+            // MAX_RECORDING_BYTES clamps one recording to 10MB (US-221).
+            const base = clock;
+            let t = base;
+            const save = (promptId) => { t += 1000; clock = t; return Archive.save(promptId, blobOf(9 * MB), {}); };
+            await save(owner);    // baseline, protected
+            await save(owner);    // in-between, the only expendable row anywhere
+            await save(owner);    // newest at this prompt, protected
+            await save(filler);   // baseline, protected
+            await save(filler);   // newest, protected
+
+            t += 1000; clock = t;
+            const result = await Archive.save(theirs, blobOf(9 * MB), {});
+
+            expect(result.ok).toBe(true);
+            expect(result.message).toBe(
+                'Saved. There was no room left on this device, so in-between recordings at your ' +
+                'other prompts were deleted to make space. Every prompt still keeps its first ' +
+                'recording and its most recent one.');
+            // Named, not implied.
+            expect(result.elsewhere).toEqual(['“Hello, how are you today?”']);
+            // The baseline and the newest at the other prompt both survived.
+            const kept = await Archive.list(owner);
+            expect(kept.map(r => r.baseline)).toEqual([false, true]);
+        });
+
+        it('falls back honestly for a prompt it cannot name', async () => {
+            // An algorithmically generated sentence is not in the catalogue, and
+            // inventing a name for it would be worse than saying so.
+            Archive.setCatalogue(() => []);
+            expect(Archive.describePrompt('lsn:1:unknownnnn'))
+                .toBe('another sentence you have recorded');
+        });
+
+        it('leaks no object url across a Prev/Next walk', async () => {
+            const a = 'lsn:1:walkpromptaa';
+            const b = 'lsn:1:walkpromptbb';
+            await Archive.save(a, blobOf(1000), { durationMs: 1000 });
+            await Archive.save(b, blobOf(1000), { durationMs: 1000 });
+
+            const urlsAtStart = createdUrls.length;   // the availability probe makes none
+            for (let i = 0; i < 3; i++) {
+                for (const promptId of [a, b]) {
+                    await renderFor(promptId);
+                    host().querySelector('.archive-play').click();
+                    await flush();
+                    // Exactly one live url, always: open() releases this surface's
+                    // previous one before it asks for another.
+                    expect(Archive.liveUrls('listening')).toBe(1);
+                    expect(BlobStore.liveUrlCount()).toBe(1);
+                    // Next → / ← Previous, as loadListeningExercise() does it.
+                    Archive.release('listening');
+                    expect(Archive.liveUrls('listening')).toBe(0);
+                }
+            }
+
+            expect(createdUrls.length - urlsAtStart).toBe(6);
+            expect(revokedUrls.length).toBe(createdUrls.length);
+            expect(BlobStore.liveUrlCount()).toBe(0);
+            // The store's MAX_LIVE_URLS net (which revokes the oldest past 8) never
+            // had to fire. It is a backstop for a caller that forgot, not a licence.
+            expect(BlobStore.MAX_LIVE_URLS).toBe(8);
+        });
+
+        it('does not revoke a url another surface is still playing', async () => {
+            const listening = 'lsn:1:twosurfacea';
+            const pron = 'pron:1:v-w';
+            await Archive.save(listening, blobOf(1000), { durationMs: 1000 });
+            await Archive.save(pron, blobOf(1000), { durationMs: 1000 });
+            const listeningRow = (await Archive.list(listening))[0];
+            const pronRow = (await Archive.list(pron))[0];
+
+            const openedListening = await Archive.open('listening', listeningRow.id);
+            const openedPron = await Archive.open('pron', pronRow.id);
+            expect(openedListening.ok).toBe(true);
+            expect(openedPron.ok).toBe(true);
+            expect(BlobStore.liveUrlCount()).toBe(2);
+
+            // Prev/Next in Listening. Not BlobStore.revokeAll(), which would reach
+            // across and cut off the pronunciation task mid-comparison.
+            Archive.release('listening');
+            expect(revokedUrls).toContain(openedListening.url);
+            expect(revokedUrls).not.toContain(openedPron.url);
+            expect(Archive.liveUrls('pron')).toBe(1);
+            expect(BlobStore.liveUrlCount()).toBe(1);
+
+            Archive.releaseAll();
+            expect(BlobStore.liveUrlCount()).toBe(0);
+        });
+
+        it('reports a recording that is no longer there as exactly that', async () => {
+            const opened = await Archive.open('listening', 4242);
+            expect(opened.ok).toBe(false);
+            expect(opened.code).toBe('missing');
+            expect(opened.message).toBe('That recording is no longer on this device.');
+        });
+    });
+
+    // ------------------------------------------------------------------
+    // The failure modes. None of them may stop an exercise.
+    // ------------------------------------------------------------------
+
+    describe('storage failing never blocks the exercise (NFR-8, FR-A11Y-4)', () => {
+        const REAL_NOW = BlobStore._now;
+        let Archive;
+
+        function renderFor(promptId) {
+            return Archive.render({
+                hostId: 'recordingArchive',
+                promptId: promptId,
+                surface: 'listening',
+                thing: 'sentence',
+                status: 'recordingStatus'
+            });
+        }
+
+        const notes = () => Array.from(
+            document.getElementById('recordingArchive').querySelectorAll('p')
+        ).map(p => p.textContent);
+
+        beforeEach(() => {
+            logged = [];
+            global.AppErrorHandler = { logError: (e, context) => logged.push(context) };
+            FakeAudio.reset();
+            global.URL.createObjectURL = () => 'blob:archive/x';
+            global.URL.revokeObjectURL = () => {};
+            BlobStore.revokeAll();
+            BlobStore._reset();
+            BlobStore._now = () => 1000;
+            document.body.innerHTML =
+                '<div class="recording-status" id="recordingStatus"></div>' +
+                '<div class="recording-archive" id="recordingArchive" hidden></div>';
+        });
+
+        afterEach(() => {
+            BlobStore._useEnvironment(null);
+            BlobStore._now = REAL_NOW;
+        });
+
+        const KEPT_NOTHING =
+            'This browser will not let the app keep recordings, so this one lasts until you leave ' +
+            'the page. Everything else works normally.';
+        const STILL_WORKS =
+            'Recording still works. You can play back what you just said until you leave this ' +
+            'sentence — nothing is kept after that.';
+
+        it('records and plays back within the session on a browser with no IndexedDB', async () => {
+            BlobStore._useEnvironment({ indexedDB: null, IDBKeyRange: null });
+            Archive = loadArchive(fakeWindow());
+
+            const can = await Archive.availability();
+            expect(can.ok).toBe(false);
+            expect(can.code).toBe('no-indexeddb');
+
+            // The microphone still works, which is the whole point: the archive is
+            // an enhancement, and its absence changes nothing about the exercise.
+            const recorded = await capture(Archive, 'listening');
+            expect(recorded.error).toBeUndefined();
+            expect(recorded.blob.size).toBe(2048);
+
+            const saved = await Archive.save('lsn:1:noidbcase00', recorded.blob, {});
+            expect(saved.ok).toBe(false);
+            expect(saved.code).toBe('no-indexeddb');
+            expect(saved.message).toBe(KEPT_NOTHING);
+
+            const drawn = await renderFor('lsn:1:noidbcase00');
+            expect(drawn.records).toEqual([]);
+            expect(notes()).toEqual([KEPT_NOTHING, STILL_WORKS]);
+            // No throw and no rejection. blobstore.js logs the unavailability once,
+            // as it documents; nothing in the archive layer logs a failure of its
+            // own, because for the learner nothing has failed.
+            expect(logged).toContain('blobstore availability');
+            expect(logged.filter(c => String(c).indexOf('archive') === 0)).toEqual([]);
+        });
+
+        it('tells a learner with the app open twice which tab to close', async () => {
+            BlobStore._useEnvironment({
+                indexedDB: new FakeIndexedDB({ openMode: 'blocked' }),
+                IDBKeyRange: FakeKeyRange
+            });
+            Archive = loadArchive(fakeWindow());
+
+            const can = await Archive.availability();
+            expect(can.code).toBe('blocked-by-other-tab');
+            await renderFor('lsn:1:othertabcase');
+            expect(notes()).toEqual([
+                'This app is open in another tab, which is holding on to your recordings. ' +
+                'Close the other tab and try again.',
+                STILL_WORKS
+            ]);
+        });
+
+        it('retries a transient failure without a page reload', async () => {
+            const blocked = new FakeIndexedDB({ openMode: 'blocked' });
+            BlobStore._useEnvironment({ indexedDB: blocked, IDBKeyRange: FakeKeyRange });
+            Archive = loadArchive(fakeWindow());
+            expect((await Archive.availability()).ok).toBe(false);
+
+            // The other tab closes. Neither blobstore.js nor the archive caches a
+            // transient failure, so the next ask really re-checks.
+            BlobStore._reset();
+            BlobStore._useEnvironment({ indexedDB: new FakeIndexedDB({}), IDBKeyRange: FakeKeyRange });
+            expect((await Archive.availability()).ok).toBe(true);
+        });
+
+        it('reports a device whose IndexedDB cannot hold a Blob', async () => {
+            // Some WebKit builds accept the write and lose the payload. Only the
+            // deep probe catches it, which is why availability() asks for one.
+            BlobStore._useEnvironment({
+                indexedDB: new FakeIndexedDB({ dropBlobs: true }),
+                IDBKeyRange: FakeKeyRange
+            });
+            Archive = loadArchive(fakeWindow());
+            const can = await Archive.availability();
+            expect(can.ok).toBe(false);
+            expect(can.code).toBe('blob-roundtrip-failed');
+            await renderFor('lsn:1:noblobcase0');
+            expect(notes()).toEqual([KEPT_NOTHING, STILL_WORKS]);
+        });
+
+        it('refuses an empty recording without pretending anything was kept', async () => {
+            BlobStore._useEnvironment({ indexedDB: new FakeIndexedDB({}), IDBKeyRange: FakeKeyRange });
+            Archive = loadArchive(fakeWindow());
+            const result = await Archive.save('lsn:1:emptycase00', { size: 0, type: 'audio/webm' }, {});
+            expect(result.ok).toBe(false);
+            expect(result.message).toBe('Nothing was recorded, so there is nothing to keep.');
+        });
+
+        it('refuses a recorder that was never stopped, and says what to do', async () => {
+            BlobStore._useEnvironment({ indexedDB: new FakeIndexedDB({}), IDBKeyRange: FakeKeyRange });
+            Archive = loadArchive(fakeWindow());
+            const tooBig = { size: BlobStore.MAX_RECORDING_BYTES + 1, type: 'audio/webm' };
+            const result = await Archive.save('lsn:1:toolongcase', tooBig, {});
+            expect(result.ok).toBe(false);
+            expect(result.message).toBe(
+                'That recording is too long to keep. Stop the recording when you have finished ' +
+                'speaking and try again — nothing else has changed.');
+        });
+
+        it('says the microphone is missing without ending the section', async () => {
+            BlobStore._useEnvironment({ indexedDB: new FakeIndexedDB({}), IDBKeyRange: FakeKeyRange });
+            Archive = loadArchive(fakeWindow({ MediaRecorder: undefined, navigator: {} }));
+            expect(Archive.recorderMissing()).toBe(true);
+            const attempt = await capture(Archive, 'listening');
+            expect(attempt.error.code).toBe('no-recorder');
+            expect(Archive.isRecording()).toBe(false);
+        });
+
+        it('draws nothing at all for an item with no promptId', async () => {
+            BlobStore._useEnvironment({ indexedDB: new FakeIndexedDB({}), IDBKeyRange: FakeKeyRange });
+            Archive = loadArchive(fakeWindow());
+            const drawn = await renderFor('');
+            expect(drawn.records).toEqual([]);
+            expect(document.getElementById('recordingArchive').hidden).toBe(true);
+            expect(document.getElementById('recordingArchive').textContent).toBe('');
+        });
+
+        it('treats a missing host as nothing to draw, so an old index.html still works', async () => {
+            // service-worker.js serves app.js cache-first and index.html
+            // network-first, so new-app-old-markup is a real offline combination.
+            BlobStore._useEnvironment({ indexedDB: new FakeIndexedDB({}), IDBKeyRange: FakeKeyRange });
+            Archive = loadArchive(fakeWindow());
+            document.body.innerHTML = '';
+            const drawn = await Archive.render({ hostId: 'recordingArchive', promptId: 'lsn:1:x' });
+            expect(drawn).toEqual({ records: [], availability: null });
+        });
+    });
+
+    // ------------------------------------------------------------------
+    // Where app.js calls it from
+    // ------------------------------------------------------------------
+
+    describe('the call sites in app.js', () => {
+        it('finishes the exercise before it touches storage', () => {
+            const handler = appSource.slice(
+                appSource.indexOf("document.getElementById('startRecording').onclick"),
+                appSource.indexOf("document.getElementById('stopRecording').onclick"));
+            // FR-A11Y-4 / NFR-8's principle: the attempt counts first, so no
+            // storage failure can cost a learner a completed item.
+            expect(handler).toContain("markListeningAttempt('recorded', true)");
+            expect(handler).toContain('keepListeningRecording(blob, meta)');
+            expect(handler.indexOf("markListeningAttempt('recorded', true)"))
+                .toBeLessThan(handler.indexOf('keepListeningRecording(blob, meta)'));
+            // And the FR-A11Y-4 no-microphone route is still the same route.
+            expect(handler).toContain('✓ I said it');
+            expect(handler).toContain("AppErrorHandler.logError(e, 'listening recording')");
+        });
+
+        it('releases this surface on navigation and never reaches across', () => {
+            const load = functionBody('function loadListeningExercise(');
+            expect(load).toContain("RecordingArchive.release('listening')");
+            expect(load).toContain('refreshListeningArchive()');
+            // revokeAll() would kill a url the pronunciation task is playing.
+            expect(codeOnly(appSource)).not.toContain('BlobStore.revokeAll');
+            expect(codeOnly(archiveSource())).not.toContain('revokeAll()');
+        });
+
+        it('reports BlobStore\'s own copy rather than writing over it', () => {
+            const body = functionBody('function reportArchiveSave(');
+            expect(body).toContain('result.message');
+            expect(body).not.toMatch(/Error saving|Something went wrong|Failed to save/);
+            // The one thing added: WHICH other prompts lost a recording.
+            expect(body).toContain('The recordings that were removed were at ');
+            expect(body).toContain('result.elsewhere');
+        });
+
+        it('never keys a save on anything but the derived promptId', () => {
+            const body = functionBody('function keepListeningRecording(');
+            expect(body).toContain('const promptId = listeningPromptId();');
+            expect(body).toContain('if (!promptId || !blob || !blob.size) return;');
+            expect(body).not.toContain('Index');
+        });
+
+        it('registers every authored prompt so an eviction can be named', () => {
+            expect(appSource).toContain('RecordingArchive.setCatalogue(');
+            const at = appSource.indexOf('RecordingArchive.setCatalogue(');
+            const block = appSource.slice(at, at + 1600);
+            expect(block).toContain('RecordingArchive.listeningPromptId(item)');
+            expect(block).toContain('RecordingArchive.pronunciationPromptId(pair)');
+        });
+    });
+});
+
+// ===========================================================================
+// US-404 — self-comparison, A -> B -> A (FR-PRN-4 / FR-PRN-5)
+// ===========================================================================
+//
+// Structural, in the same spirit as the rest of this file: renderPronunciationProduce()
+// reaches for pronGate(), pronParagraph(), SRS and speechSynthesis, so it is not
+// extractable the way the archive module is. What IS worth pinning here is every
+// promise this story makes that a later edit could quietly break — the matched
+// speed, the absence of a score, the feelable question, and the skip path that
+// FR-A11Y-4 says must survive the arrival of a recorder.
+
+describe('pronunciation self-comparison, A -> B -> A (US-404 / FR-PRN-4)', () => {
+    const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+
+    /** The body of one top-level function, by brace matching. */
+    function functionBody(header) {
+        const start = appSource.indexOf(header);
+        expect(start).toBeGreaterThan(-1);
+        let depth = 0;
+        for (let i = appSource.indexOf('{', start); i < appSource.length; i++) {
+            if (appSource[i] === '{') depth++;
+            else if (appSource[i] === '}' && --depth === 0) return appSource.slice(start, i + 1);
+        }
+        throw new Error('unbalanced braces after ' + header);
+    }
+
+    /** Code with comments removed — the assertions below forbid particular code,
+     *  and the comments explain at length why. */
+    function codeOnly(source) {
+        return source
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .split('\n')
+            .filter(line => !/^\s*\/\//.test(line))
+            .join('\n');
+    }
+
+    it('no longer prints "this app does not record you"', () => {
+        // The line was honest while there was no recorder and PROGRESS.md §6.aa
+        // rule 3 required it. US-136 built the recorder, so the right fix was to
+        // stop needing the disclaimer rather than to keep apologising. The two
+        // remaining occurrences are comments quoting what was removed.
+        const code = codeOnly(appSource);
+        expect(code).not.toContain('This app does not record you');
+        expect(code).not.toContain('nothing is played back and nothing is scored');
+        expect(appSource).toContain('This app does not record you');   // in a comment
+    });
+
+    it('still says, in the same place, that nothing is scored', () => {
+        // FR-PRN-5 / BR-3. What went was the claim "this app cannot record you".
+        // What must not go is the claim "nothing here is a verdict on your voice",
+        // which is true of any app and is the honest half of the old sentence.
+        const body = functionBody('function renderPronunciationProduce(');
+        expect(body).toContain('Nothing on this screen is scored');
+        expect(body).toContain('what it cannot do is judge your voice, so it does not try');
+        expect(body).toContain('the only honest test is to ask one');
+    });
+
+    it('plays model, learner, model — in that order', () => {
+        const body = functionBody('function pronRunComparison(');
+        const first = body.indexOf('pronSpeakSequence(words, PRON_RATE_SLOW');
+        const learner = body.indexOf('pronPlayLearner(');
+        const again = body.indexOf('modelAgain');
+        expect(first).toBeGreaterThan(-1);
+        expect(learner).toBeGreaterThan(-1);
+        expect(again).toBeGreaterThan(-1);
+        // The model is spoken, and the learner's clip only starts once the model
+        // has finished: that is what `pronSpeakSequence`'s callback is for, and it
+        // is why pronSpeak() could not be reused.
+        expect(body).toContain("pronCompareStatus('Now you.')");
+        expect(functionBody('function pronSpeakSequence(')).toContain('u.onend = advance;');
+    });
+
+    it('plays both models at the same rate, and does not re-time the learner', () => {
+        // PROGRESS.md §6.aa rule 4. A fast model against a slow attempt teaches the
+        // learner about the speed and nothing about the sound.
+        const body = functionBody('function pronRunComparison(');
+        const rates = body.match(/pronSpeakSequence\(words, ([A-Z_]+),/g) || [];
+        expect(rates).toHaveLength(2);
+        rates.forEach(call => expect(call).toContain('PRON_RATE_SLOW'));
+        // The learner's own clip plays at its natural rate. Anything else would be
+        // the app editing the thing it is asking the learner to judge.
+        expect(codeOnly(functionBody('function pronPlayUrl('))).not.toContain('playbackRate');
+        expect(codeOnly(functionBody('function pronPlayLearner('))).not.toContain('playbackRate');
+        // And it says so to the learner.
+        expect(body).toContain('at exactly the same speed');
+    });
+
+    it('asks a feelable question and refuses the unanswerable one', () => {
+        const body = functionBody('function appendPronunciationComparison(');
+        // The question is the AUTHORED one, not a second one invented here.
+        expect(body).toContain('const feel = (pair.feelChecks || [])[0];');
+        expect(body).toContain('+ feel');
+        // "Did it sound right?" appears exactly once and only to be ruled out.
+        expect(body).toContain('it is not "did it sound right?"');
+        expect(body).toContain('that is the one thing you cannot judge yet');
+    });
+
+    it('is fed by content whose feelChecks are all feelable', () => {
+        // FR-PRN-4 is only as good as the authored questions. A `feelChecks` entry
+        // asking about the SOUND would put the unanswerable question back on screen
+        // through the content rather than through the code.
+        ['vowels-stress.js', 'consonants.js'].forEach(file => {
+            const src = fs.readFileSync(path.join(ROOT, 'data', 'pronunciation', file), 'utf8');
+            const blocks = src.match(/feelChecks:\s*\[[\s\S]*?\]/g) || [];
+            expect(blocks.length).toBeGreaterThan(0);
+            blocks.forEach(block => {
+                expect(block.toLowerCase()).not.toContain('sound right');
+                expect(block.toLowerCase()).not.toContain('sound correct');
+                expect(block.toLowerCase()).not.toContain('did it sound');
+            });
+        });
+        // The example FR-PRN-4 itself gives, so the requirement's own wording is
+        // reachable from the app.
+        const consonants = fs.readFileSync(
+            path.join(ROOT, 'data', 'pronunciation', 'consonants.js'), 'utf8');
+        expect(consonants).toContain('Did your top teeth touch your bottom lip');
+    });
+
+    it('produces no score, no verdict and no pass/fail', () => {
+        const produce = functionBody('function renderPronunciationProduce(');
+        const compare = functionBody('function appendPronunciationComparison(');
+        const run = functionBody('function pronRunComparison(');
+        [produce, compare, run].forEach(body => {
+            // FR-PRN-2's accuracy counter belongs to the DISCRIMINATION drill. A
+            // call to it from here would score a recording (FR-PRN-5).
+            expect(codeOnly(body)).not.toContain('pronRecordAttempt(');
+            expect(codeOnly(body)).not.toContain('Mistakes.record(');
+            expect(codeOnly(body)).not.toMatch(/\bcorrect\s*[?:=]/);
+        });
+        // Nothing in the comparison touches SRS at all: the only SRS call in the
+        // production task is the "not yet" self-report below, which cannot certify.
+        expect(codeOnly(compare)).not.toContain('SRS.');
+        expect(codeOnly(run)).not.toContain('SRS.');
+    });
+
+    it('sends "not yet" to SRS as a self-report and "yes" nowhere', () => {
+        // FR-SRS-5. A self-marked production task may shorten an interval and may
+        // never be counted as verified-correct, so the flag is not optional.
+        const body = functionBody('function renderPronunciationProduce(');
+        expect(body).toContain(
+            "SRS.scheduleItem('phon', pair.id, pair, false, { selfReported: true })");
+        // And the affirmative goes to SRS not at all: a learner marking their own
+        // speaking right is not evidence of anything.
+        const yesHandler = body.slice(
+            body.indexOf("yes.addEventListener('click'"),
+            body.indexOf("const notYet = document.createElement('button')"));
+        expect(codeOnly(yesHandler)).not.toContain('SRS.');
+        expect(yesHandler).toContain('this app never judges your voice');
+    });
+
+    it('keeps the skip-and-mark-done path in front of the recorder (FR-A11Y-4)', () => {
+        const body = functionBody('function renderPronunciationProduce(');
+        const yes = body.indexOf('Yes, I felt that');
+        const notYet = body.indexOf('Not yet / skip this');
+        const comparison = body.indexOf('appendPronunciationComparison(host, pair)');
+        expect(yes).toBeGreaterThan(-1);
+        expect(notYet).toBeGreaterThan(-1);
+        // Appended AFTER, so everything a learner needs to finish is already on
+        // screen and needs no microphone, no audio and no storage.
+        expect(comparison).toBeGreaterThan(yes);
+        expect(comparison).toBeGreaterThan(notYet);
+    });
+
+    it('says the task is still finishable when there is no microphone', () => {
+        const body = functionBody('function appendPronunciationComparison(');
+        expect(body).toContain('RecordingArchive.recorderMissing()');
+        expect(body).toContain('Say the words out loud anyway and answer the question below');
+        expect(body).toContain('it was never the recording.');
+        // The refusal-at-the-moment-it-bites copy, for a learner who declines the
+        // permission prompt rather than lacking the hardware.
+        expect(body).toContain('No microphone, so nothing was recorded.');
+        expect(body).toContain('nothing here is scored either way');
+    });
+
+    it('never makes the archive a precondition for anything', () => {
+        const compare = functionBody('function appendPronunciationComparison(');
+        // The comparison works off THIS session's url first and only falls back to
+        // the store, so a device that cannot keep anything still gets A -> B -> A.
+        const learner = functionBody('function pronPlayLearner(');
+        expect(learner.indexOf('pronCompare.url'))
+            .toBeLessThan(learner.indexOf('pronCompare.recordId'));
+        // The save is fire-and-forget and happens after the UI is already usable.
+        const stopHandler = compare.slice(
+            compare.indexOf('onstop: (blob, meta) =>'),
+            compare.indexOf('onerror: (e) =>'));
+        expect(stopHandler.indexOf('compare.disabled = false'))
+            .toBeLessThan(stopHandler.indexOf('keepPronunciationRecording(pair, blob, meta)'));
+    });
+
+    it('stays behind the one gate the app is allowed to have (FR-SPK-9)', () => {
+        const body = functionBody('function renderPronunciationProduce(');
+        const locked = body.indexOf('host.appendChild(lock);');
+        const returnAfterLock = body.indexOf('return;', locked);
+        const comparison = body.indexOf('appendPronunciationComparison(host, pair)');
+        // The locked branch returns before anything below it, so a learner who
+        // cannot yet hear the contrast is not offered a self-comparison they
+        // cannot judge.
+        expect(returnAfterLock).toBeLessThan(comparison);
+        expect(body).toContain('const gate = pronGate(pair);');
+    });
+
+    it('releases its object urls on a pair change and on leaving the section', () => {
+        const produce = functionBody('function renderPronunciationProduce(');
+        expect(produce).toContain('releasePronCompare();');
+        // Reset before anything is drawn, so a redraw cannot leave the previous
+        // pair's recording pinned.
+        expect(produce.indexOf('releasePronCompare();'))
+            .toBeLessThan(produce.indexOf('const gate = pronGate(pair);'));
+        const release = functionBody('function releasePronCompare(');
+        expect(release).toContain('URL.revokeObjectURL(pronCompare.url)');
+        expect(release).toContain("RecordingArchive.release('pron')");
+        const switching = functionBody('function switchSection(');
+        expect(switching).toContain("RecordingArchive.release('listening')");
+        expect(switching).toContain('releasePronCompare()');
+    });
+
+    it('does not stall if a voice never fires onend', () => {
+        // A -> B -> A is a chain of callbacks, and `onend` has been observed never
+        // to fire on some Android WebView voices. Without the watchdog the status
+        // line would say "Now you." for the rest of the session.
+        const body = functionBody('function pronSpeakSequence(');
+        expect(body).toContain('setTimeout(advance,');
+        expect(body).toContain('if (advanced) return;');
+        expect(body).toContain('u.onerror = advance;');
+        // And a device with no speech synthesis at all is told, not left waiting.
+        expect(body).toContain('if (!list.length || !pronAudioUsable())');
+        expect(functionBody('function pronRunComparison(')).toContain(
+            'This device cannot play audio, so the comparison is not available.');
+    });
+
+    it('keys the pronunciation archive on the authored pair id', () => {
+        const produce = functionBody('function renderPronunciationProduce(');
+        expect(produce).toContain('RecordingArchive.pronunciationPromptId(pair)');
+        const keep = functionBody('function keepPronunciationRecording(');
+        expect(keep).toContain('const promptId = pronCompare.promptId;');
+        expect(codeOnly(keep)).not.toContain('Index');
+    });
+
+    it('offers a recording from a previous session as the comparison', () => {
+        // Strand E.7: the month-one half of the comparison is almost never one the
+        // learner made two minutes ago, so the newest archived row is adopted when
+        // there is no session recording.
+        const body = functionBody('function refreshPronunciationArchive(');
+        expect(body).toContain('pronCompare.recordId = drawn.records[0].id;');
+        expect(body).toContain("compare.disabled = !(pronCompare.url || pronCompare.recordId)");
     });
 });

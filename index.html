@@ -460,6 +460,12 @@
                          has been made. app.js unhides it; nothing else does. -->
                     <button class="btn-secondary" id="revealTranscript" hidden aria-controls="listenSentence" aria-label="Show the transcript of this sentence">📄 Show the transcript</button>
                     <div class="recording-status" id="recordingStatus" role="status" aria-live="polite"></div>
+                    <!-- US-136 / FR-SPK-6. The recording archive for THIS sentence.
+                         Drawn by RecordingArchive.render() in app.js and keyed on a
+                         stable content id, never on state.currentListeningIndex.
+                         Starts empty and hidden: on a browser with no IndexedDB it
+                         holds one honest note and the exercise is unchanged. -->
+                    <div class="recording-archive" id="recordingArchive" role="region" aria-label="Your kept recordings of this sentence" hidden></div>
                     <div class="feedback" id="listeningFeedback" role="status" aria-live="polite"></div>
                     <!-- FR-A11Y-2 / US-711. A switch, not a per-item "show it
                          anyway": a learner who cannot hear should say so once, not
@@ -731,9 +737,19 @@
          because point 9 teaches when NOT to use the perfect and defers the tense
          itself to this point — the reverse order is unteachable. -->
     <script src="data/grammar/past-simple.js"></script>
+    <!-- Syllabus point 8, the LAST foundation point (US-236). Completes US-502:
+         modals of ability and request, where `could` is taught as distance rather
+         than as the past of `can`. No mistake category drills it — this one is
+         here because the syllabus needs it, not because a button was dead. -->
+    <script src="data/grammar/modals.js"></script>
     <!-- First `everyday`-tier content: until this, a learner above foundation got no
          grammar step and no speaking step at all (US-178). -->
     <script src="data/grammar/present-perfect.js"></script>
+    <!-- T-G9 Indian-English register items (US-237). Its id `register` was the LAST
+         dead drill target in the taxonomy — `gram.register-indian` pointed at it and
+         opened nothing. With this file every category that promises a drill opens a
+         lesson that exists: 26 live, 0 dead. -->
+    <script src="data/grammar/register.js"></script>
     <!-- Strand C pronunciation content. Declares `PRONUNCIATION_VOWELS_STRESS`
          (vowel minimal pairs, word stress, prosody noticing). All three arrays are
          surfaced: `.pairs` by the discrimination drill, `.stress` and `.noticing`
