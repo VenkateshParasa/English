@@ -20,8 +20,8 @@ A single-maintainer project working evenings has no velocity in the team sense. 
 - **Points measure size, not time.** Calendar time is the real constraint.
 - **A sprint here is a phase**, not two weeks. Phases are already ordered by descending data risk
   and are independently shippable.
-- **Total is 451 points** (§16), of which 204 are done. At a realistic 8–12 points a week of evenings,
-  the **remaining 247** is a **5–7 month** effort. Sprints 0–1 hold most of the audit's value and are
+- **Total is 469 points** (§16), of which 246 are done. At a realistic 8–12 points a week of evenings,
+  the **remaining 223** is a **4–6 month** effort. Sprints 0–1 hold most of the audit's value and are
   where all the honesty defects live.
 - Anything estimated **8 must be split** before it is started. One currently is, and it is flagged.
 
@@ -81,6 +81,15 @@ they do not sum to the sprint total in §16.
 
 **Four ids collided and were reallocated 2026-09-12.** The sequential run ran into Sprint 2's pre-allocated `US-2xx` block, so `US-201`–`US-204` were each defined twice. The **Sprint 2** meanings are authoritative (the traceability matrix in §15 and §13 reference them); the newer post-`US-193` stories were renumbered: old-new `US-201` → **`US-211`** (`session.js` clock seam), `US-202` → **`US-212`** (`jest.config.js` collected `setup.js`), `US-203` → **`US-213`** (two `mistakes` tests asserted nothing), `US-204` → **`US-214`** (srsData-only import deletes `learningProgress`). **A commit message dated 2026-09-12 or earlier that says `US-201`–`US-204` may mean either story** — check whether it touches `data.js`/`portability.js` (Sprint 2) or `jest.config.js`/`session.js`/`__tests__/` (the renumbered run). `US-501` also appears twice, correctly: a Sprint 5 plan row and the Sprint 1 row recording it done.
 
+### 4a. Corrections of record
+
+Two briefing errors, recorded so they are not repeated from this document.
+
+| Correction | The error | The authority |
+|---|---|---|
+| **`US-226`'s L1 code is `T-G6`, not `T-G9`** | The past-simple point was briefed as `T-G9`. The author caught it and every `l1` field in `data/grammar/past-simple.js` says `T-G6` | `REQUIREMENTS.md:226` is `T-G6 \| Perfective aspect mismatch`; `:229` is `T-G9 \| Indian-English register items` (*"doubt"*, *"out of station"*, *"cousin brother"*). `mistakes.js` agrees — `gram.present-perfect` carries `T-G6`, `gram.register-indian` carries `T-G9`. **Checked: no other backlog row repeats the error.** The only `T-G` codes elsewhere in this file are `T-G1`–`T-G4` (`US-507`), `T-G2` (`US-151`) and `T-G5`/`T-G8` (`US-215`), all correct |
+| **`US-187` closes nothing in Sprints 5–7** | It is a guard on drill destinations, not content and not a surface | It does not close `US-605` (whose module has no caller — see its row), nor `US-702` (`questions` now exists and is empty), nor any Sprint 6 story. What it *does* close is one dead-button class: 25 live targets / 1 dead, against four dead at the start of the wave |
+
 ---
 
 ## 5. Sprint 0 — unblock (do this first)
@@ -127,7 +136,7 @@ behaviours that teach errors.
 | **US-133** | Drag/drop toasts blame the learner for app-supplied data: "Invalid word detected", "Invalid drop operation" | `BR-3` | 1 | S |
 | ✅ **US-134** | IIFE global-object bug fixed in `mistakes.js` (`srs.js` was already fixed). Note it never bit the jest suite, because jsdom makes `window === global` — so a behavioural test could not have caught it; pinned by a source check instead — **done 2026-09-09** | — | 1 | S |
 | **US-135** | `js/core/portability.js` borrows `.daily-goal` styling for the data panel; a dedicated `.data-controls` class would read better | — | 1 | C |
-| **US-136** | Wire `js/core/blobstore.js` into the recording UI. Note `promptId` must be **stable content identity**, not `state.currentListeningIndex` — an index renumbers when content is inserted, and month-one recordings would then belong to someone else's sentence | `FR-DATA-6`, `FR-SPK-6` | 3 | S |
+| **US-136** | Wire `js/core/blobstore.js` into the recording UI. Note `promptId` must be **stable content identity**, not `state.currentListeningIndex` — an index renumbers when content is inserted, and month-one recordings would then belong to someone else's sentence. **This is the whole of what `US-605` still needs.** The module is now the best-tested file in the repo (224 tests, 99.05% statements, 100% lines) and **nothing calls it**: `index.html:700` loads it, and the only other mention in `app.js` is a comment. Meanwhile the listening/read-aloud path revokes `recordedAudioURL` on Prev/Next, so a recording does not survive leaving the sentence and `TEACHING_METHODOLOGY.md`'s "keep the recording; progress over weeks is the reward" is unmet | `FR-DATA-6`, `FR-SPK-6` | 3 | S |
 | **US-137** | Wire `js/core/mistakes.js` into the wrong-answer paths and add the dashboard panel. Calls must sit behind the existing single-answer guards or one stubborn item becomes a whole diagnosis | `FR-SRS-3` | 3 | M |
 | **US-138** | `FR-DATA-4` export does not cover recordings. With blobs in IndexedDB, `CON-3`'s "export is the only backup" is now false for them | `FR-DATA-4` | 3 | M |
 | ✅ **US-139** | `FR-DATA-6`/`OQ-6` amended to the pinned-baseline retention the code implements — **done 2026-09-09** | `FR-DATA-6` | 1 | M |
@@ -178,8 +187,8 @@ behaviours that teach errors.
 | **US-183** | `renderGrammarCorrect` prints "Both answers here are right" over a list, misreading for `be-p5`'s three accepted answers; `completeGrammarPoint` hardcodes "All six done" | — | 1 | S |
 | **US-184** | `updateStatisticsDisplay`'s three `statBox` calls still use `innerHTML` — the last HTML-string path on the dashboard | `NFR-12` | 1 | S |
 | **US-185** | **`gram.tense-agreement`'s label is false for 100% of what routes to it.** All three producers are `be.js` sites where a past form was chosen in a present context; the label describes the opposite error (past not carried through a multi-clause sentence). Same defect class as `gram.copula` was. Fix needs one owner for both halves — the wording and the three `logAs` sites | `FR-SRS-3` | 2 | M |
-| ✅ **US-186** | Producers wired for `vocab.meaning` (vocab quiz and review card), `vocab.spelling` + `lsn.detail` (dictation), `gram.word-order` (sentence builder), and `q.mistakeCategory` authored for comprehension — all `EVIDENCE.GRADED`, all behind the existing single-answer guards, verified by answering wrong twice and getting one entry. **Four categories still have no producer, deliberately, because no gradable task exists to attach them to**: `vocab.recall` (no production-from-meaning task), `vocab.collocation` (no collocation content), `lsn.gist` (the listening section asks no comprehension question), `rdw.inference` (comprehension questions carry no type metadata, so logging every wrong answer as "needed reading between the lines" would be a false claim — a content hook was added so an author can produce it without touching `app.js`). No category id was invented — **done 2026-09-12** | `FR-SRS-3` | 3 | M |
-| **US-187** | `drillTarget()` builds `srsKey` with **no check the target is authored**, so `gram:past-simple`, `gram:prepositions`, `gram:register` and the listening/reading targets yield buttons that open nothing. `gram:question-formation` was a fourth until `US-215` authored it — which fixes one target, not the missing check. The new renderer guards; a naive caller would ship a dead button | `FR-SRS-3` | 2 | M |
+| ✅ **US-186** | Producers wired for `vocab.meaning` (vocab quiz and review card), `vocab.spelling` + `lsn.detail` (dictation), `gram.word-order` (sentence builder), and `q.mistakeCategory` authored for comprehension — all `EVIDENCE.GRADED`, all behind the existing single-answer guards, verified by answering wrong twice and getting one entry. **Four categories still have no producer, deliberately, because no gradable task exists to attach them to**: `vocab.recall` (no production-from-meaning task), `vocab.collocation` (no collocation content), `lsn.gist` (the listening section asks no comprehension question), `rdw.inference` (comprehension questions carry no type metadata, so logging every wrong answer as "needed reading between the lines" would be a false claim — a content hook was added so an author can produce it without touching `app.js`). No category id was invented — **done 2026-09-12**. **Re-checked after `US-701`:** `lsn.gist` still has **no** producer, deliberately. The `questions` field now merely *exists* on every listening item (`[]` when absent); the section still asks no comprehension question, and it will not until `US-702` authors one | `FR-SRS-3` | 3 | M |
+| ✅ **US-187** | **`drillTarget()` composed `gram:<slug>` with no check anything was authored under it.** Fixed by making content declare its own destinations: new `registerDrillTargets(strand, targets)`, mirroring `registerCategories()` — chosen over an `app.js`-injected predicate (`FR-CNT-3` forbids it, and it is unusable in the unit suite) and over making the caller prove it (the status quo, and there are already two callers). **Tri-state**: `authored` is `true`/`false`/`null`, where `null` means *no claim* — the state at first load and throughout the suite. Answering `false` there would blank every drill button in the app on the strength of a registration that had not run. Nothing is dropped from the return value: a category whose lesson does not exist is still a real weakness. Three call sites wired — registration at boot in `app.js`, read from `grammarLessons` and the content helpers and never a hand-written list, so a new content file needs no second edit; an `authored === false` early return in `mistakeDrillDestinations()`; and the same guard in **`js/core/session.js`, which was the real learner-facing bug** — it put an unchecked `gram:past-simple` into session plans and told the learner *"Targeting your most frequent recent error"* for a lesson that did not exist. Verified against the real content: `null` before registration, then **25 live / 1 dead**. Only `gram:register` is still dead, down from four at the start of the wave. The registry is **all-or-nothing per strand** — a partial registration is worse than none, since registering one grammar point would blank the other seven's buttons — **done 2026-09-12** | `FR-SRS-3` | 2 | M |
 | **US-188** | `renderGrammarCorrect` hardcodes "Both answers here are right, and they do not mean the same thing" whenever `showDifferenceOnCorrect` is set — so an `accept` entry that is a true synonym makes the app assert a difference that does not exist. Both new authors worked around it by excluding synonyms | `FR-GRM-5` | 1 | M |
 | **US-189** | `data/pronunciation/consonants.js` has no `module.exports`, unlike every other content file, so `require()` returns `{}` and no jest test can audit its four category ids | — | 1 | S |
 | **US-190** | No mistake row for aspect confusion between perfect and continuous ("she's had lunch" for "she's having lunch"). Suggested: `gram.aspect-perfect-vs-progressive`, drill `present-simple-vs-continuous` | `FR-SRS-3` | 1 | S |
@@ -202,15 +211,26 @@ behaviours that teach errors.
 | ✅ **US-207** | `portability.js`'s `suspended` flag was a one-way module-level latch, giving the suite an ordering dependency. Seam added (`_resetWritesSuspended()`); the suite now passes under `--randomize` across three seeds — **done 2026-09-12** | `NFR-16` | 1 | S |
 | ✅ **US-208** | The post-import reload was the module's only unreachable line. Seams added (`_reload()`, `_canReload()`) — a second seam was needed because jsdom's `location` is `[Unforgeable]`, so `delete window.location` is a silent no-op — **done 2026-09-12** | `NFR-16` | 1 | S |
 | ✅ **US-215** | **`data/grammar/question-formation.js` authored** — syllabus point 6, `foundation` tier, T-G5 invariant-tag + T-G8 embedded-question-order notes; wired into `index.html` and the service-worker precache. **Closes three dangling drill targets**: `gram.tag-question`, `gram.embedded-question-order` and `gram.word-order` in `js/core/mistakes.js` all point at `question-formation`, so until now those dashboard drill buttons opened nothing — all three verified resolving to `gram:question-formation`. 6 gap items, 3 contrast pairs; every accepted answer is among its options (`US-166`). The adversarial pass **accepted a second correct answer** on two items (`do you live`/`are you living`, and the same-polarity tag `aren't you`/`are you`) rather than marking real English wrong. `foundation` now has 5 points; `everyday` still 1 — **done 2026-09-12** | `FR-GRM-1`, `FR-SRS-3` | 3 | M |
-| **US-216** | **`put()` reports `full` — *"Your existing recordings are safe"* — after permanently deleting an existing recording.** `evictForQuota()` commits its deletes in its own transaction, so if the single retry also hits quota the outer catch returns `fail('full', …)` with nothing to roll the eviction back. Reproduced: 4MB baseline / 1MB middle / 4MB newest at prompt `p1`, 10MB budget, saving 4MB at `p2` → `{ok:false, code:'full'}`, the new recording correctly absent **and the middle recording gone**. Contradicts `NFR-10` and the module's own stated property 2. Pinned green with a ⚠️ DEFECT marker | `NFR-10`, `BR-3`, `FR-DATA-6` | 3 | M |
-| **US-217** | `remove(id)` confirms deleting a recording that was never there — `removeIds` resolves with what it was *asked* to delete, and `IDBObjectStore.delete()` on an absent key succeeds silently. `remove(9999)` → `{ok:true, removed:1, message:'Recording deleted.'}` | `BR-3` | 1 | S |
-| **US-218** | `MESSAGES.savedEvicted` is chosen from `evicted.length` alone, so saving at prompt `p3` can evict `p2`'s recording and tell the learner "**this prompt** keeps your first and two most recent" while `p3` has exactly one — and never mention that a *different* prompt lost one | `BR-3`, `FR-DATA-6` | 1 | S |
-| **US-219** | `openUrl()` says "That recording is no longer on this device" when IndexedDB is merely unavailable, because `get()` flattens unavailable and not-found to `null`. Same class as `US-106`: the learner cannot tell whether the app broke or the data is gone | `NFR-3`, `BR-3` | 1 | S |
-| **US-220** | `cleanNumber(null) === 0`, so a recording saved without a duration is reported as `null` by `put()` and `0` by `list()`/`get()` — one recording, two answers, and a UI showing "0:00". Related and spec-derived rather than observed: a null `createdAt` is coerced to the epoch by `usableRows` yet is absent from the compound index, so such a row is counted by `usage()` and acted on by eviction while being invisible to `list()` | `FR-DATA-6` | 2 | S |
-| **US-221** | `blobstore.js:777-779` is **dead code** — `size > MAX_TOTAL_BYTES` can never fire because the 10MB per-recording check at `:773` fires first, so `limit: MAX_TOTAL_BYTES` is unreachable. The suite's only uncovered line. Delete it or make the two limits independent | — | 1 | C |
-| **US-222** | `planRetention` pins `ordered[0]` while `evictionCandidates` checks `r.baseline`, so if a learner deletes the true baseline one protection guards the next-oldest row and the other considers that same row expendable. The two disagree on what "baseline" means; `FR-DATA-6` names only one | `FR-DATA-6` | 1 | S |
+| ✅ **US-216** | **`put()` reported `full` — *"Your existing recordings are safe"* — after permanently deleting an existing recording.** Resolved by **a third option, neither of the two offered**: property 2 promises every write is one transaction, so the defect was that `evictForQuota()` existed as a *separate* transaction at all. The quota retry now frees headroom **inside the retrying transaction**, so a second `QuotaExceededError` aborts and rolls the eviction back with it; `evictForQuota()` is deleted. Restore-from-memory was rejected as asking a device that has just proved it has no room to hold megabytes of audio and find room again. Stated cost: an engine that does not credit in-transaction deletes against its own quota will refuse a retry that a separate eviction might have allowed — a **refusal, never a loss** — **done 2026-09-12** | `NFR-10`, `BR-3`, `FR-DATA-6` | 3 | M |
+| ✅ **US-217** | `removeIds()` now resolves with the ids that **were there and are now gone**, not the ids it was asked for — the read and both deletes share one transaction, so nothing can appear or vanish between asking and acting. `IDBObjectStore.delete()` succeeding silently on an absent key is why the read is required — **done 2026-09-12** | `BR-3` | 1 | S |
+| ✅ **US-218** | Copy now names **where the space came from** rather than assuming this prompt: `savedFreedSpace` / `savedEvictedAndFreedSpace` are separate messages from `savedEvicted`, and the result carries `evictedPrompts` (this prompt included) plus `evictedElsewhere`, so a UI can name the prompt that actually lost something — **done 2026-09-12** | `BR-3`, `FR-DATA-6` | 1 | S |
+| ✅ **US-219** | `readRecord()` added beside `get()`: `get()` keeps its documented "record or null" contract, and the new function returns the reason, with `OPEN_FAILURE_CODES` separating "this device is not keeping recordings right now" from "that recording is not here". `openUrl()` reads the reason, so a learner whose browser blocked IndexedDB is no longer told their recording was deleted when it was never saveable — **done 2026-09-12** | `NFR-3`, `BR-3` | 1 | S |
+| ✅ **US-220** | Both halves fixed, and **the null-`createdAt` half proved demonstrable rather than only spec-derived**: `cleanNumber` accepts only numbers and non-blank numeric strings so one recording can no longer have two durations, and a row with no `createdAt` is rejected on the same footing as a row with no `promptId` rather than being coerced to the epoch by `usableRows` and acted on while invisible to `list()` — **done 2026-09-12** | `FR-DATA-6` | 2 | S |
+| ✅ **US-221** | Dead guard deleted and the invariant made **structural** — `MAX_RECORDING_BYTES = Math.min(10MB, MAX_TOTAL_BYTES)`, with a test grepping the source so the unreachable branch cannot return — **done 2026-09-12** | — | 1 | C |
+| ✅ **US-222** | The persisted `baseline` flag wins, via a shared `isPinnedBaseline()` used by both `planRetention` and `evictionCandidates`, **because it is the only definition that can be *true*** — re-deriving baseline from position would let a later recording claim to be the learner's month-one after the true baseline is deleted — **done 2026-09-12** | `FR-DATA-6` | 1 | S |
 | **US-223** | **The sentences section still violates `FR-GRM-2`/`FR-A11Y-5`**: `✗ Incorrect. Try again! (Attempt 1/3)` — a red ✗ with no reason, no contrast, and the hint only after three attempts. The last section with this shape after `US-140`/`US-141`. Fixing it needs **authored per-option feedback** like `data/grammar/` has, not copy written in `app.js` | `FR-GRM-2`, `FR-A11Y-5` | 2 | M |
-| **US-224** | **No mistake-category id for an omitted auxiliary** (*"Where you live?"*, *"You know him?"*). `gram.word-order` is the honest destination and is what `question-formation`'s options log, with `errorKind: 'auxiliary-omitted-in-direct-question'` keeping the finer grain. A content/taxonomy story, not a defect: decide whether the finer grain earns its own row before a second content file needs it | `FR-SRS-3` | 1 | S |
+| ✅ **US-224** | Resolved by **adding `gram.auxiliary-omitted`** — "A question with its helper word missing", drill `gram:question-formation`. Argued from the panel rather than the taxonomy: `gram.word-order` already had three producers, and "Words in the wrong order" is **false** of an omitted auxiliary — in *"Where you live?"* every word is where English wants it. Already-logged entries stay under `gram.word-order` and **cannot be migrated**, because `record()` stores no `errorKind`, so the log physically lacks the fact a migration would need; the 30-day window ages the mislabelled history out inside a month. Category count 35 → 36 — **done 2026-09-12** | `FR-SRS-3` | 1 | S |
+| ✅ **US-225** | **`data/grammar/prepositions.js` authored** — T-G7, `foundation`, syllabus point 7. Makes `gram.preposition-transfer` a live drill target. Its central decision: *"discuss about"* and *"good in maths"* are **not the same error** and are never described in the same sentence. The first is a redundancy the learner can detect by paraphrasing the verb (*discuss* = "talk **about**"); the second is arbitrary and is stated as memory work with no invented rule (`BR-3`). **The split is in `logAs`, not just prose** — arbitrary misses log `vocab.collocation`, so they do not report a grammar gap the learner does not have. Guard-rails against over-deletion (*shouted at* / *shouted to*) keep the framing from teaching that prepositions can be dropped generally. Standard Indian English handled as audience, not correctness, following `question-formation.js` — **done 2026-09-12** | `FR-GRM-1`, `FR-SRS-3` | 3 | M |
+| ✅ **US-226** | **`data/grammar/past-simple.js` authored** — **T-G6** (not T-G9; see §4a), `foundation`, syllabus point 5. Makes both `gram.tense-agreement` and `gram.verb-form` live. Its hard part was not contradicting `present-perfect.js` (point 9, `everyday`): both files state a **one-way blocking condition** rather than two competing rules. Two traps avoided — never "a named time" alone (*since Monday* is a named time that does **not** block the perfect, and point 9 grades it perfect-only), and never "the past simple is for finished actions", which would contradict point 9 head-on, since *I have finished* is exactly as finished as *I finished*. The distinction is finished **time**. Adds what point 9 lacks: `did` + bare infinitive, irregular pasts as memorised items, and the finished-time trigger — and connects `did` to `question-formation.js`'s helper framing rather than presenting it as a new fact — **done 2026-09-12** | `FR-GRM-1`, `FR-SRS-3` | 3 | M |
+| **US-227** | `removeForPrompt('nosuchprompt')` returns `{ok:true, removed:0, message:'Recording deleted.'}` — "deleted" for nothing deleted. Same family as `US-217`, but arguably idempotent by nature, so this is a **copy decision** rather than a logic fix: either say nothing was there, or stop claiming a deletion at `removed === 0` | `BR-3` | 1 | S |
+| **US-228** | Unindexable foreign rows — a null `createdAt` written by something other than this module — are **ignored rather than repaired** after `US-220`, so their bytes are neither counted by `usage()` nor reclaimable by eviction. Only `clear()` removes them. A device can therefore be full of bytes the module can see and cannot free | `FR-DATA-6` | 2 | S |
+| **US-229** | **No mistake-category id for a *negative* built with no helper** — *"I not got the message"*, *"I not know"*. It currently logs `gram.verb-form`, and `gram.auxiliary-omitted`'s label and explanation are about **questions** specifically, so routing it there would show a learner a finding about questions for an error that is not one. Widening that label is a one-line change; deciding whether one row covers both shapes is the story | `FR-SRS-3` | 1 | S |
+| **US-230** | `gram.embedded-question-order`'s label **narrows T-G8**: `REQUIREMENTS.md` §3.2 says "SOV residue in questions **and** embedded clauses", but the label reads "Question word order inside a longer sentence", which is false of the direct-question residue case. Same defect class as `US-185` and `gram.copula` | `FR-SRS-3` | 1 | S |
+| **US-231** | `docs/CONTENT_AUTHORING_GUIDE.md` §5 is **stale after `US-701`** — line 227 still says "A flat array of strings per level" and line 229 still calls the object shape "Proposed schema". The guide now documents the shape the code rejects | `FR-CNT-1` | 1 | S |
+| **US-232** | **No `fluent` tier anywhere in `data.js`.** `levels.js` declares four tiers; `listeningExercises`, `vocabularyData`, `sentenceExercises`, `readingPassages` and `puzzleData` all have exactly three (`foundation`/`everyday`/`confident`). Pre-existing and affects every legacy section, so `US-201`'s "`fluent` will have zero content on landing" warning is still live. `grammarLessons`' explicit `fluent: []` is the precedent — an empty array present beats a missing key, because the missing key is the `.length`-off-undefined crash class | `FR-SES-3`, `FR-CNT-1` | 2 | S |
+| **US-233** | `state.generatedExercises` is declared and **never written or read** — and all three fields are dead, not just `listening`: the only other mention anywhere is `TECHNICAL_DOCUMENTATION.md:394`, which documents it as "memoised generated content" that does not exist. Either memoise through it or delete it and the doc line together | — | 1 | C |
+| **US-234** | `pronAccuracyBlock()`'s disclosure says **"Your accuracy on all three pairs"** while `pronunciationPairs()` returns **8** pair sets (3 vowel + 5 consonant). Stale from when only the vowel file was wired; the code comment above it says "all three pairs" too. A false count shown to the learner, in the one view `FR-PRN-2` exists to provide | `BR-3`, `FR-PRN-2` | 1 | S |
+| **US-235** | **No `stress` field on any `vocabularyData` entry**, so `FR-PRN-3`'s first half — "word stress **marked on vocabulary entries**" — is unmet even though the drill ships (`US-197`, and `US-403` is closed on the drill). The 21 authored stress items live in `data/pronunciation/vowels-stress.js` and share no key with the vocabulary a learner is actually revising | `FR-PRN-3` | 2 | S |
 | **US-110** | **Stop the crossword awarding the daily goal for a blank grid** (D2) | `BR-3` | 2 | M |
 | ✅ **US-111** | Guard the quiz counters against re-clicking a correct answer — **done 2026-09-09** | `FR-VOC-1` | 1 | M |
 | ✅ **US-112** | Stop dictation double-counting the reading passage — **done 2026-09-09** | `FR-DATA-3` | 1 | M |
@@ -311,10 +331,13 @@ sounds.**
   now *reproducibly* broken for indices where `index % 4 === 1`. Determinism is still correct — it
   converts an intermittent bug into a visible one — but it needs a follow-up. See `US-114`.
 
-**Sprint 1 total: 221 points across 119 stories — 70 done (145 points), 49 remaining (76 points).**
+**Sprint 1 total: 239 points across 130 stories — 81 done (164 points), 49 remaining (75 points).**
 The remaining items are
 almost all hygiene, copy or wiring surfaced by later work; `US-110` (crossword crediting a blank
-grid) is the last learner-facing honesty defect and waits on `OQ-7`.
+grid) is the last learner-facing honesty defect and waits on `OQ-7`. Eleven rows closed on
+2026-09-12 — `US-187`, `US-216`–`US-222`, `US-224`–`US-226` — and nine were filed by the same work
+(`US-227`–`US-235`), plus amendments to `US-136` and `US-186`. The table shrank and grew at about the
+same rate, which is what a wave spent inside a newly tested module looks like.
 
 ---
 
@@ -383,18 +406,21 @@ discrimination is the only speech task we can grade honestly. **Blocked on AS-3.
 |---|---|---|---|---|
 | **US-400** | **Spike:** validate TTS renders minimal pairs distinguishably on real Android + iPhone | `AS-3` | 2 | M |
 | ✅ **US-401** | **Pronunciation section exists** — minimal-pair discrimination drill, per-pair SRS (`phon:`), production gated at 80% discrimination, text-only fallback when audio is unusable — **done 2026-09-10** | `FR-PRN-1` | 5 | M |
-| **US-402** | Per-phoneme-pair accuracy tracking and profile view | `FR-PRN-2` | 3 | M |
-| **US-403** | Word stress marked and drillable | `FR-PRN-3` | 3 | M |
-| **US-404** | Self-comparison: A→B→A playback with an articulatory cue | `FR-PRN-4`, `FR-PRN-5` | 5 | M |
-| **US-405** | Gate production behind ≥80% discrimination on that pair | `FR-PRN-6` | 2 | M |
-| **US-406** | Duration-comparison hint for epenthesis (T-P2, T-P3) | `FR-PRN-7` | 3 | S |
-| **US-407** | Plain-English IPA glosses | `FR-PRN-9` | 2 | M |
+| ✅ **US-402** | **Satisfied by `US-401`.** Both halves of `FR-PRN-2` verified in the build: per-pair tracking is `state.pronunciationAccuracy` keyed by `phon:<pair>` and sanitised on load, and the profile view is `pronAccuracyBlock()` — the number for the pair on screen plus a disclosure listing every pair, saying *"not tried yet"* rather than "0%" where there are no attempts, and excluding the written exercise from the figure because it does not test the ear. **One copy defect against it: `US-234`**, the list is titled "all three pairs" and there are eight — **done 2026-09-10 under `US-401`** | `FR-PRN-2` | 3 | M |
+| ✅ **US-403** | **Satisfied by `US-197`, not by this story.** The 21 word-stress items are browsable in the Pronunciation section without a review being scheduled first, the stressed syllable is displayed and audible, and ungradable items are dropped loudly. `FR-PRN-3`'s acceptance criterion is met. **What is not: the other half of the requirement's headline** — no `vocabularyData` entry carries a `stress` field, so stress is marked on pronunciation content and not on the vocabulary a learner revises. Filed as **`US-235`** rather than left inside this row — **done 2026-09-12 under `US-197`** | `FR-PRN-3` | 3 | M |
+| **US-404** | Self-comparison: A→B→A playback with an articulatory cue. **Explicitly not done, and the build says so on screen**: the pronunciation section prints *"This app does not record you, so nothing is played back and nothing is scored"* rather than implying the comparison happened. The `feelChecks` half of `FR-PRN-4` ships; the A→B→A half needs the recorder, i.e. `US-136` | `FR-PRN-4`, `FR-PRN-5` | 5 | M |
+| ✅ **US-405** | **Satisfied by `US-401`.** `pronGate()` reads `productionGate.minAccuracy` / `.minAttempts` **from the content**, not from a constant, because the author knows how wide the perception blind spot is for a given contrast — and an absent gate still gates, defaulting to 0.8 / 10 rather than failing open. Measured on *first* answers so the gate cannot be ground open. `US-179` remains open against it: the gate needs 10+ attempts and the session's pronunciation step is count-boxed at ~8 — **done 2026-09-10 under `US-401`** | `FR-PRN-6` | 2 | M |
+| **US-406** | Duration-comparison hint for epenthesis (T-P2, T-P3). Needs the recorder, like `US-404` | `FR-PRN-7` | 3 | S |
+| ✅ **US-407** | **Satisfied by `US-401`.** `FR-PRN-9` is enforced structurally, not by inspection: `phonemes[].gloss` is the only place a symbol may be introduced, `pronPhonemeBlock()` renders it wherever IPA appears, and a pair with no `phonemes` is **refused** rather than shown as bare IPA — **done 2026-09-10 under `US-401`** | `FR-PRN-9` | 2 | M |
 | **US-408** | Use API audio for word models; route media in the service worker | `NFR-8`, `FR-CNT-5` | 3 | S |
-| **US-409** | Schwa, sentence stress, linking and intonation taught by **noticing**, not model imitation | `FR-PRN-8` | 5 | S |
+| **US-409** | Schwa, sentence stress, linking and intonation taught by **noticing**, not model imitation. **Partly satisfied by `US-197`** — the 15 noticing items are browsable and `requiresImitation` is refused per `FR-PRN-8` rather than trusted. **Not credited**, because those 15 items cover rhythm, final vowel and cluster only: connected speech and intonation have no content at all, so half of what `FR-PRN-8` names is unauthored | `FR-PRN-8` | 5 | S |
 
 **US-400 is a spike and it gates the sprint.** If TTS cannot render /ɪ/ vs /iː/ distinguishably on
 real devices, `US-401` needs bundled audio and the sprint doubles. **Do not author 8 pair sets
-before this passes.**
+before this passes.** ⚠️ **That instruction was overtaken by events:** `US-150` authored all 8 sets
+and `US-401` shipped the drill while `US-400` is still open, so the gate held nothing. Every set
+carries a `ttsRisk`, a `degradeTo` and a no-audio fallback, which is the mitigation that made
+proceeding defensible — but `AS-3` remains unvalidated on a real phone, and it is `R-2`.
 
 **US-401 — As Anusha, I want to find out which sounds I confuse.**
 - **Given** a minimal pair, **when** the drill starts, **then** one clip plays and I pick which word
@@ -414,7 +440,12 @@ before this passes.**
   self-reported (`FR-SRS-5`).
 - **No score, no pass/fail, ever** (`FR-PRN-5`).
 
-**Sprint 4 total: 33 points.**
+**Sprint 4 total: 33 points — 15 of 33 done.** `US-401` shipped under its own number; `US-402`,
+`US-405` and `US-407` were **folded into it** and are marked done here naming it, and `US-403` was
+shipped as `US-197`. The done column read 5 until 2026-09-12 because defect-driven and
+surface-driven stories were given sequential `1xx`/`2xx` numbers wherever they landed. What is
+genuinely left is the recorder (`US-404`, `US-406`, both waiting on `US-136`), the audio work
+(`US-408`), the unvalidated spike (`US-400`), and the unauthored half of `FR-PRN-8` (`US-409`).
 
 ---
 
@@ -425,14 +456,14 @@ Largest content effort in the backlog, and the phase needing no external data.
 | # | Story | FR | Pts | MoSCoW |
 |---|---|---|---|---|
 | ✅ **US-500** | Authored **one** grammar point (articles) end to end for review, plus a schema designed to carry all 24 — **done 2026-09-09**. See `docs/GRAMMAR_SAMPLE_REVIEW.md` | `FR-GRM-1` | 2 | M |
-| **US-501** | Grammar section shell wired to the registry | `FR-GRM-1` | 3 | M |
-| **US-502** | Foundation points 1–8 (**split from an 8**) | `FR-GRM-1` | 5 | M |
-| **US-503** | Everyday points 9–16 (**split from an 8**) | `FR-GRM-1` | 5 | M |
+| ✅ **US-501** | Grammar section shell wired to the registry — **done 2026-09-09**. One story, one done record; the Sprint 1 table holds the same row and §16 counts its 3 points here | `FR-GRM-1` | 3 | M |
+| **US-502** | Foundation points 1–8 (**split from an 8**). **7 of 8 authored** — `be` (1), present simple vs continuous (2), articles (3), countable/uncountable (4), past simple (5, `US-226`), question formation (6, `US-215`), prepositions (7, `US-225`). **Point 8, modals of ability and request — can / could / may — is the only one missing**, and it is what stands between this row and done | `FR-GRM-1` | 5 | M |
+| **US-503** | Everyday points 9–16 (**split from an 8**). **1 of 8 authored** — present perfect vs past simple (9, `US-178`). `grammarLessons.everyday` otherwise holds one point | `FR-GRM-1` | 5 | M |
 | **US-504** | Confident + fluent points 17–24 | `FR-GRM-1` | 5 | S |
-| **US-505** | Reason + contrast + retry on every wrong answer | `FR-GRM-2` | 3 | M |
-| **US-506** | Grammar points as SRS items | `FR-GRM-3` | 2 | M |
-| **US-507** | L1-prioritised ordering and Telugu notes | `FR-GRM-4`, `FR-CNT-3` | 5 | M |
-| **US-508** | Audit items for defensible alternatives | `FR-GRM-5` | 3 | M |
+| ✅ **US-505** | **Satisfied by `US-501`.** Every wrong answer in the Grammar section shows the authored reason, a contrast pair and a retry, with defensible alternatives accepted — verified by use, not by diff. Two open copy defects sit in the *correct*-answer path of the same renderer, not this one (`US-183`, `US-188`), and `FR-GRM-2` outside grammar is `US-223`'s territory — **done 2026-09-09 under `US-501`** | `FR-GRM-2` | 3 | M |
+| ✅ **US-506** | **Satisfied by `US-501` + `US-171` + `US-177`.** Grammar points are scheduled as `gram:` SRS items in their own right, `PROJECTORS.gram` is validated against real content by `auditProjection()`, and the review surface renders `review.rulePrompt` plus the `itemIds` subset rather than replaying the lesson — **done 2026-09-10 under `US-177`** | `FR-GRM-3` | 2 | M |
+| **US-507** | L1-prioritised ordering and Telugu notes. **Half satisfied and not credited:** every authored point carries `l1Notes.telugu` with a `transferId`, `priority`, `note` and `bridge`, so criterion 2 is met. **Ordering is not** — `app.js` never reads `syllabusNumber` or `priority`, so points are presented in array order, and criterion 3 fails while `state.learnerL1` does not exist (`US-158`) and `data/l1/telugu.js` does not exist (`US-143`) | `FR-GRM-4`, `FR-CNT-3` | 5 | M |
+| **US-508** | Audit items for defensible alternatives. **Partly satisfied and not credited:** `US-215`'s adversarial pass accepted a second correct answer on two items rather than marking real English wrong, and `US-166` is the open counter-evidence — `countability.js` accepts answers absent from its own `options`, so the grader never reaches `accept` and defensible answers are treated as unrecognised. The audit is a per-point pass and three of the seven authored points have not had one | `FR-GRM-5` | 3 | M |
 
 **US-500 gates the sprint** — it is the cheapest test of the least-verified assumption in this whole
 plan (that the grammar content can be authored unaided to a good standard). One point, one review,
@@ -445,7 +476,14 @@ before committing to 20+.
   the English one.
 - **Given** a second L1 profile added later, **then** no `app.js` change is needed.
 
-**Sprint 5 total: 33 points.**
+**Sprint 5 total: 33 points — 10 of 33 done.** The done column read 5 until 2026-09-12: `US-505` and
+`US-506` were built inside `US-501` and `US-177` and never ticked here.
+
+**Where the grammar content is actually being credited.** Points authored after `US-193` carry
+sequential ids and sit in the Sprint 1 table — `US-151` (points 1, 3, 4), `US-178` (9), `US-215` (6),
+`US-225` (7), `US-226` (5). `US-502` and `US-503` are the **rollups** for the same work, so they are
+deliberately *not* ticked while a point is missing and their 5 points each are counted once, here.
+Grammar content is now **8 points authored: 7 `foundation`, 1 `everyday`**.
 
 ---
 
@@ -457,7 +495,7 @@ before committing to 20+.
 | **US-602** | Functional dialogues — 11 situations | `FR-SPK-4` | 8 → **split by situation group** | M |
 | **US-603** | Words-per-minute metric with trend | `FR-SPK-5` | 3 | S |
 | **US-604** | Filler and pause counts | `FR-SPK-5` | 5 | C |
-| **US-605** | Recording archive, last N per prompt, IndexedDB | `FR-SPK-6`, `FR-DATA-6` | 5 | S |
+| **US-605** | Recording archive, last N per prompt, IndexedDB. **Module done, feature not — deliberately not credited.** `js/core/blobstore.js` exists (`US-206`), implements per-prompt retention of the pinned baseline plus the two most recent, quota handling and graceful degradation, and is the **best-tested file in the repo** (224 tests, 99.05% statements, 100% lines, seven defects found and fixed as `US-216`–`US-222`). **Nothing calls it.** `index.html:700` loads it; the only mention in `app.js` is a comment. What remains is exactly `US-136` — a caller, a **stable content `promptId`** rather than an index, and `US-138` so the archive is inside `FR-DATA-4`'s export | `FR-SPK-6`, `FR-DATA-6` | 5 | S |
 | **US-606** | Shadowing mode | `FR-SPK-8` | 3 | S |
 | **US-607** | 4/3/2 fluency technique | `FR-SPK-3` | 3 | S |
 | **US-608** | Silent / skip-and-mark-done on every speaking task | `FR-SPK-9`, `FR-A11Y-4` | 3 | M |
@@ -467,9 +505,16 @@ before committing to 20+.
 recognition timings; if it proves unreliable, ship WPM alone rather than an invented number
 (`BR-3`).
 
-**US-608 is `M` and must not slip** — it is what makes the app usable for P2 at all.
+**US-608 is `M` and must not slip** — it is what makes the app usable for P2 at all. **It is
+currently satisfied on every speaking surface that exists** and is still **not ticked**: the session's
+three-way `aloud`/`silent`/`skip` choice (`US-170`), grammar's *"I said it"* self-check, pronunciation's
+self-report, and — from 2026-09-12 — listening's `✓ I said it`, which replaced the `alert()`-and-stop
+dead end a refused microphone used to hit (`US-703`). Like `FR-A11Y-5` in §13a it is a per-story
+check, not work in itself, so it cannot close while `US-601`, `US-602`, `US-606` and `US-607` are
+unbuilt.
 
-**Sprint 6 total: 36 points** (before splitting US-602).
+**Sprint 6 total: 36 points — 0 done** (before splitting US-602). `US-605`'s module is finished and
+uncalled; see its row for what remains.
 
 ---
 
@@ -477,28 +522,32 @@ recognition timings; if it proves unreliable, ship WPM alone rather than an inve
 
 | # | Story | FR | Pts | MoSCoW |
 |---|---|---|---|---|
-| **US-701** | Convert `listeningExercises` from `string[]` to `object[]` | `FR-LSN-1` | 3 | M |
-| **US-702** | Gist-then-detail comprehension questions | `FR-LSN-1` | 5 | M |
-| **US-703** | Transcript only after the attempt; replay before reveal | `FR-LSN-3`, `FR-LSN-4` | 2 | M |
-| **US-704** | 0.75× / 1.0× / 1.25× speed control | `FR-LSN-2` | 1 | M |
+| ✅ **US-701** | **`listeningExercises` converted `string[]` → `object[]`** — the step the plan flags as Phase 8's riskiest single step. One normaliser, `normaliseListeningItem(raw, tier)` in `data.js`: `text` required (no text ⇒ the item is dropped), `transcript` defaults to `text`, plus `tier`, `rate`, `seconds`, `situation`, `focus`, `notes`, `shadow`, and `questions` **always an array** — `[]` when absent, which is `US-702`'s room left empty rather than invented. **A bare string is not a legacy case but a permanent shorthand** for `{text}`. Malformed input returns `null` and the loader says so on screen rather than drawing an empty card; generated sentences go through the same normaliser, so there is one shape downstream. **No `SCHEMA_VERSION` bump, for a narrower reason than "it's content"**: what learners store pointing into this content is `completedExercises.listening` = `listening_<tier>_<index>` stamps, and the conversion preserves tier keys, count **and index order**, so every stamp still names the same sentence. **Zero content loss proved twice** — against `git show HEAD:data.js` (30 items before, 30 after, every string surviving as `.text` at the same index), and pinned as a test with all 30 sentences written out verbatim as a before-image — **done 2026-09-12** | `FR-LSN-1` | 3 | M |
+| **US-702** | Gist-then-detail comprehension questions. **Unblocked by `US-701`:** every item now carries a `questions` array, so this is content plus a surface, not a shape change. It is also what `lsn.gist` needs before it can have a producer (`US-186`) | `FR-LSN-1` | 5 | M |
+| ✅ **US-703** | **The transcript is absent from the DOM before an attempt**, not CSS-hidden, and Read Aloud is locked because its target *is* the transcript. Attempt routes need no microphone: recording, or a new self-reported `✓ I said it` — previously a refused mic was a dead end that `alert()`ed and stopped. An attempt **unhides the reveal button and never presses it**, so replay-before-reveal is the learner's choice rather than the app's. The route is recorded (`'attempt'` vs `'no-audio'`) and never laundered — **done 2026-09-12** | `FR-LSN-3`, `FR-LSN-4` | 2 | M |
+| ✅ **US-704** | 0.75× / 1.0× / 1.25×, verified reaching `speechAPI.speak`. `listeningRate` is a module-level `let`, deliberately **not** in `state`, so `saveProgress()`'s spread cannot persist it: it survives the session and resets on next load, because a learner who slows one hard clip and forgets should not still be fed 0.75× a month later with no way to notice. `null` — **not `1`** — means "not chosen this session", which lets an authored `item.rate` act as a default without overriding a real choice — **done 2026-09-12** | `FR-LSN-2` | 1 | M |
 | **US-705** | Longer audio — one 60s+ item per tier | `FR-LSN-5` | 3 | S |
 | **US-706** | Dictation in Listening, reusing the existing field | `FR-LSN-6` | 2 | S |
 | **US-707** | Productive-recall vocabulary card | `FR-VOC-4` | 3 | M |
 | **US-708** | Collocation, word-family and register fields | `FR-VOC-5` | 5 | S |
 | **US-709** | Frequency-ordered introduction | `FR-VOC-6` | 3 | S |
 | **US-710** | Right answers extend, wrong answers contrast | `FR-VOC-7` | 2 | M |
-| **US-711** | Transcript available on demand for every audio item, after the attempt | `FR-A11Y-2` | 2 | M |
+| ✅ **US-711** | **A declared, remembered "I can't use the audio" switch** (`FR-A11Y-2`) reveals the transcript immediately for every item and **credits nothing** — completion still needs a spoken or self-reported attempt, so a revealed sentence is never a credited one. That is the same defect class as `US-110`, the crossword crediting a blank grid, and this switch is exactly where it would otherwise have landed — **done 2026-09-12** | `FR-A11Y-2` | 2 | M |
 | **US-712** | Inference and vocabulary-in-context reading questions | `FR-RDW-1` | 3 | S |
 | **US-713** | Sentence-transformation exercises — "rewrite in the passive", "make this polite" | `FR-RDW-2` | 3 | S |
 | **US-714** | Bound generated content so curated items always serve first | `FR-CNT-4` | 3 | M |
 
-**US-701 first and alone** — the plan flags this `string[]` → `object[]` conversion as Phase 8's
-riskiest single step.
+**US-701 was first and alone**, as planned — the plan flags this `string[]` → `object[]` conversion as
+Phase 8's riskiest single step, and it shipped with no schema bump because the learner-facing stamps
+(`listening_<tier>_<index>`) index by position and position was preserved.
 
-**US-704 is 1 point** because `speechAPI.speak(text, rate)` already accepts the parameter and never
-varies it.
+**US-704 was 1 point** because `speechAPI.speak(text, rate)` already accepted the parameter and never
+varied it. It now varies it, and deliberately does not persist the choice.
 
-**Sprint 7 total: 40 points.**
+**Sprint 7 total: 40 points — 8 of 40 done.** `US-701`, `US-703`, `US-704` and `US-711` shipped
+2026-09-12; the listening item shape, the reveal gate and the no-audio route are settled, and what
+remains in this sprint is content (`US-702`, `US-705`, `US-706`) and the vocabulary-depth half, which
+is untouched.
 
 ---
 
@@ -604,7 +653,7 @@ one with a spike attached.
 | Sprint 4 | `US-400` spike, and `AS-3` |
 | Sprint 5 | `US-500` spike; `US-301` registry |
 | `US-401` | `US-302` (`phon:` SRS keys) |
-| `US-605` | `US-206` (IndexedDB) |
+| `US-605` | `US-206` (IndexedDB) ✅ **satisfied**, and now `US-136` (the caller) — the module is done and nothing calls it |
 | `US-203`, `US-204`, `US-811` | `US-809` **harvest** step, not its delete step |
 | `US-709` | **OQ-8** (frequency list licence) |
 | `US-806` claim | `US-807`, `US-808` complete |
@@ -616,16 +665,27 @@ one with a spike attached.
 | Sprint | Theme | Points | Done | Cumulative |
 |---|---|---|---|---|
 | 0 | Unblock | 6 | 6 | 6 |
-| 1 | Honesty | 218 | 142 | 224 |
-| 2 | Data integrity | 19 | 19 | 243 |
-| 3 | Extensibility | 22 | 22 | 265 |
-| 4 | Pronunciation | 33 | 5 | 298 |
-| 5 | Grammar | 33 | 5 | 331 |
-| 6 | Speaking | 36 | 0 | 367 |
-| 7 | Listening & vocabulary | 40 | 0 | 407 |
-| 8 | Session & platform | 44 | 5 | 451 |
+| 1 | Honesty | 236 | 161 | 242 |
+| 2 | Data integrity | 19 | 19 | 261 |
+| 3 | Extensibility | 22 | 22 | 283 |
+| 4 | Pronunciation | 33 | 15 | 316 |
+| 5 | Grammar | 33 | 10 | 349 |
+| 6 | Speaking | 36 | 0 | 385 |
+| 7 | Listening & vocabulary | 40 | 8 | 425 |
+| 8 | Session & platform | 44 | 5 | 469 |
 
-`US-501` is listed in both the Sprint 1 and Sprint 5 tables — one story, one done record. Its 3 points
-are counted under Sprint 5 here, so the Sprint 1 row reads 218 where its table sums to 221.
+`US-501` is listed in both the Sprint 1 and Sprint 5 tables — one story, one done record, now ticked
+in both. Its 3 points are counted under Sprint 5 here, so the Sprint 1 row reads 236 where its table
+sums to 239, and 161 where its table sums to 164.
 
-**451 points total, of which 204 are done — 45%.** Must-have work is **177 of 300 (59%)**. **`npm test` is green: 9 suites, 1,046 tests, 77.4% statement coverage** (72.32% branch, 80.32% functions). **Sprints 0, 2 and 3 are complete** — Sprint 0 closed when `US-001` un-ignored `package-lock.json`, the last reason CI could never install jest. Six modules carry suites at 85–100% and `blobstore.js` joined them at 98.78%, which is where the last two waves' defects came from: the untested modules are now the tested ones, and the nine stories they produced (`US-216`–`US-224`) are all still open — `US-216` first, because `put()` deletes a recording and then says none was lost. What remains open is concentrated in Sprint 1 — 76 points of hygiene, copy and wiring surfaced by later work, plus `US-110` (the crossword crediting a blank grid), the last learner-facing honesty defect, which waits on `OQ-7`. At 8–12 points a week of evenings the remaining 247 points are roughly **5–7 months**.
+**469 points total, of which 246 are done — 52%.** Must-have work is **211 of 306 (69%)**. **`npm test` is green: 9 suites, 1,136 tests, 78.18% statement coverage** (73.46% branch, 80.67% functions). **Sprints 0, 2 and 3 are complete.** `blobstore.js` is now the best-tested file in the repo — 224 tests, 99.05% statements, **100% lines** — and all seven defects its suite found (`US-216`–`US-222`) are closed, `US-216` by rolling the quota eviction into the retrying transaction so a failed write can no longer report *"Your existing recordings are safe"* over a deleted recording. **The module still has no caller**, which is the whole of what `US-605` needs and is filed as `US-136`. `US-187` closed the dead-drill-button class — 25 live targets, 1 dead (`gram:register`), against four dead at the start of the wave — and its real fix was in `js/core/session.js`, which was putting unauthored targets into session plans. Sprint 7 opened: the listening item shape, the reveal gate and the no-audio route shipped (`US-701`, `US-703`, `US-704`, `US-711`), leaving content. What remains is still concentrated in Sprint 1 — 75 points of hygiene, copy and wiring, plus `US-110` (the crossword crediting a blank grid), the last learner-facing honesty defect, which waits on `OQ-7`. At 8–12 points a week of evenings the remaining 223 points are roughly **4–6 months**.
+
+**The Sprint 4, 5 and 6 done columns changed on 2026-09-12 without a line of new code**, because they
+were under-crediting shipped work: stories built inside another story were never ticked. Sprint 4 went
+5 → 15 (`US-402`, `US-405`, `US-407` folded into `US-401`; `US-403` shipped as `US-197`) and Sprint 5
+went 5 → 10 (`US-505` inside `US-501`, `US-506` inside `US-177`). Sprint 6 stayed at **0** on purpose:
+`US-605`'s module is finished, fully tested and uncalled, and a tick would be the same class of claim
+this backlog exists to remove. Four more stories are partly satisfied and deliberately **not** ticked,
+each with the residue named in its row — `US-409` (no connected-speech or intonation content),
+`US-502` (7 of 8 foundation points; modals missing), `US-507` (Telugu notes yes, L1 ordering no),
+`US-508` (audit done on two points, contradicted by `US-166`).
