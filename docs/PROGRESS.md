@@ -11,7 +11,7 @@ it points at them:
 [CONTENT_AUTHORING_GUIDE.md](CONTENT_AUTHORING_GUIDE.md) (how to add content) ·
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) (the phased build plan)
 
-**Last updated:** 2026-09-09
+**Last updated:** 2026-09-12
 
 ---
 
@@ -34,16 +34,20 @@ it points at them:
 
 ## 1. Where the project stands, in one paragraph
 
-Phase 0 and all planning docs are **committed**. Overall **180 of 430 points (41%)**; must-have work
-is 54%. **`npm test` is green for the first time — 8 suites, 793 tests, 59.55% statement coverage** —
-and the first real run found three defects that thirteen waves of `node --check` could not
-(`US-201`–`US-203`). The machinery is largely built: Grammar and Pronunciation exist as sections
-with all authored content now browsable, the session sequencer has a UI so a learner can press one
-button and be walked through a session, typed `gram:`/`phon:` reviews render, and the mistake
-diagnosis is on the dashboard. What remains is mostly **content, not code**: 5 grammar points of 24,
-no listening comprehension, no free-speaking surface. Two things still outstanding: `blobstore.js`
-is 492 statements at **0% coverage** (`US-194` — its agent died twice), and `US-001` is 2 of 3
-because `package-lock.json` is still gitignored, so a clean checkout would still fail `npm ci`.
+Phase 0 and all planning docs are **committed**. For point totals see
+[`PRODUCT_BACKLOG.md` §16](PRODUCT_BACKLOG.md) — that is the arithmetic's home, and quoting it here
+is how it rots. **`npm test` is green — 9 suites, 1046 tests, 0 failures, 77.40% statement coverage**
+— and **every live `js/core` module now has a suite**, the last one (`blobstore.js`, `US-194`) landing
+this wave at 98.78% and finding five defects on the way in. **Sprint 0 is complete, 6 of 6:**
+`package-lock.json` is no longer gitignored, so a clean checkout can finally `npm ci` — it shows as
+untracked until you commit it, per the manual-commit workflow. The machinery is largely
+built: Grammar and Pronunciation exist as sections with all authored content browsable, the session
+sequencer has a UI so a learner can press one button and be walked through a session, typed
+`gram:`/`phon:` reviews render, the mistake panel is on the dashboard and **now has producers in four
+strands rather than two**. What remains is mostly **content, not code**: 6 grammar points of 24, no
+listening comprehension, no free-speaking surface. The one thing left in the test story is CI itself —
+the workflow's test job is still commented out (B1), so the 1046 tests run only when someone runs
+them.
 
 ---
 
@@ -76,7 +80,7 @@ the committed version.
 | ✅ | `service-worker.js` — `STATIC_ASSETS` 19 → 23, cache `v3` → `v4` | precache completeness now asserted by `assets.test.js` |
 | ✅ | `index.html` loads `levels.js` + `migrations.js` in dependency order | `index.html:360-361` |
 | ✅ | `.gitignore` — `__tests__/` and `docs/` un-ignored | the 4 spec docs had never been committable |
-| 🔶 | The 112 assertions run under **real Jest** | ran via a throwaway Jest-compatible shim, *not* Jest — see 🔴 B1 |
+| ✅ | The Phase 0 assertions run under **real Jest** | ✅ **as of 2026-09-12.** Originally 🔶 — they had only ever run through a throwaway Jest-compatible shim. Now part of a green 9-suite / 1046-test run; `migrations.test.js` alone is 73 tests at 93.02% statements. B1 is closed |
 
 ### 2.3 This session — requirements gap analysis
 
@@ -192,7 +196,7 @@ and Word Search selection never clears on a wrong guess (`US-123`).
 | ✅ | **US-122 — no more silent schema downgrade.** `migrateProgress` now leaves a future version untouched instead of stamping it down, and exposes `isFutureVersion()` | ⚠️ The agent flagged that its own fix was **incomplete**: `saveProgress()` re-stamped `SCHEMA_VERSION` unconditionally, undoing it on the next save. Closed separately — the stamp is now `Math.max(state.schemaVersion, SCHEMA_VERSION)`. Verified end to end: a v2 record survives load *and* save at 2 |
 | ✅ | **US-114 — the fill-blank crash is fixed at the point of use.** Blanks are derived from the exercise's own words (blanked **by position**, not by substring replace) when the supplied prompt is missing or corrupt; drag-and-drop is the last resort | Swept all 3000 fill-blank indices × 3 levels: **81 corrupt prompts rejected and rebuilt, 0 left unrenderable.** Determinism preserved — 5 repeat renders of indices 0-59 byte-identical |
 | ✅ | **US-115 — scramble no longer counts a solve per click.** A once-per-render `dataset.counted` flag, reset in `loadWordScramble` | Measured against `git show HEAD:app.js`: 4 clicks recorded **4** solves before, **1** after. Advancing to the next scramble still counts |
-| ✅ | 10 new assertions added to `__tests__/unit/migrations.test.js` for the future-version behaviour | 🔶 **Unrun as jest tests** — jest is still not installed. They were exercised through a throwaway `describe/it/expect` shim in plain node and all 34 blocks held, which checks the assertions' logic but not jest compatibility |
+| ✅ | 10 new assertions added to `__tests__/unit/migrations.test.js` for the future-version behaviour | Originally 🔶 *"unrun as jest tests"* — jest was not installed until 2026-09-10. **They have since run under real Jest and hold**: `migrations.test.js` is 73 tests, 93.02% statements |
 
 **Why the guard patterns differ across sections, since it looks inconsistent:** scramble could not
 use `isExerciseCompleted` because `loadWordScramble` picks with `Math.random()` and so has no stable
@@ -208,6 +212,96 @@ corruption has a *source*, not just a symptom. `generateAlgorithmicSentence` doe
 mid-word (`underst___ing`). US-114 rejects and rebuilds those downstream; the generator is still
 wrong. Also found: `classifyError` never returns `VALIDATION`, so every validation failure shows
 **two** toasts, one of them a useless "Something went wrong" (`US-125`).
+
+---
+
+### 2.9 Wave 15 — the last untested module gets a suite; feedback stops guessing (2026-09-12)
+
+⚠️ **Waves 5–14 are not in §2.** They were recorded as changelog rows in §8 instead, one row per
+wave, and that is where to read them. Wave 15 gets a subsection again because four of its findings
+do not fit in a row. The numbering gap is real, not a missing section.
+
+**Suite state, measured this wave:** `npm test` → **9 suites, 1046 tests, 0 failures**, up from
+8 suites / 793 tests. `npx jest --coverage` → **77.40% statements (2251/2908)**, 72.32% branches,
+80.32% functions, 77.38% lines — up from 59.55%. Sprint 0 is **complete, 6 of 6**. Point totals are
+`PRODUCT_BACKLOG.md` §16's arithmetic, not this ledger's; do not read them from here.
+
+| # | Item | Evidence |
+|---|---|---|
+| ✅ | **`US-001` closed — Sprint 0 is done.** `package-lock.json` is no longer gitignored. The ignore line is replaced by a comment naming *why* it must stay tracked: `.github/workflows/ci-cd.yml`'s test job installs with `npm ci`, which refuses to install without a committed lockfile, and that is the reason CI could never install jest | `.gitignore:3-5`. Lockfile **22,299 → 200,050 bytes** once jest's dependency tree was resolved. ⚠️ See the caveat under B1 — the workflow's test job is still commented out, so nothing runs the suites automatically yet |
+| ✅ | **`US-194` — `blobstore.js` 0% → 98.78% statements, 211 tests.** The last live module with no test file now has one, after two earlier agents died mid-task producing nothing | 92.33% branches, 99.29% functions; one uncovered line (778). Required a hand-built fake IndexedDB: spec key ordering (number < date < string < array), `IDBKeyRange.bound`, inline `keyPath` + `autoIncrement`, compound-index `getAll`, transactions that roll back on abort, requests whose error aborts their own transaction, and a settable byte budget that throws `QuotaExceededError` |
+| ✅ | **`US-198`, `US-199`, `US-200` fixed** — the three defects `portability.js`'s own suite found last wave — **plus four more questions decided rather than deferred** | 179 → **210 tests**, 96.44% → **97.51% statements**, and the suite now passes under `--randomize` |
+| ✅ | **Dictation's fake similarity score is gone.** `sim = exact ? 1 : 0.5` then `if (sim > 0.8)` is replaced by **reuse of the existing LCS word diff** — not a new similarity metric, because a number cannot tell a learner *where* the miss was and a marked word can | A one-word miss out of twelve now reads `✗ 11 of 12 words match.` (`app.js`) with both lines shown and the word marked. Grading is **no more generous** than the exact comparison it replaced. It also distinguishes "wrote it differently" (spelling) from "did not come through" (listening) |
+| ✅ | **Comprehension feedback shows its working** — the chosen option, the correct one, an `In the passage: "…"` citation, and a retry | The citation prints **only** when exactly one sentence contains every content word of the answer; otherwise it says so rather than pointing at an unrelated sentence (`app.js`). The ✓ stays for all-correct — comprehension *is* objectively gradable — but "Perfect!" and the exclamation marks go |
+| ✅ | **The mistake log finally has producers outside grammar and pronunciation:** `vocab.meaning`, `vocab.spelling`, `lsn.detail`, `gram.word-order`, and an authored per-question hook | All graded evidence, all behind the existing single-answer guards (`app.js`) |
+| ✅ | **An unanswered multiple-choice is no longer graded `✗ Incorrect`.** It now says there is nothing to check yet and does not count an attempt | Incidental find while adding the producers. `'There is nothing to check yet. Say or type your answer, then try again.'` (`app.js`) |
+| ✅ | **`US-215` — a sixth grammar point, `question-formation`** (syllabus 6, `foundation`, A2). T-G5 invariant `isn't it?` tag and T-G8 SOV residue in embedded questions | `data/grammar/question-formation.js`, wired at `index.html:688` and precached at `service-worker.js:62`. Verified it registers and that `foundation` went **4 → 5 points** (6 registering overall: syllabus 1, 2, 3, 4, 6, 9) |
+| ✅ | **Three dangling drill targets close as a consequence.** `gram.tag-question`, `gram.embedded-question-order` and `gram.word-order` in `js/core/mistakes.js` all named `question-formation` as their drill target — **a point that did not exist**, so those three dashboard buttons opened nothing | `js/core/mistakes.js:362`, `:395`, `:453`. Verified all three now resolve to `gram:question-formation` |
+
+**What the fake IndexedDB cannot prove, stated so nobody reads 98.78% as "verified".** Structured
+clone of a real `Blob` — so the `DataCloneError` branch that `available({deep:true})` exists for is
+**still unverified**; real per-origin quota; storage-pressure eviction; Safari private browsing; the
+cross-tab `versionchange` handshake; and **real transaction auto-commit timing** — the fake drains in
+a single microtask, so `runTx`'s documented "never await mid-transaction" hazard cannot be reproduced
+and **this suite does not prove the module is free of it.**
+
+**Five defects the suite found, and the worst one is an honesty defect.** `put()` reports `full` with
+the message *"Your existing recordings are safe"* **after it has permanently deleted an existing
+recording** — `evictForQuota()` commits its deletes in its own transaction, so when the single retry
+also hits quota there is nothing left to roll them back. Reproduced concretely. The other four:
+`remove(9999)` confirms deleting a recording that never existed; the eviction message says
+"**this prompt**" when the row that went belonged to a different one; `openUrl()` tells the learner a
+recording is "no longer on this device" when IndexedDB is merely unavailable; and
+`cleanNumber(null) === 0`, so one recording reports its duration as `null` from `put()` and `0` from
+`list()`. Filed in `PRODUCT_BACKLOG.md`.
+
+**The lesson, because this file already records the same pattern once.** `blobstore.js`'s author had
+verified it with a throwaway harness that found two real bugs — then deleted the harness. The
+2026-09-10 changelog row already names this ("both were verified only by throwaway harnesses in
+`/tmp` that no longer exist"). The five defects above are what a **permanent** suite finds that a
+deleted one cannot, and they are the argument for `US-196` (a coverage threshold) more than any
+percentage is.
+
+**The four `portability.js` decisions, since each one is a refusal to do the obvious thing:**
+
+- The reset path now decides its verdict by **reading the store back**, exactly as `rollback()` in
+  the same module already did. The point is that *"no exception escaped"* was never evidence, and the
+  reset path was the one place still taking it on trust. A read-back that itself throws reports a
+  **third** honest outcome rather than guessing either way.
+- The rollback message no longer names a backup key that was never written (`US-199`). It still
+  **commits the import when no recovery copy could be taken**, and says so instead. Refusing to
+  commit would deny a restore to precisely the learner with a full device — the commit *removes* keys
+  before it writes, so it routinely fits where an extra whole-store copy did not.
+- The reset backup is filed by the **shape** of the data, not the running build's `SCHEMA_VERSION`,
+  mirroring `migrations.js` (`US-200`). Unparseable data reads as the **current** build rather than
+  v1 — we cannot claim an era we could not inspect.
+- An `srsData`-only import still **replaces** rather than merges, which is correct: `rollback()`
+  depends on the prior state being whole, and silently keeping leftovers is the worse lie. What
+  changed is that the confirm copy now names what a given file will *remove*, in learner words.
+- A settings-only export still **cannot** be re-imported — loosening the check would let one
+  mis-picked file wipe a populated device to rescue a theme toggle — but it is no longer reported as
+  an unqualified success.
+
+**Four of the seven mistake categories still have no producer, deliberately:** `vocab.recall`,
+`vocab.collocation`, `lsn.gist` and `rdw.inference`. No gradable task exists to attach them to.
+`rdw.inference` is the instructive one — comprehension questions carry **no type metadata**, so
+logging every wrong answer as "needed reading between the lines" would be a false claim about a
+question like *"What does the mother do?"*.
+
+**Also deliberately skipped: the puzzles word-matching drill as a mistake producer.** `selectMatch`
+(`app.js:6455`) is click-to-see-if-it-sticks *by design*, so logging it would flood the log with
+exploratory clicks and make the top-5 panel a record of how the widget works rather than of what the
+learner gets wrong. See B8 / `OQ-7`.
+
+**The content decision in `question-formation`, which is the interesting part.** Rather than teaching
+inversion and then embedded questions as an exception, both follow from **one** rule: *the helper
+moves in front of the subject of the clause that **is** the question, and exactly one clause in any
+sentence is that.* The learner's embedded-question error is then not "inverting where you shouldn't"
+but **inverting the wrong clause** — which credits the mechanism they already have instead of asking
+them to unlearn it. Two facts usually taught as separate exceptions fall out of the same rule:
+subject questions do not invert, and tags do. The point also **declines to call Indian-English
+invariant "isn't it?" an error.** It is a regular feature spoken by tens of millions, so the framing
+is "right tag, wrong sentence" — a choice about audience, not about correctness.
 
 ---
 
@@ -284,10 +378,10 @@ to ask for:
 Recommendation: extract those functions into the modules that will use them, **then** delete the
 class shells. Deleting first means rewriting them in Phase 5.
 
-### 3.5 Two claims in the repo that are not true
+### 3.5 Claims in the repo that are not true
 
-Both are honesty problems of the same kind the audit already objects to, so they belong in the
-same bucket as the three live bugs.
+All of these are honesty problems of the same kind the audit already objects to, so they belong in
+the same bucket as the three live bugs.
 
 1. ~~**`app.js` logged `'♿ Accessibility: WCAG 2.1 AA Compliant'` at every startup.**~~ ✅ **Fixed
    2026-09-09 (US-107)** — the line is deleted. Nothing verified it: no audit, no automated check,
@@ -296,6 +390,18 @@ same bucket as the three live bugs.
 2. **`docs/FOLDER_STRUCTURE.md:123-124` and `docs/ERROR_HANDLING_GUIDE.md:57-58` document
    `new StorageManager(errorHandler, validator)` as the app's architecture.** That wiring does
    not exist anywhere in the app. Those docs describe an intended design that was never adopted.
+3. 🆕 **`app.js:2296-2302` says listening and reading have no mistake destinations — Wave 15
+   falsified half of it.** The comment reads *"listening — FR-LSN-1: nothing in this build asks a
+   comprehension question, so neither `lsn.gist` nor `lsn.detail` has a destination"*, and
+   `lsn.detail` now has a **producer** (dictation) while comprehension questions **are** asked and
+   graded. What is still true is the narrow point the function actually needs — that neither
+   category has a *drill destination* to open — so the code is right and the reason it gives is
+   stale. One comment. Not fixed here because this wave's ledger pass may not touch source.
+4. 🆕 **`.gitignore:3-4` says the workflow "runs `npm ci`". It does not — yet.** The lockfile is now
+   tracked, which is correct and was the point, but every `npm ci` in
+   `.github/workflows/ci-cd.yml` sits inside the commented-out test job (`:126`). The comment
+   describes the intended state, not the current one. Uncommenting the job is what makes it true;
+   see B1.
 
 ### 3.6 Existing content and exercises — all of it is kept
 
@@ -445,17 +551,17 @@ imply accuracy the app cannot deliver ([TEACHING_METHODOLOGY.md §3](TEACHING_ME
 
 | # | Item | Why it matters | My recommendation |
 |---|---|---|---|
-| 🔴 **B1** | **Jest is not in `devDependencies`.** Five `package.json` scripts and `jest.config.js` reference it. `npm install` was blocked by the proxy plus an expired `npm.apple.com` token (E401). | `npm test` fails on a clean checkout **today**, and CI cannot be trusted. The 112 assertions are verified correct but only under a shim, so real-Jest specifics (`it.each` interpolation, jsdom `localStorage` semantics) are still unproven. | `npm login --registry=https://npm.apple.com` then `npm i -D jest jest-environment-jsdom && npm test`. Expected green. Report any failure before Phase 1. |
+| ✅ **B1** | ~~**Jest is not in `devDependencies`.**~~ **Resolved in two parts.** 2026-09-10: the blocker was never the code but an expired token in `~/.npmrc` pointing npm at a private registry; `jest@30.5.1` + `jest-environment-jsdom` are declared and installed. 2026-09-12: `package-lock.json` is **un-ignored** (200,050 bytes, awaiting your commit), closing `US-001`. | `npm test` is green on a clean checkout: **9 suites, 1046 tests, 0 failures, 77.40% statements**. The shim-only caveat is gone — every assertion has now run under real Jest, which is what caught the three defects of Wave 14. | ⚠️ **One thing is still not done, and it is the one that matters for trust:** the `test` job in `.github/workflows/ci-cd.yml` is **still commented out** (`:106-150`), so nothing runs the suites on push. Both reasons the comment block gives for disabling it are now false. Uncommenting the job and restoring `needs: test` on `build` is the remaining step. |
 | 🔴 **B2** | **Existing `srsData` is substantially noise** — the `correct: 0` bug graded most online vocabulary answers effectively at random. Migrate it, or offer a one-time reset? | Phase 2 rewrites persisted data and needs this answer first. | **Migrate plus backup.** The *set* of words seen is still signal even where the verdicts are not. Add a learner-facing "reset my review history" button rather than deciding for them. |
 | ☐ **B3** | **Nothing from Phase 0 is committed.** 5 modified files + 5 new paths are sitting in the working tree, including 4 spec docs that have never been committed. | A month of work exists only on this disk. | Commit Phase 0 as its own commit before starting Phase 1, so the "zero behaviour change" claim stays verifiable in isolation. |
 | ☐ **B4** | Success-metric **targets** are unset — I can propose the metrics but not what "good" is. | Blocks A2. | Pick after 2 weeks of your own daily use; the app is its own first beta tester. |
 | ☐ **B5** | Client-only means **no telemetry**, so retention and speaking-minutes cannot be measured centrally. | Blocks A2. | Compute locally, surface on the dashboard, add a manual "export my stats" JSON. Do not add a third-party analytics script — it would breach the CSP posture and the privacy stance. |
 | ☐ **B6** | Should the UI offer **Telugu-language** glosses and instructions? | Changes the scope of every content schema. | Not now. Keep it an open question — English-only UI with plain-English IPA glosses covers P1/P3/P4 and most of P2. |
 | ☐ **B7** | Phase 10 says delete `js/core/storage.js` and `js/core/notification.js`. But `storage.js` and `validator.js` contain the backup/export/import and schema-validation code the new NFRs are about to require (§3.4). | Deleting first means rewriting the same functions in Phase 5. | **Harvest, then delete.** Extract `createBackup` / `restoreFromBackup` / `exportData` / `importData` and `validateSchema` / `validateProgress` into the modules that will use them, then remove the class shells. Retarget Phase 10 accordingly. |
-| ☐ **B8** | **What are puzzles for?** Word search, crossword, scramble and matching are built and working but belong to no strand, gap or requirement (§3.6). | They cost maintenance in every refactor — Phase 3's registry, Phase 2's level rename, every stat calculation — while teaching nothing the curriculum asks for. | **Keep matching and scramble, retire word search and crossword.** Matching is a legitimate vocabulary recognition warm-up under `CURRICULUM.md:23`; scramble drills spelling cheaply. Word search and crossword teach neither speaking nor listening and are the most code per unit of value. Your call — they are your app's most "fun" surface, and motivation is not nothing. |
+| 🔴 **B8** | **What are puzzles for?** Word search, crossword, scramble and matching are built and working but belong to no strand, gap or requirement (§3.6). Tracked as `OQ-7`, and it **still blocks `US-110`** (crossword honesty) — there is no point repairing a crossword nobody has justified keeping. | They cost maintenance in every refactor — Phase 3's registry, Phase 2's level rename, every stat calculation — while teaching nothing the curriculum asks for. **Wave 15 added a third cost:** the matching drill was **deliberately skipped** as a mistake-log producer, because `selectMatch` (`app.js:6455`) is click-to-see-if-it-sticks *by design* and logging it would fill the top-5 panel with exploratory clicks. So puzzles now also sit outside the diagnosis surface — correctly, but it widens the gap between them and everything else. | **Keep matching and scramble, retire word search and crossword.** Matching is a legitimate vocabulary recognition warm-up under `CURRICULUM.md:23`; scramble drills spelling cheaply. Word search and crossword teach neither speaking nor listening and are the most code per unit of value. Your call — they are your app's most "fun" surface, and motivation is not nothing. |
 | ☐ **B9** | **IPA and frequency ordering for Phase 5 content.** I can write IPA for common words, but across hundreds of entries the error rate is not negligible — and a wrong IPA *actively teaches an error*, which is the exact failure the audit objects to. Frequency ordering needs a published list I do not hold verbatim. | Gates the vocabulary authoring in Phase 5 and the stress marking in Phase 7. | **Two-part.** (a) *IPA:* write it only where I am confident and **leave the field empty otherwise** — `TEACHING_METHODOLOGY.md §3` already sanctions omission over false precision, and `CURRICULUM.md:84-87` asks exactly this. (b) *Frequency:* if you want a defensible ordering, I fetch a **freely-licensed** list once at authoring time (new-GSL or a SUBTLEX-derived list) and bundle it. Avoid Oxford 3000/5000 — it is Oxford's copyrighted list and this repo is MIT. |
 | ☐ **B10** | **Audio for pronunciation and accents.** The repo has **zero audio files**; every sound comes from browser TTS at a hardcoded `lang = 'en-US'` (`app.js`), with no `getVoices()` call anywhere. | `CURRICULUM.md:143-146` asks for "listen-and-compare recordings" per phoneme, and §3 Strand D asks for multiple accents. Neither is deliverable as specified. | See the full 19-function breakdown in **§6.y**. Short version: **word-level audio is well covered free** (dictionary API), **minimal-pair discrimination — the highest-value feature — is fully coverable**, and **prosody (rhythm, connected speech, intonation) is not obtainable from any free source**. Recommend building A1/A7/A8 first and descoping A10–A12 to noticing-based exercises. |
-| ☐ **B11** | **Recording archive vs. the `localStorage`-only constraint.** `CURRICULUM.md` Strand E.7 wants the last N recordings kept per prompt, but audio blobs cannot live in `localStorage` (string-only, ~5–10 MB) — that needs **IndexedDB**, which the stated constraint forbids (§6.y A17). | Blocks the "hear month-one against month-three" feature the curriculum calls its strongest motivator. | **Amend the constraint to "client-side storage only; `localStorage` for state, IndexedDB for blobs."** Still no backend, still offline, still no build step — it only widens *which* browser store is allowed. Add a size cap and an eviction policy, since a recording archive grows without bound. |
+| ☐ **B11** | **Recording archive vs. the `localStorage`-only constraint.** `CURRICULUM.md` Strand E.7 wants the last N recordings kept per prompt, but audio blobs cannot live in `localStorage` (string-only, ~5–10 MB) — that needs **IndexedDB**, which the stated constraint forbids (§6.y A17). ⚠️ **Overtaken by events and never formally answered:** `js/core/blobstore.js` was written in Wave 6 on the assumption you would say yes, and as of Wave 15 it is 98.78% covered by 211 tests. The code has decided this; the constraint has not. | Blocks the "hear month-one against month-three" feature the curriculum calls its strongest motivator — and until the constraint is amended in writing, the most-tested module in the repo contradicts a stated hard constraint. | **Amend the constraint to "client-side storage only; `localStorage` for state, IndexedDB for blobs."** Still no backend, still offline, still no build step — it only widens *which* browser store is allowed. The size cap and eviction policy the recommendation asked for **exist** (`evictForQuota()`), and Wave 15's suite found the eviction path deletes a recording and then reports that nothing was lost — fix that before this is called done. |
 
 ---
 
@@ -467,7 +573,7 @@ verification steps.
 
 | Phase | Goal | Risk | Status |
 |---|---|---|---|
-| 0 | Test harness + migration spine | none | 🔶 code done, uncommitted, real-Jest unverified (B1, B3) |
+| 0 | Test harness + migration spine | none | ✅ **done and verified under real Jest** — 9 suites, 1046 tests, 0 failures, 77.40% statements. Sprint 0 is 6 of 6. Remaining: uncomment the CI test job (B1) |
 | 1 | **Honesty:** word-level speech diff, delete fake IPA, fix the `correct: 0` grading bug | low | ☐ |
 | 2 | CEFR rename + migration | **highest** | ☐ blocked on B2 |
 | 3 | `SECTIONS` registry refactor | high | ☐ |
@@ -595,6 +701,13 @@ never-instantiated modules, all content counts and schemas, zero audio files, ha
 `lang = 'en-US'`, no `getVoices()` call, the randomised exercise-mode dispatch, and every
 cross-doc citation.
 
+> ⚠️ **Two of those were verified true in 2026-09-08 and have since been *fixed*, so read them as
+> dated observations, not current state:** `levels.js`/`migrations.js` gained call sites in Wave 3
+> (`US-003`/`US-004`) and the exercise-mode dispatch stopped being random in Wave 2 (`US-108`).
+> Still current as of Wave 15: the four never-instantiated modules — `storage.js`, `validator.js`,
+> `notification.js` and `error-handler.js` are the **only** files in `js/core/` at 0% coverage, which
+> the coverage report now proves rather than merely asserts (`US-809` — delete, do not test).
+
 **✅ Verified against one live API response (`decide`, 2026-09-08):**
 the presence and shape of `phonetic`, `phonetics[].audio`, `license`, `sourceUrls`,
 `partOfSpeech`, `definitions[].example`; empty definition-level synonyms/antonyms; and the
@@ -612,7 +725,7 @@ absence of CEFR/frequency/collocation/word-family/register fields.
 | V6 | CMU dict / SUBTLEX / new-GSL redistribution terms | Read each licence | 30 min |
 | V7 | **iOS Safari `SpeechRecognition` behaviour** — the whole mobile degradation design rests on this | Open the app on a real iPhone, try the speech check | Needs a device |
 | V8 | **TTS renders `/ɪ/` vs `/iː/` distinguishably** on real Android and iOS voices | Play *ship* / *sheep* on both, listen | Needs 2 devices |
-| V9 | **Grammar content quality** — "Phase 6 is fully unaided" is a claim about my capability, unverifiable by inspection | Have me author **one** grammar point end-to-end (rule, 3 contrast pairs, 6 items, Telugu note) and judge it | ~1 sitting |
+| V9 | ~~**Grammar content quality** — "Phase 6 is fully unaided" is a claim about my capability, unverifiable by inspection~~ **Half-answered, and this row was stale for nine waves.** The authoring happened: `US-500` wrote the articles point end to end (`docs/GRAMMAR_SAMPLE_REVIEW.md`), and **six points now register** — syllabus 1, 2, 3, 4, 6, 9. So "can it be written" is answered yes by demonstration. | What is **still** unverified is the half only you can do: **read one and judge it.** The `question-formation` point (Wave 15) is the best test, because it makes a contestable pedagogical call — it declines to mark Indian-English invariant *"isn't it?"* wrong. | ~1 sitting |
 
 **The one that is unverifiable in principle:** "no free API teaches grammar." That is a negative
 claim from knowledge — I did not survey the API landscape. It is a strong claim because grammar
@@ -656,7 +769,7 @@ whether an API could have supplied one stops mattering.
 | # | Function | Status |
 |---|---|---|
 | A16 | Record own voice | ✅ **Built** — `MediaRecorder` + `getUserMedia` at `app.js`. |
-| A17 | Recording archive — last N per prompt (E.7) | 🔴 **Blocked by a constraint conflict.** Audio blobs cannot go in `localStorage` (string-only, ~5–10 MB). Needs **IndexedDB**, which the stated "localStorage only" constraint forbids. See B11. |
+| A17 | Recording archive — last N per prompt (E.7) | 🔶 **Built, tested, constraint still not formally amended.** Audio blobs cannot go in `localStorage` (string-only, ~5–10 MB), so `js/core/blobstore.js` uses **IndexedDB** — which the stated "localStorage only" constraint still forbids on paper. 211 tests, 98.78% statements (Wave 15), and that suite found the eviction path deletes a recording then reports nothing was lost. See B11. |
 | A18 | Read-aloud word-level diff | ✅ Plumbing exists; the verdict logic at `app.js` is what Phase 1 fixes. |
 | A19 | Fluency metrics — WPM, fillers, pauses (E.6) | ⚠️ **Partial.** WPM is derivable from transcript + duration. Filler and pause counts need audio analysis or interim recognition timings — materially harder. |
 
@@ -877,6 +990,14 @@ Decisions already taken, so they are not re-litigated later.
 | 2026-09-08 | Platform floor: **mobile-first**, Android Chrome + iOS Safari, last 2 versions | The target learner has 15–20 min/day and no teacher — that is a phone user. Consequence: `SpeechRecognition` is unreliable on iOS Safari, so read-aloud diff **must** degrade to record-and-self-review, not fail. It is already feature-detected at `app.js`. |
 | 2026-09-08 | Client-only is a **hard constraint**, not a current limitation | Static hosting, `localStorage` only, no build step, classic non-module scripts, CSP `default-src 'self'`, no CDN. Real pronunciation scoring and free-speech grading are therefore *deferred*, and replaced by discrimination drills + self-assessment rubrics per `CURRICULUM.md §6`. |
 | 2026-09-08 | Do **not** chase accent | Retroflex /t/, /d/ substitution marks a speaker as Indian but rarely blocks understanding. Target intelligibility instead: rhythm, word stress, schwa. Explicit scope exclusion. |
+| 2026-09-12 | **Story ids are allocated sequentially and never encode a sprint.** ⚠️ **This was decided after a collision, so older commit messages are ambiguous:** `US-201`–`US-204` were each **defined twice**. Numbers were originally allocated per sprint (`US-2xx` = Sprint 2) but have run sequentially since `US-193`, and the sequential run walked straight into Sprint 2's pre-allocated block. Sprint 2's `US-201`–`US-204` **keep** their numbers; the post-193 ones are renumbered **`US-211`–`US-214`**. | A reader of a commit message written before today may find `US-203` meaning either the CEFR-rename work or one of the defects the first real jest run found. §1's citation has been corrected to `US-211`–`US-213`; the §8 Wave 6 row still means Sprint 2's. Sequential-only is the fix, because per-sprint blocks reserve numbers for sprints whose scope then changes. |
+| 2026-09-12 | **An import commits even when no recovery copy could be taken — and says so instead of refusing.** | Refusing would deny a restore to precisely the learner who needs it most: the one with a full device. The commit *removes* keys before it writes, so it routinely fits where an extra whole-store copy did not. The alternative — a message naming a backup key that was never written — was the actual bug (`US-199`). Truth over a comforting no-op. |
+| 2026-09-12 | **A verdict about persisted data is decided by reading the store back, never by "no exception escaped".** | `rollback()` in `portability.js` already worked this way; the reset path was the one place taking absence-of-throw as evidence, and absence of a throw is not evidence. A read-back that itself throws reports a **third** outcome rather than guessing either way (`US-198`). |
+| 2026-09-12 | **Backups are filed by the *shape* of the data, not by the running build's `SCHEMA_VERSION`** — mirroring `migrations.js`. Unparseable data is recorded as the **current** era, not v1. | Stamping the build's version onto a record you never inspected files someone else's data under your own era. Defaulting the unreadable case to v1 would be worse: it claims an era we could not verify, and a migration would then run against data that may already be current (`US-200`). |
+| 2026-09-12 | **An `srsData`-only import replaces rather than merges; a settings-only export stays non-importable.** | Merging breaks `rollback()`, which depends on the prior state being whole, and silently keeping leftovers is the worse lie — so the fix is to *name what will be removed* in the confirm copy, not to soften the write. Loosening the settings check would let one mis-picked file wipe a populated device to rescue a theme toggle; the honest change is to stop reporting that case as an unqualified success. |
+| 2026-09-12 | **A mistake category gets a producer only where a gradable task exists. Four of seven stay empty on purpose:** `vocab.recall`, `vocab.collocation`, `lsn.gist`, `rdw.inference`. | An empty row is a gap you can see; a wrongly-filled one is a diagnosis the learner will act on. Comprehension questions carry no type metadata, so logging every wrong answer as `rdw.inference` would tell a learner they struggle with reading between the lines on the strength of *"What does the mother do?"*. Same reason the puzzles matching drill is excluded (B8). |
+| 2026-09-12 | **Feedback reuses the existing word diff rather than inventing a similarity score.** | Dictation's `sim = exact ? 1 : 0.5` was a number standing in for a judgement it never made. A score cannot tell a learner *where* the miss was; a marked word can. The rule generalises: prefer showing the evidence to scoring it, and never let the replacement grade more generously than what it replaced. |
+| 2026-09-12 | **Indian-English invariant *"isn't it?"* is not taught as an error.** `question-formation` frames it as "right tag, wrong sentence" — a choice about audience, not about correctness. | It is a regular feature of a variety spoken by tens of millions, and the app's whole case against "✓ Perfect!" is that a false claim about correctness fossilises. Calling a stable feature an error is the same defect pointed the other way. The point still teaches the agreeing tag, because the learner asked for the audience that expects it. |
 
 ---
 
@@ -910,4 +1031,5 @@ Decisions already taken, so they are not re-litigated later.
 | 2026-09-10 | **Wave 12 — all four agents succeeded; the app now has a "press start" path.** **`US-170`**: the session UI ships. Chrome, per-step Done/Skip, the three-way speaking choice, and — the part that matters — `plan().omitted` and `plan().shortfall` are **rendered rather than swallowed**, so a degraded plan says *"FR-SES-1 wants at least three strands; this plan covers 1"* instead of passing itself off as the full session. Proven completable start to finish **with no microphone**, twice: silently, and by skipping every speaking step. The agent declined to display `elapsedMs` on the grounds that wall clock is not time-on-task — consistent with the module's own count-boxed decision — and deliberately shipped no timer. It also found and fixed a **pre-existing race** the session route made deterministic: `loadVocabularyWord()` had no review-mode guard, so a late fetch replaced the review card a learner was answering. **`US-171`** (scheduler half) + **`US-167`**: `PROJECTORS.phon` was one flat list for three authored shapes, so a stress or noticing item stored exactly the three keys the shapes happen to share and `RENDERABLE` said yes to it — an empty card offered as a real one. Now three shapes with per-shape renderability, and the agent found a **fourth** affected key the report had missed: `phon:word-stress`, 21 items. **`US-131`**: the fixed ladder landed — `[1,3,7,16,35]` held at 35, rung derived from `reps` alone so nothing compounds, forward-only with no record recomputed, and the pinned KNOWN-DIVERGENCE assertion flipped in the same change. **`US-151`**: the `be` point (T-G2) finally landed on the fourth attempt — the author rewrote two items away from unimplemented modes rather than shipping unteachable content, and tested *noticing an absence* by putting the bare subject in the options and offering an explicit zero option. Three grammar points now register. **Three stale claims corrected**, found by the docs agent reading code it could not edit: `FR-LST-1` does not exist (the strand code is `LSN`) in both `session.js` and `app.js`; my own `session.js` script-tag comment still said "nothing calls it yet". Eight new items → `US-177`–`US-184`, the significant one being `US-177`: the review surface is still vocab-only, so typed reviews are now correctly *stored and queued* but still undrawn. |
 | 2026-09-10 | **Wave 13 — all four agents succeeded; two long-standing gaps closed.** **`US-177`: typed reviews render.** Five of six shapes; `coll` was **declared unrenderable** rather than drawn from an unverified projector against content nobody has read — the agent named that as the exact defect three projector bugs already caused, and asserted `RENDERERS ∪ UNRENDERABLE === SRS.SHAPES` so a seventh shape cannot land silently. A grammar review is now genuinely a review, not the lesson again: **634 characters against the lesson's 6,006**, showing `review.rulePrompt` and the authored `itemIds` subset. Badge equals what the button opens, with held-back items named on screen. **`US-181`: the mistake panel ships** — `Mistakes.topCategories()` had been computed and never shown, so `FR-SRS-3` was logged-not-surfaced. It honours every decision the module made: raw counts displayed, weighted score never, recogniser-sourced entries in one separate sentence rather than merged, `'unclear'` rendered as unclear with no arrow. Demonstrated by a category with the **second-highest raw count sitting off the list** because it stopped 25 days ago — score orders, count reports. **`US-178`: `BR-2` is reachable above `foundation`** — `present-perfect-vs-past-simple` is the first `everyday` point, and `everyday` now plans BCDE with production and zero shortfalls. **Two grammar points authored, both refusing to teach a false rule.** The stative point's frame — *"-ing is not banned from these verbs, it switches them into their activity sense"* — makes *I'm loving it* a confirmation rather than a counter-example; it puts the continuous as the right answer in 2 of 6 items so the item set cannot imply the false rule, and **cut an item** on *understand* because informal AmE allows *I'm not understanding you*. The perfect point attacks *"use it for recent things"* by name in four places and rewrote two prompts to close defensible alternatives. **`US-182`**: `gram.subject-dropped` added as a new row rather than widening `gram.copula`, because the remediation differs — and honest that English does drop subjects in clipped registers. Eight new items → `US-185`–`US-192`, the significant one being `US-185`: `gram.tense-agreement`'s label is false for **100%** of what routes to it. |
 | 2026-09-10 | **The test suites ran for the first time.** `US-001` had been open for thirteen waves; the blocker was never the code but an expired token in `~/.npmrc` pointing npm at a private registry, which failed *every* install including public packages. `jest@30.5.1` and `jest-environment-jsdom` are now declared and installed, and `npm test` produced coverage. **`US-001` is 2 of 3, not done:** `package-lock.json` is still gitignored (`.gitignore:3`), so `npm ci` in CI cannot work and a clean checkout would still fail — which is precisely what the story was written to fix. One line closes it. **Coverage reads 47%, and that number is misleading in the project's favour.** Of 2,826 statements in `js/core/`: **1,425 belong to modules that have a suite, and those are 92% covered** (`levels` 100%, `mistakes` 94%, `session` 93%, `srs` and `migrations` 92%, `sections` 85%); **858 are live modules with no test file at all** — `blobstore.js` 492 and `portability.js` 366, both 0%; and **543 are dead code** (`storage`, `validator`, `notification`, `error-handler`) that is never instantiated and should be deleted rather than tested (`US-809`). Excluding the dead code the figure is 58%, and every module anyone has written a test for is at 85% or better. **The gap is two specific modules, and they are the two worst ones to have untested:** `portability.js` imports and restores irreplaceable learner history across 19 rejection paths, `blobstore.js` holds the recording archive, and both were verified only by throwaway harnesses in `/tmp` that no longer exist. Filed as `US-193`/`US-194`, ahead of anything in Sprints 6–7. Also filed: `US-195`, because every suite was authored against jest 29 by agents that could run neither version and jest 30 changed some matcher and mock semantics; and `US-196`, since a `coverageThreshold` is finally justifiable but would lock in the two 0% modules if set before them. |
-| 2026-09-12 | **`npm test` is green for the first time — 8 suites, 793 tests, 0 failures, coverage 47% → 59.55%.** The first real run failed **18 tests across 3 suites**, and every one of those failures was invisible to thirteen waves of `node --check` and plain-node shims. **Three genuine defects, now fixed:** (1) **`session.js` had a suite with an expiry date** — `build()` honoured an injected `opts.now` but `plan()` read `Date.now()`, so a test-stamped date was compared against the wall date, the rollover guard fired spuriously and `current()` returned null. Fifteen failures, and the suite had been **green for its author on 2026-09-10 and broke the next morning with no code change**. Fixed with a `_now()` seam, matching `srs.js`'s precedent, cleared by `reset()` so one suite's clock cannot leak into the next. (2) `jest.config.js` collected `__tests__/setup.js` as a suite — one red suite saying nothing about the code. (3) **Two `mistakes` tests asserted nothing**: they patched `localStorage.setItem` on the *instance*, which jsdom does not honour, so the throw never fired and `save()` legitimately returned `true`. They **passed under the plain-node shim** — precisely the class of defect only a real jest run catches. The portability author had independently hit this and used `Storage.prototype`; same fix applied. Also corrected two assertions still expecting `FR-LST-1`, a requirement id that does not exist. **`US-193`: the `portability.js` suite went 0% → 96.44%** across 179 tests, with 44 rejection cases each asserting the store is byte-identical afterwards — and it **found three real defects** in the module: `resetReviewHistory()` reports success when the removal silently fails (`US-198`), `rollbackFailed` can name a recovery key that was never written (`US-199`), and the reset backup is filed under the wrong schema era (`US-200`). Its author pinned them visibly rather than leaving red assertions. **`US-197`: the 36 authored word-stress and prosody items are now browsable** in the Pronunciation section — previously reachable only if something had already scheduled them, so invisible in practice. All 21 stress and 15 noticing items verified reachable, with `requiresImitation` refused rather than trusted. **Bookkeeping correction:** story numbers no longer imply a sprint (sequential from `US-193`), so §16's per-sprint split is editorial and approximate while the totals are exact. |
+| 2026-09-12 | **Wave 14 — `npm test` is green for the first time: 8 suites, 793 tests, 0 failures, coverage 47% → 59.55%.** The first real run failed **18 tests across 3 suites**, and every one of those failures was invisible to thirteen waves of `node --check` and plain-node shims. **Three genuine defects, now fixed:** (1) **`session.js` had a suite with an expiry date** — `build()` honoured an injected `opts.now` but `plan()` read `Date.now()`, so a test-stamped date was compared against the wall date, the rollover guard fired spuriously and `current()` returned null. Fifteen failures, and the suite had been **green for its author on 2026-09-10 and broke the next morning with no code change**. Fixed with a `_now()` seam, matching `srs.js`'s precedent, cleared by `reset()` so one suite's clock cannot leak into the next. (2) `jest.config.js` collected `__tests__/setup.js` as a suite — one red suite saying nothing about the code. (3) **Two `mistakes` tests asserted nothing**: they patched `localStorage.setItem` on the *instance*, which jsdom does not honour, so the throw never fired and `save()` legitimately returned `true`. They **passed under the plain-node shim** — precisely the class of defect only a real jest run catches. The portability author had independently hit this and used `Storage.prototype`; same fix applied. Also corrected two assertions still expecting `FR-LST-1`, a requirement id that does not exist. **`US-193`: the `portability.js` suite went 0% → 96.44%** across 179 tests, with 44 rejection cases each asserting the store is byte-identical afterwards — and it **found three real defects** in the module: `resetReviewHistory()` reports success when the removal silently fails (`US-198`), `rollbackFailed` can name a recovery key that was never written (`US-199`), and the reset backup is filed under the wrong schema era (`US-200`). Its author pinned them visibly rather than leaving red assertions. **`US-197`: the 36 authored word-stress and prosody items are now browsable** in the Pronunciation section — previously reachable only if something had already scheduled them, so invisible in practice. All 21 stress and 15 noticing items verified reachable, with `requiresImitation` refused rather than trusted. **Bookkeeping correction:** story numbers no longer imply a sprint (sequential from `US-193`), so §16's per-sprint split is editorial and approximate while the totals are exact. |
+| 2026-09-12 | **Wave 15 — Sprint 0 complete, and every live `js/core` module now has a suite.** Written up in full at **§2.9**, which is where waves resume having their own subsection; 5–14 are the rows above. `npm test` **9 suites / 1046 tests / 0 failures**, coverage 59.55% → **77.40% statements** (72.32% branches, 80.32% functions). **`US-001` closed** — `package-lock.json` is un-ignored (awaiting commit), and the ignore line is now a comment recording that CI's `npm ci` is exactly why jest could never install; the lockfile went 22,299 → 200,050 bytes. **`US-194`: `blobstore.js` 0% → 98.78%, 211 tests**, after two earlier agents died mid-task producing nothing. It needed a hand-built fake IndexedDB (spec key ordering, `IDBKeyRange.bound`, inline `keyPath` + `autoIncrement`, compound-index `getAll`, abort-rollback, a settable byte budget throwing `QuotaExceededError`) and it **found five defects** — the worst being that `put()` reports *"Your existing recordings are safe"* **after permanently deleting one**, because `evictForQuota()` commits its deletes in its own transaction and the retry's quota failure has nothing left to roll back. Its author had verified the module with a throwaway harness that found two real bugs, then deleted the harness — the same pattern the 2026-09-10 row records, and the five defects are what a permanent suite finds that a deleted one cannot. **What the fake cannot prove is stated in §2.9** and includes real transaction auto-commit timing, so the suite does **not** clear `runTx`'s "never await mid-transaction" hazard. **`US-198`/`US-199`/`US-200` fixed plus four more decided** (`portability.js` 179 → 210 tests, 96.44% → 97.51%, now passing under `--randomize`): the reset path decides by **reading the store back** rather than by absence of a throw; the rollback message stops naming a backup key that was never written and **still commits**, because refusing would deny a restore to the full-device learner the commit actually fits; and backups are filed by data **shape**, not the build's `SCHEMA_VERSION`. **Honest feedback reached three more surfaces.** Dictation's `sim = exact ? 1 : 0.5` / `if (sim > 0.8)` is replaced by **reuse of the LCS word diff** — `✗ 11 of 12 words match.` with the word marked and spelling distinguished from listening — grading no more generously than the exact comparison it replaced. Comprehension shows the chosen option, the correct one, an `In the passage: "…"` citation printed **only** when exactly one sentence contains every content word, and a retry. The mistake log gained producers outside grammar and pronunciation (`vocab.meaning`, `vocab.spelling`, `lsn.detail`, `gram.word-order`, plus an authored per-question hook), while **four of seven categories stay empty deliberately** — no gradable task exists for `vocab.recall`, `vocab.collocation`, `lsn.gist` or `rdw.inference`, and comprehension questions carry no type metadata. Incidental fix: an **unanswered** multiple-choice used to be graded `✗ Incorrect`. **`US-215`: a sixth grammar point, `question-formation`** (syllabus 6, `foundation`) — which **closes three dangling drill targets** that had all named a point that did not exist, so `gram.tag-question`, `gram.embedded-question-order` and `gram.word-order` opened nothing from the dashboard. It teaches inversion and embedded questions from **one** rule rather than a rule plus an exception, and declines to call Indian-English invariant *"isn't it?"* an error. **Bookkeeping:** `US-201`–`US-204` were each defined twice — sequential numbering since `US-193` collided with Sprint 2's pre-allocated block. The post-193 ones become **`US-211`–`US-214`**; Sprint 2's keep theirs; §1's citation is corrected. **A commit message written before today may mean either.** See §7. **Five stale claims in this ledger corrected:** the two Phase 0 rows still saying the assertions had never run under real Jest; §6's Phase 0 status; §6.x's V9 (grammar authoring is demonstrated — six points register — only the human review is outstanding) and its "verified by direct inspection" list, two entries of which have since been fixed; and §6.y A17 / B11, which still called the recording archive blocked by a constraint conflict while the module it needs is now the best-tested file in the repo. **Two new untrue claims recorded rather than fixed**, since this pass may not touch source: `app.js:2296-2302` says listening has no mistake destination when `lsn.detail` now has a producer, and `.gitignore:3-4` says the workflow runs `npm ci` when every `npm ci` in it is still commented out. |

@@ -6,7 +6,7 @@ This backlog **indexes** [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — it
 The plan holds per-phase tasks and verification steps; this holds stories, acceptance criteria and
 sequencing. Live state lives in [PROGRESS.md](PROGRESS.md).
 
-**Version:** 1.0 · **Date:** 2026-09-08 · **Team:** 1 maintainer (`CON-7`)
+**Version:** 1.0 · **Date:** 2026-09-12 · **Team:** 1 maintainer (`CON-7`)
 
 **Story ids:** `E#` epic · `US-###` story. **MoSCoW:** `M` must · `S` should · `C` could · `W` won't.
 **Points:** Fibonacci, where **1 ≈ under an hour** and **8 ≈ a full week of evenings**.
@@ -20,8 +20,9 @@ A single-maintainer project working evenings has no velocity in the team sense. 
 - **Points measure size, not time.** Calendar time is the real constraint.
 - **A sprint here is a phase**, not two weeks. Phases are already ordered by descending data risk
   and are independently shippable.
-- **Total is 248 points** (§16). At a realistic 8–12 points a week of evenings, the full backlog is a
-  **5–7 month** effort. Sprints 0–1 together are 21 points and deliver most of the audit's value.
+- **Total is 451 points** (§16), of which 204 are done. At a realistic 8–12 points a week of evenings,
+  the **remaining 247** is a **5–7 month** effort. Sprints 0–1 hold most of the audit's value and are
+  where all the honesty defects live.
 - Anything estimated **8 must be split** before it is started. One currently is, and it is flagged.
 
 ---
@@ -76,7 +77,9 @@ Every story, without exception:
 Epic sizes are indicative rollups for prioritisation; several stories serve more than one epic, so
 they do not sum to the sprint total in §16.
 
-**On story numbers and sprint attribution.** Stories were originally numbered per sprint (`US-1xx` = Sprint 1, `US-2xx` = Sprint 2). From `US-193` onward they are allocated **sequentially**, so the number no longer implies a sprint — `US-201`–`US-203` are test-infrastructure fixes, not Data-integrity work, despite the `2xx`. Sprint attribution in §16 is editorial and maintained by hand; treat the per-sprint split as approximate and the totals as exact.
+**On story numbers and sprint attribution.** Stories were originally numbered per sprint (`US-1xx` = Sprint 1, `US-2xx` = Sprint 2). From `US-193` onward they are allocated **sequentially**, so the number no longer implies a sprint — `US-211`–`US-213` are test-infrastructure fixes, not Data-integrity work, despite the `2xx`. Sprint attribution in §16 is editorial and maintained by hand; treat the per-sprint split as approximate and the totals as exact.
+
+**Four ids collided and were reallocated 2026-09-12.** The sequential run ran into Sprint 2's pre-allocated `US-2xx` block, so `US-201`–`US-204` were each defined twice. The **Sprint 2** meanings are authoritative (the traceability matrix in §15 and §13 reference them); the newer post-`US-193` stories were renumbered: old-new `US-201` → **`US-211`** (`session.js` clock seam), `US-202` → **`US-212`** (`jest.config.js` collected `setup.js`), `US-203` → **`US-213`** (two `mistakes` tests asserted nothing), `US-204` → **`US-214`** (srsData-only import deletes `learningProgress`). **A commit message dated 2026-09-12 or earlier that says `US-201`–`US-204` may mean either story** — check whether it touches `data.js`/`portability.js` (Sprint 2) or `jest.config.js`/`session.js`/`__tests__/` (the renumbered run). `US-501` also appears twice, correctly: a Sprint 5 plan row and the Sprint 1 row recording it done.
 
 ---
 
@@ -86,7 +89,7 @@ Not features. These make everything else possible, and two are already-live prob
 
 | # | Story | FR | Pts | MoSCoW |
 |---|---|---|---|---|
-| 🔶 **US-001** | **2 of 3 done 2026-09-10.** `jest@30.5.1` and `jest-environment-jsdom` declared and installed; **the suites executed for the first time** after thirteen waves. **Still open:** `package-lock.json` remains gitignored (`.gitignore:3`), so `npm ci` in CI cannot work and `npm test` would still fail on a clean checkout — which is what this story was written to fix | `NFR-16` | 1 | M |
+| ✅ **US-001** | **Done 2026-09-12.** `jest@30.5.1` and `jest-environment-jsdom` declared and installed; the suites executed for the first time after thirteen waves. `package-lock.json` is no longer gitignored — the ignore line is replaced by a comment recording that CI runs `npm ci`, which refuses to install without a committed lockfile, and that ignoring it is why CI could never install jest | `NFR-16` | 1 | M |
 | ✅ **US-002** | **Commit Phase 0** — **done 2026-09-08** | — | 1 | M |
 | ✅ **US-003** | **Migrations wired into startup** — `migrateStoredProgress()` runs the chain after parse and before merge, takes a `backupOnce` first, stamps `schemaVersion`, and soft-fails if the module is absent — **done 2026-09-09** | `FR-DATA-1` | 2 | M |
 | ✅ **US-004** | **`levels.js` wired in** — `resolveDifficulty()` normalises through `canonicalLevel()` at both entry points (storage and UI selector) and bridges canonical ids to the data keys that actually exist — **done 2026-09-09** | `FR-SES-3` | 2 | M |
@@ -98,7 +101,7 @@ Not features. These make everything else possible, and two are already-live prob
 **Why US-003 now:** the migration spine is written and tested but has never run against real data.
 Do its first real run while nothing depends on it, not during Phase 2 when it is load-bearing.
 
-**Sprint 0 total: 6 points.**
+**Sprint 0 total: 6 points — 6 of 6 done. Sprint 0 is closed.**
 
 ---
 
@@ -128,13 +131,13 @@ behaviours that teach errors.
 | **US-137** | Wire `js/core/mistakes.js` into the wrong-answer paths and add the dashboard panel. Calls must sit behind the existing single-answer guards or one stubborn item becomes a whole diagnosis | `FR-SRS-3` | 3 | M |
 | **US-138** | `FR-DATA-4` export does not cover recordings. With blobs in IndexedDB, `CON-3`'s "export is the only backup" is now false for them | `FR-DATA-4` | 3 | M |
 | ✅ **US-139** | `FR-DATA-6`/`OQ-6` amended to the pinned-baseline retention the code implements — **done 2026-09-09** | `FR-DATA-6` | 1 | M |
-| **US-140** | `checkDictation`'s similarity is fake: `sim = exact ? 1 : 0.5` then `if (sim > 0.8)`. The name implies fuzzy matching that does not exist, and the failure branch shows the answer with no reason or contrast | `FR-GRM-2` | 2 | M |
-| **US-141** | `checkComprehension` gives a red mark with no fix on screen — violates `FR-A11Y-5` and `FR-GRM-2`; also still prints "✓ Perfect!" | `FR-A11Y-5` | 2 | M |
+| ✅ **US-140** | `checkDictation`'s fake similarity (`sim = exact ? 1 : 0.5` then `if (sim > 0.8)`) replaced by **reusing the existing LCS word diff (`diffSpeechAttempt`)**, not a new similarity score: dictation has an exact known target, so "which words are missing" is the only actionable question, and a number cannot say *where*. Grading is no more generous than the exact comparison it replaced — `right = diff.allMatched && extra.length === 0`, the extra-word check added because LCS alone would pass a learner who typed every target word plus three of their own. Levenshtein appears but never as the grade, only to separate `vocab.spelling` from `lsn.detail` — **done 2026-09-12** | `FR-GRM-2` | 2 | M |
+| ✅ **US-141** | `checkComprehension` gave a red mark with no fix on screen. A wrong answer now shows the chosen option, the correct one, a retry, and an `In the passage: "…"` citation printed **only** when exactly one sentence contains every content word of the answer. The ✓ stays for all-right — comprehension *is* objectively gradable — but "Perfect!" and the exclamation marks are gone, per the tone rule — **done 2026-09-12** | `FR-A11Y-5` | 2 | M |
 | **US-142** | Grammar authoring: 6 practice items is too few for high-frequency points. Recommend 6 as a floor and 12 for the top four points | `FR-GRM-1` | 2 | S |
 | **US-143** | `data/l1/telugu.js` does not exist, so the 21 `T-`coded mistake categories live inline in `mistakes.js` rather than in a pluggable L1 profile | `FR-CNT-3` | 2 | S |
 | **US-144** | **`window.AppErrorHandler` was undefined**, because `const` at the top level of a classic script is a lexical global, not a `window` property. Every `global.AppErrorHandler` guard in `srs.js`, `blobstore.js`, `mistakes.js` and `portability.js` was permanently false — core-module error logging was a silent no-op. Fixed 2026-09-09 | `NFR-3` | 1 | M |
 | **US-145** | `markExerciseComplete` is never called for `vocabulary` or `puzzles`, so those completion sets stay permanently empty and vocabulary never shows ✓/Retake however many quizzes are answered | `FR-DATA-3` | 2 | M |
-| ✅ **US-146** | Progress bar could exceed 100% (8 ticked of 7) when a restored backup carried a goal key no section owns — fixed as part of US-163 — **done 2026-09-10** |\| {})`, accepting arbitrary keys from storage, so the dashboard progress bar can exceed 100% | `FR-DATA-1` | 1 | S |
+| ✅ **US-146** | Progress bar could exceed 100% (8 ticked of 7) when a restored backup carried a goal key no section owns — the merge accepted arbitrary keys from storage. Fixed as part of US-163 — **done 2026-09-10** | `FR-DATA-1` | 1 | S |
 | **US-147** | `updateStatisticsDisplay` still hardcodes all five sections across three `innerHTML` blocks — the last un-collapsed site after the registry refactor | — | 2 | S |
 | ✅ **US-148** | `PROJECTORS.phon` validated per shape against real content; `auditProjection()` reports `shape` and warns by name when no shape matches — **done 2026-09-10** | `FR-GRM-3` | 1 | M |
 | ✅ **US-149** | `data/grammar.js` is now loaded and precached; the Grammar section reads it — **done 2026-09-09** | `FR-GRM-1` | 1 | M |
@@ -175,29 +178,39 @@ behaviours that teach errors.
 | **US-183** | `renderGrammarCorrect` prints "Both answers here are right" over a list, misreading for `be-p5`'s three accepted answers; `completeGrammarPoint` hardcodes "All six done" | — | 1 | S |
 | **US-184** | `updateStatisticsDisplay`'s three `statBox` calls still use `innerHTML` — the last HTML-string path on the dashboard | `NFR-12` | 1 | S |
 | **US-185** | **`gram.tense-agreement`'s label is false for 100% of what routes to it.** All three producers are `be.js` sites where a past form was chosen in a present context; the label describes the opposite error (past not carried through a multi-clause sentence). Same defect class as `gram.copula` was. Fix needs one owner for both halves — the wording and the three `logAs` sites | `FR-SRS-3` | 2 | M |
-| **US-186** | Seven mistake categories have **no producer anywhere** (`vocab.meaning`, `vocab.recall`, `vocab.collocation`, `vocab.spelling`, `lsn.gist`, `lsn.detail`, `rdw.inference`). `app.js` records only from grammar practice and pronunciation pairs, so `FR-SRS-3`'s diagnosis is grammar/pronunciation-only | `FR-SRS-3` | 3 | M |
-| **US-187** | `drillTarget()` builds `srsKey` with **no check the target is authored**, so `gram:question-formation`, `gram:past-simple`, `gram:prepositions`, `gram:register` and the listening/reading targets yield buttons that open nothing. The new renderer guards; a naive caller would ship a dead button | `FR-SRS-3` | 2 | M |
+| ✅ **US-186** | Producers wired for `vocab.meaning` (vocab quiz and review card), `vocab.spelling` + `lsn.detail` (dictation), `gram.word-order` (sentence builder), and `q.mistakeCategory` authored for comprehension — all `EVIDENCE.GRADED`, all behind the existing single-answer guards, verified by answering wrong twice and getting one entry. **Four categories still have no producer, deliberately, because no gradable task exists to attach them to**: `vocab.recall` (no production-from-meaning task), `vocab.collocation` (no collocation content), `lsn.gist` (the listening section asks no comprehension question), `rdw.inference` (comprehension questions carry no type metadata, so logging every wrong answer as "needed reading between the lines" would be a false claim — a content hook was added so an author can produce it without touching `app.js`). No category id was invented — **done 2026-09-12** | `FR-SRS-3` | 3 | M |
+| **US-187** | `drillTarget()` builds `srsKey` with **no check the target is authored**, so `gram:past-simple`, `gram:prepositions`, `gram:register` and the listening/reading targets yield buttons that open nothing. `gram:question-formation` was a fourth until `US-215` authored it — which fixes one target, not the missing check. The new renderer guards; a naive caller would ship a dead button | `FR-SRS-3` | 2 | M |
 | **US-188** | `renderGrammarCorrect` hardcodes "Both answers here are right, and they do not mean the same thing" whenever `showDifferenceOnCorrect` is set — so an `accept` entry that is a true synonym makes the app assert a difference that does not exist. Both new authors worked around it by excluding synonyms | `FR-GRM-5` | 1 | M |
 | **US-189** | `data/pronunciation/consonants.js` has no `module.exports`, unlike every other content file, so `require()` returns `{}` and no jest test can audit its four category ids | — | 1 | S |
 | **US-190** | No mistake row for aspect confusion between perfect and continuous ("she's had lunch" for "she's having lunch"). Suggested: `gram.aspect-perfect-vs-progressive`, drill `present-simple-vs-continuous` | `FR-SRS-3` | 1 | S |
 | **US-191** | `switchSection()` does not exit review mode, so navigating away mid-review and back re-shows the card. Pre-existing, not a regression | — | 1 | S |
 | **US-192** | Wire `gram.subject-dropped` into `be.js`: add `"am"` to `be-p2`'s options **with** a `feedback` entry carrying `logAs`, plus a `rendersAs`. Without the feedback entry it falls through to `fallbackFeedback`, which has no `logAs`, so it would log the default `gram.copula` — the false label the new row exists to remove | `FR-SRS-3` | 1 | M |
 | ✅ **US-193** | **`portability.js` suite written — 0% → 96.44% statements, 179 tests.** Found **three real defects** (see `US-198`–`US-200`). 44 rejection cases table-driven, each asserting the store is byte-identical afterwards — **done 2026-09-12** | `NFR-16`, `FR-DATA-4` | 3 | M |
-| **US-194** | **`js/core/blobstore.js` has no test file** — 492 statements, 0% covered. Holds the recording archive; verified only by a fake-IndexedDB harness in `/tmp`, since deleted. The seams for injecting one are still in the module | `NFR-16`, `FR-DATA-6` | 3 | M |
+| ✅ **US-194** | **`js/core/blobstore.js` suite written — 0% → 98.78% statements / 92.33% branch / 99.29% funcs, 211 tests.** Needed a hand-built fake IndexedDB: spec key ordering, `IDBKeyRange.bound`, `autoIncrement`, compound-index `getAll`, abort-rollback, and a settable byte budget that throws `QuotaExceededError`. Found **five defects** (`US-216`–`US-220`) plus `US-221`/`US-222`; the single uncovered line is the dead code `US-221` names — **done 2026-09-12** | `NFR-16`, `FR-DATA-6` | 3 | M |
 | **US-195** | **Version skew unverified:** every suite was authored against jest 29 conventions by agents that could not run either version; `jest@30` is installed. Jest 30 changed some `toEqual` and mock semantics, so a green run is reassuring but a failure should be checked against the version before the assertion | `NFR-16` | 1 | S |
 | **US-196** | `jest.config.js` deliberately has no `coverageThreshold`, with a comment saying to add one once the core modules are under test. Six modules are now at 85–100%, so a floor can be set — but only after `US-193`/`US-194`, or it locks in the two 0% modules | `NFR-16` | 1 | S |
 | ✅ **US-197** | **Word-stress and prosody content now browsable in the Pronunciation section** — all 21 stress and 15 noticing items reachable without needing a review scheduled first; ungradable items are dropped loudly, and `requiresImitation` is refused per `FR-PRN-8` rather than trusted — **done 2026-09-12** | `FR-PRN-3`, `FR-PRN-8` | 5 | M |
-| ✅ **US-201** | **`session.js` honoured an injected clock in `build()` but not on the walk path**, so `plan()` compared a test-stamped date against the wall date and `current()` returned null. The suite was green for its author and failed the next morning — 15 failures, no code change. Fixed with a `_now()` seam — **done 2026-09-12** | `NFR-16` | 2 | M |
-| ✅ **US-202** | `jest.config.js` collected `__tests__/setup.js` as a test suite — one red suite that said nothing about the code — **done 2026-09-12** | `NFR-16` | 1 | M |
-| ✅ **US-203** | **Two `mistakes` tests asserted nothing:** they patched `localStorage.setItem` on the instance, which jsdom does not honour, so the throw never fired and `save()` legitimately returned `true`. They passed under the plain-node shim — exactly the class of defect only a real jest run catches — **done 2026-09-12** | `NFR-16` | 1 | M |
-| **US-198** | **`resetReviewHistory()` reports success when the removal fails.** `SRS.reset()` swallows the `removeItem` exception, so the learner is told "Your review history is cleared" while `srsData` is still in storage; in-memory records *are* cleared so the badge reads zero and it returns on next reload. `rollback()` verifies by reading the store back for exactly this reason — the reset path takes the absence of an exception on trust | `FR-DATA-5`, `BR-3` | 2 | M |
-| **US-199** | **`MESSAGES.rollbackFailed` can name a recovery key that was never written.** `writePreImportBackup()` returns a boolean and `importFromText()` discards it, so on a device too full for both the backup and the rollback the learner is told to look under `learnerData.preImport.bak` — which does not exist. The one path where data is genuinely lost | `BR-7` | 2 | M |
-| **US-200** | `resetReviewHistory()` files its backup under the current `SCHEMA_VERSION`, so legacy bare-word `srsData` — precisely the pre-grading-fix data `FR-DATA-5` exists for — is saved as `.bak.v2`, naming a version it is not. `migrations.js` files the same data as `.bak.v1` | `FR-DATA-5` | 1 | S |
-| **US-204** | **An srsData-only import DELETES `learningProgress`.** The commit is a replacement, not a merge, and `validateExport` accepts a file with either key — so restoring a review-history-only export wipes progress. Consistent with the confirm copy, but the most surprising behaviour in the module | `FR-DATA-4`, `BR-7` | 2 | M |
-| **US-209** | A settings-only export reports `ok` but is rejected `no-data` on import — a "successful" backup that cannot be restored | `FR-DATA-4` | 1 | S |
+| ✅ **US-211** | **`session.js` honoured an injected clock in `build()` but not on the walk path**, so `plan()` compared a test-stamped date against the wall date and `current()` returned null. The suite was green for its author and failed the next morning — 15 failures, no code change. Fixed with a `_now()` seam — **done 2026-09-12** | `NFR-16` | 2 | M |
+| ✅ **US-212** | `jest.config.js` collected `__tests__/setup.js` as a test suite — one red suite that said nothing about the code — **done 2026-09-12** | `NFR-16` | 1 | M |
+| ✅ **US-213** | **Two `mistakes` tests asserted nothing:** they patched `localStorage.setItem` on the instance, which jsdom does not honour, so the throw never fired and `save()` legitimately returned `true`. They passed under the plain-node shim — exactly the class of defect only a real jest run catches — **done 2026-09-12** | `NFR-16` | 1 | M |
+| ✅ **US-198** | **`resetReviewHistory()` reported success when the removal failed.** Fixed: it now decides its verdict by **reading `srsData` back**, as `rollback()` already did, and resyncs the in-memory records so the due badge cannot read zero over a history still on disk. A read-back that itself throws reports a third honest outcome, `reset-unverified` — *"may not have been cleared… Reload the page to see where things stand"* — rather than guessing — **done 2026-09-12** | `FR-DATA-5`, `BR-3` | 2 | M |
+| ✅ **US-199** | **`MESSAGES.rollbackFailed` could name a recovery key that was never written.** Fixed by telling the truth rather than refusing: refusing to commit when no recovery copy could be taken would deny a restore to precisely the learner with a full device, because the commit *removes* keys before writing and so routinely fits where an extra whole-store copy did not. Three distinct outcomes now — `rollback-failed` (a copy exists), `rollback-failed-no-backup` (names no key, points at the file as the one recoverable thing), `rollback-failed-nothing-lost` — **done 2026-09-12** | `BR-7` | 2 | M |
+| ✅ **US-200** | `resetReviewHistory()` filed its backup under the current `SCHEMA_VERSION`, naming a version the data was not. Fixed: new `versionOfRawSrs()` decides the era by **shape**, mirroring `migrations.js` — any untyped record key, or a legacy level alias in `rec.data.difficulty`, means era 1. Unparseable data reads as the current build, not 1: we cannot claim an era we could not inspect — **done 2026-09-12** | `FR-DATA-5` | 1 | S |
+| ✅ **US-214** | **An srsData-only import DELETES `learningProgress`** — resolved as **behaviour correct, copy was not**. Replacement rather than merge is right: `rollback()` depends on `before` being a whole state, and a restore that silently kept leftovers is the worse lie. Code unchanged; the confirm copy is now built per file by `importConfirmMessage(plan)`, naming what *that* file will remove in learner words, with unnamed future keys counted rather than shown as raw storage keys. 11 new tests — **done 2026-09-12** | `FR-DATA-4`, `BR-7` | 2 | M |
+| ✅ **US-209** | A settings-only export reported `ok` but was rejected `no-data` on import. Resolved as **keep the refusal, fix the claim**: loosening `validateExport` would let one mis-picked settings-only file wipe a populated device to rescue a theme toggle. `exportToFile()` now returns `restorable` and a message, and a file with neither progress nor review history is reported in the `info` tone, not `success`. A test asserts the very file just written *is* refused `no-data` — **done 2026-09-12** | `FR-DATA-4` | 1 | S |
 | **US-210** | `TextEncoder` is absent from `jest-environment-jsdom` 30, so `byteLength()` silently falls back to `String.length` and every byte figure (`MAX_IMPORT_BYTES`, `storageInfo()`, export size) is validated in **UTF-16 code units, not UTF-8**. A test pins the fallback so it fails loudly if the environment changes | `NFR-16` | 1 | S |
-| **US-207** | `portability.js`'s `suspended` flag is a one-way module-level latch with no reset, so the suite has an ordering dependency and would break under `--randomize`. Needs a `_resetForTests()` or a settable flag | `NFR-16` | 1 | S |
-| **US-208** | The post-import reload (`portability.js`) is the module's only unreachable line — jsdom's `location.reload` is unforgeable. Needs an injectable `Portability._reload` seam | `NFR-16` | 1 | S |
+| ✅ **US-207** | `portability.js`'s `suspended` flag was a one-way module-level latch, giving the suite an ordering dependency. Seam added (`_resetWritesSuspended()`); the suite now passes under `--randomize` across three seeds — **done 2026-09-12** | `NFR-16` | 1 | S |
+| ✅ **US-208** | The post-import reload was the module's only unreachable line. Seams added (`_reload()`, `_canReload()`) — a second seam was needed because jsdom's `location` is `[Unforgeable]`, so `delete window.location` is a silent no-op — **done 2026-09-12** | `NFR-16` | 1 | S |
+| ✅ **US-215** | **`data/grammar/question-formation.js` authored** — syllabus point 6, `foundation` tier, T-G5 invariant-tag + T-G8 embedded-question-order notes; wired into `index.html` and the service-worker precache. **Closes three dangling drill targets**: `gram.tag-question`, `gram.embedded-question-order` and `gram.word-order` in `js/core/mistakes.js` all point at `question-formation`, so until now those dashboard drill buttons opened nothing — all three verified resolving to `gram:question-formation`. 6 gap items, 3 contrast pairs; every accepted answer is among its options (`US-166`). The adversarial pass **accepted a second correct answer** on two items (`do you live`/`are you living`, and the same-polarity tag `aren't you`/`are you`) rather than marking real English wrong. `foundation` now has 5 points; `everyday` still 1 — **done 2026-09-12** | `FR-GRM-1`, `FR-SRS-3` | 3 | M |
+| **US-216** | **`put()` reports `full` — *"Your existing recordings are safe"* — after permanently deleting an existing recording.** `evictForQuota()` commits its deletes in its own transaction, so if the single retry also hits quota the outer catch returns `fail('full', …)` with nothing to roll the eviction back. Reproduced: 4MB baseline / 1MB middle / 4MB newest at prompt `p1`, 10MB budget, saving 4MB at `p2` → `{ok:false, code:'full'}`, the new recording correctly absent **and the middle recording gone**. Contradicts `NFR-10` and the module's own stated property 2. Pinned green with a ⚠️ DEFECT marker | `NFR-10`, `BR-3`, `FR-DATA-6` | 3 | M |
+| **US-217** | `remove(id)` confirms deleting a recording that was never there — `removeIds` resolves with what it was *asked* to delete, and `IDBObjectStore.delete()` on an absent key succeeds silently. `remove(9999)` → `{ok:true, removed:1, message:'Recording deleted.'}` | `BR-3` | 1 | S |
+| **US-218** | `MESSAGES.savedEvicted` is chosen from `evicted.length` alone, so saving at prompt `p3` can evict `p2`'s recording and tell the learner "**this prompt** keeps your first and two most recent" while `p3` has exactly one — and never mention that a *different* prompt lost one | `BR-3`, `FR-DATA-6` | 1 | S |
+| **US-219** | `openUrl()` says "That recording is no longer on this device" when IndexedDB is merely unavailable, because `get()` flattens unavailable and not-found to `null`. Same class as `US-106`: the learner cannot tell whether the app broke or the data is gone | `NFR-3`, `BR-3` | 1 | S |
+| **US-220** | `cleanNumber(null) === 0`, so a recording saved without a duration is reported as `null` by `put()` and `0` by `list()`/`get()` — one recording, two answers, and a UI showing "0:00". Related and spec-derived rather than observed: a null `createdAt` is coerced to the epoch by `usableRows` yet is absent from the compound index, so such a row is counted by `usage()` and acted on by eviction while being invisible to `list()` | `FR-DATA-6` | 2 | S |
+| **US-221** | `blobstore.js:777-779` is **dead code** — `size > MAX_TOTAL_BYTES` can never fire because the 10MB per-recording check at `:773` fires first, so `limit: MAX_TOTAL_BYTES` is unreachable. The suite's only uncovered line. Delete it or make the two limits independent | — | 1 | C |
+| **US-222** | `planRetention` pins `ordered[0]` while `evictionCandidates` checks `r.baseline`, so if a learner deletes the true baseline one protection guards the next-oldest row and the other considers that same row expendable. The two disagree on what "baseline" means; `FR-DATA-6` names only one | `FR-DATA-6` | 1 | S |
+| **US-223** | **The sentences section still violates `FR-GRM-2`/`FR-A11Y-5`**: `✗ Incorrect. Try again! (Attempt 1/3)` — a red ✗ with no reason, no contrast, and the hint only after three attempts. The last section with this shape after `US-140`/`US-141`. Fixing it needs **authored per-option feedback** like `data/grammar/` has, not copy written in `app.js` | `FR-GRM-2`, `FR-A11Y-5` | 2 | M |
+| **US-224** | **No mistake-category id for an omitted auxiliary** (*"Where you live?"*, *"You know him?"*). `gram.word-order` is the honest destination and is what `question-formation`'s options log, with `errorKind: 'auxiliary-omitted-in-direct-question'` keeping the finer grain. A content/taxonomy story, not a defect: decide whether the finer grain earns its own row before a second content file needs it | `FR-SRS-3` | 1 | S |
 | **US-110** | **Stop the crossword awarding the daily goal for a blank grid** (D2) | `BR-3` | 2 | M |
 | ✅ **US-111** | Guard the quiz counters against re-clicking a correct answer — **done 2026-09-09** | `FR-VOC-1` | 1 | M |
 | ✅ **US-112** | Stop dictation double-counting the reading passage — **done 2026-09-09** | `FR-DATA-3` | 1 | M |
@@ -298,8 +311,8 @@ sounds.**
   now *reproducibly* broken for indices where `index % 4 === 1`. Determinism is still correct — it
   converts an intermittent bug into a visible one — but it needs a follow-up. See `US-114`.
 
-**US-108 — As Lakshmi, I want to retry an exercise in the mode I failed it in.**
-**Sprint 1 total: 80 points across 43 stories — 45 done, 35 remaining.** The remaining items are
+**Sprint 1 total: 221 points across 119 stories — 70 done (145 points), 49 remaining (76 points).**
+The remaining items are
 almost all hygiene, copy or wiring surfaced by later work; `US-110` (crossword crediting a blank
 grid) is the last learner-facing honesty defect and waits on `OQ-7`.
 
@@ -570,7 +583,7 @@ one with a spike attached.
 
 | # | Issue | Status |
 |---|---|---|
-| **I-1** | `npm test` fails on a clean checkout — Jest not in `devDependencies` | Open → `US-001` |
+| **I-1** | `npm test` fails on a clean checkout — Jest not in `devDependencies`, `package-lock.json` gitignored so `npm ci` cannot run | ✅ Fixed 2026-09-12 (`US-001`) |
 | **I-2** | Phase 0 uncommitted; 4 spec docs never committed | Open → `US-002` |
 | **I-3** | `levels.js` and `migrations.js` have zero call sites — CEFR framework exists only on paper | Open → `US-003`, `US-004` |
 | **I-4** | Existing `srsData` substantially noise from the `correct: 0` bug | Open → `US-101`, `US-205` |
@@ -600,18 +613,19 @@ one with a spike attached.
 
 ## 16. Backlog summary
 
-| Sprint | Theme | Points | Cumulative |
-|---|---|---|---|
-| 0 | Unblock | 6 | 6 |
-| 1 | Honesty | 182 | 188 |
-| 2 | Data integrity | 19 | 207 |
-| 3 | Extensibility | 22 | 229 |
-| 4 | Pronunciation | 33 | 262 |
-| 5 | Grammar | 36 | 298 |
-| 6 | Speaking | 28 | 326 |
-| 7 | Listening & vocabulary | 40 | 366 |
-| 8 | Session & platform | 44 | 410 |
+| Sprint | Theme | Points | Done | Cumulative |
+|---|---|---|---|---|
+| 0 | Unblock | 6 | 6 | 6 |
+| 1 | Honesty | 218 | 142 | 224 |
+| 2 | Data integrity | 19 | 19 | 243 |
+| 3 | Extensibility | 22 | 22 | 265 |
+| 4 | Pronunciation | 33 | 5 | 298 |
+| 5 | Grammar | 33 | 5 | 331 |
+| 6 | Speaking | 36 | 0 | 367 |
+| 7 | Listening & vocabulary | 40 | 0 | 407 |
+| 8 | Session & platform | 44 | 5 | 451 |
 
-**430 points total, of which 180 are done — 41%.** Must-have work is 157 of 287 (54%). **`npm test` is green for the first time: 8 suites, 793 tests, 59.55% statement coverage.** ** Sprints 2 and 3 complete. **The test suites now execute** — every module with a suite is at 85–100%, and the gap is two untested modules plus dead code. ** Sprints 2 and 3 complete. Five grammar points across two tiers, 8 phoneme pair sets, a session sequencer with a UI, typed reviews that render, and a mistake diagnosis on the dashboard. ** Sprints 2 and 3 complete. Grammar and Pronunciation exist as sections and the session sequencer has a UI, so a learner can now press one button and be walked through a session. ** Sprints 2 and 3 complete; Grammar and Pronunciation exist as sections; the session sequencer exists as a module. ** Sprints 2 and 3 complete; Grammar and Pronunciation both now exist as sections. ** Sprints 2 and 3 are complete; the Grammar section now exists. ** **Sprints 2 and 3 are both complete.** ** **Sprint 2 is complete** and Sprint 3 is 17 of 22.** At 8–12 points a week of evenings that is
-roughly **5–7 months** for everything. Sprint 1 is the one to finish first: it is where every
-honesty defect lives.
+`US-501` is listed in both the Sprint 1 and Sprint 5 tables — one story, one done record. Its 3 points
+are counted under Sprint 5 here, so the Sprint 1 row reads 218 where its table sums to 221.
+
+**451 points total, of which 204 are done — 45%.** Must-have work is **177 of 300 (59%)**. **`npm test` is green: 9 suites, 1,046 tests, 77.4% statement coverage** (72.32% branch, 80.32% functions). **Sprints 0, 2 and 3 are complete** — Sprint 0 closed when `US-001` un-ignored `package-lock.json`, the last reason CI could never install jest. Six modules carry suites at 85–100% and `blobstore.js` joined them at 98.78%, which is where the last two waves' defects came from: the untested modules are now the tested ones, and the nine stories they produced (`US-216`–`US-224`) are all still open — `US-216` first, because `put()` deletes a recording and then says none was lost. What remains open is concentrated in Sprint 1 — 76 points of hygiene, copy and wiring surfaced by later work, plus `US-110` (the crossword crediting a blank grid), the last learner-facing honesty defect, which waits on `OQ-7`. At 8–12 points a week of evenings the remaining 247 points are roughly **5–7 months**.
