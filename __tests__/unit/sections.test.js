@@ -4103,7 +4103,7 @@ describe('the silent path, surface by surface (US-608 / FR-SPK-9 / FR-A11Y-4)', 
 });
 
 /**
- * Vocabulary must render with the network broken (NFR-8, FR-CNT-4, US-714).
+ * Vocabulary must render with the network broken (CON-6, FR-CNT-4, US-714).
  *
  * WHY THIS BLOCK EXISTS, because it is the whole point of it: an eighteen-second
  * hang reached production and was reported from the live site. `fetchWordData()`
@@ -4113,13 +4113,18 @@ describe('the silent path, surface by surface (US-608 / FR-SPK-9 / FR-A11Y-4)', 
  * own quiz — sat behind a "Loading word..." spinner for eighteen seconds on flaky
  * mobile data.
  *
- * NFR-8 says the dictionary API is enhancement-only and its failure must never
- * block an exercise; FR-CNT-4 says curated content serves first. Both were stated
- * requirements and neither was asserted anywhere, which is why this shipped. So
- * these tests are about the ORDER of resolution and the CEILING on waiting, not
- * about the API.
+ * CON-6 makes `api.dictionaryapi.dev` the one optional API, enhancement only, and
+ * says "its failure must never block an exercise"; FR-CNT-4 says curated content
+ * serves first. Both were stated requirements and neither was asserted anywhere,
+ * which is why this shipped. So these tests are about the ORDER of resolution and
+ * the CEILING on waiting, not about the API.
+ *
+ * (CON-6, not NFR-8, which is service-worker media caching. The first draft of this
+ * block cited NFR-8 and was wrong; several `NFR-8's principle` comments elsewhere in
+ * app.js use it as loose shorthand for "an optional subsystem must not block an
+ * exercise", which for storage is NFR-10's and blobstore's own guarantee.)
  */
-describe('vocabulary resolves offline: curated content serves first (NFR-8, FR-CNT-4)', () => {
+describe('vocabulary resolves offline: curated content serves first (CON-6, FR-CNT-4)', () => {
     const fs = require('fs');
     const path = require('path');
     const ROOT = path.join(__dirname, '..', '..');
@@ -4222,3 +4227,2151 @@ describe('vocabulary resolves offline: curated content serves first (NFR-8, FR-C
         expect(calls.length).toBeGreaterThanOrEqual(2);   // the definition plus >=1 call
     });
 });
+
+/**
+ * =============================================================================
+ * US-408 — media routing in the service worker, and the offline.html defect
+ * =============================================================================
+ *
+ * NFR-8 (REQUIREMENTS.md:700): *"Media caching is explicit — audio requests are
+ * routed deliberately by the service worker, tolerate Range/206 responses, and
+ * never fall back to an HTML page."*
+ *
+ * All three clauses were false, and the third was a live defect:
+ *
+ *   - NOT ROUTED. isStaticAsset()'s extension list contains no audio extension
+ *     and an <audio> element sends no `Accept: text/html`, so every clip fell
+ *     through every branch of the fetch handler onto the DEFAULT one.
+ *   - THE DEFAULT ONE FELL BACK TO A HTML PAGE. cacheFirstStrategy()'s catch
+ *     returned `caches.match('/offline.html')` for anything that reached it. A
+ *     media element handed an HTML document AT STATUS 200 downloads it, fails to
+ *     demux it, and reports MEDIA_ERR_SRC_NOT_SUPPORTED — "this file is corrupt".
+ *     The learner is told the recording is broken when they are simply offline,
+ *     and nothing in app.js could tell the difference either, because at the
+ *     fetch layer it was a SUCCESS.
+ *   - RANGE was handled only accidentally: `status === 200` happened to exclude a
+ *     206 from cache.put() (which throws a TypeError on one), but a range request
+ *     against a cached complete clip was answered with a 200 claiming to be the
+ *     whole file.
+ *
+ * These tests run the real functions out of service-worker.js against fake
+ * `caches`/`fetch`. The fake Response is the honest limitation: jsdom has no
+ * Response, so the shape is reproduced here (see FakeResponse) and these tests
+ * therefore prove the WORKER'S BRANCHING, not the browser's media stack.
+ */
+describe('service worker: media is routed deliberately (US-408 / NFR-8)', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const ROOT = path.join(__dirname, '..', '..');
+    const swSource = fs.readFileSync(path.join(ROOT, 'service-worker.js'), 'utf8');
+
+    /** One top-level function's source, by brace matching. */
+    function fnSource(source, name) {
+        const re = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\(');
+        const m = re.exec(source);
+        expect(m).toBeTruthy();
+        const start = m.index;
+        let depth = 0;
+        for (let i = source.indexOf('{', start); i < source.length; i++) {
+            if (source[i] === '{') depth++;
+            else if (source[i] === '}' && --depth === 0) return source.slice(start, i + 1);
+        }
+        throw new Error('unbalanced braces in ' + name);
+    }
+
+    // ---- fakes -------------------------------------------------------------
+
+    /**
+     * jsdom HAS a Headers, and it cannot be used here: it implements the fetch
+     * spec's forbidden-header-name list, so `new Headers({ Range: 'bytes=0-' })`
+     * silently drops the one header these tests are about. A service worker reads
+     * a real Range off a real request, so the fake has to allow it.
+     */
+    class FakeHeaders {
+        constructor(init) {
+            this._map = new Map();
+            Object.keys(init || {}).forEach(k => this.set(k, init[k]));
+        }
+        set(name, value) { this._map.set(String(name).toLowerCase(), String(value)); }
+        get(name) {
+            const key = String(name).toLowerCase();
+            return this._map.has(key) ? this._map.get(key) : null;
+        }
+        forEach(fn) { this._map.forEach((v, k) => fn(v, k)); }
+    }
+
+    class FakeResponse {
+        constructor(body, init) {
+            init = init || {};
+            this._body = body === undefined ? null : body;
+            this.status = init.status === undefined ? 200 : init.status;
+            this.statusText = init.statusText || '';
+            this.headers = init.headers instanceof FakeHeaders
+                ? init.headers
+                : new FakeHeaders(init.headers || {});
+            this.type = init.type || 'basic';
+            this.ok = this.status >= 200 && this.status < 300;
+        }
+        clone() {
+            const copy = new FakeResponse(this._body, {
+                status: this.status,
+                statusText: this.statusText,
+                type: this.type
+            });
+            this.headers.forEach((v, k) => copy.headers.set(k, v));
+            return copy;
+        }
+        async arrayBuffer() {
+            // An opaque response cannot be read. This is the property
+            // rangeResponse() has to survive rather than assume away.
+            if (this.type === 'opaque') throw new TypeError('opaque response');
+            if (this._body instanceof ArrayBuffer) return this._body;
+            if (this._body === null) return new ArrayBuffer(0);
+            return new TextEncoder().encode(String(this._body)).buffer;
+        }
+        async text() {
+            if (this._body instanceof ArrayBuffer) {
+                return new TextDecoder().decode(this._body);
+            }
+            return this._body === null ? '' : String(this._body);
+        }
+    }
+
+    function req(url, extra) {
+        const init = extra || {};
+        return {
+            url: url,
+            mode: init.mode || 'no-cors',
+            destination: init.destination === undefined ? '' : init.destination,
+            headers: new FakeHeaders(init.headers || {})
+        };
+    }
+
+    /** A cache store keyed by request url, plus a log of what was asked of it. */
+    function fakeCaches(seed) {
+        const stores = { };
+        const log = { matched: [], put: [], deleted: [], opened: [] };
+        function store(name) {
+            if (!stores[name]) stores[name] = {};
+            return stores[name];
+        }
+        Object.keys(seed || {}).forEach(name => {
+            Object.keys(seed[name]).forEach(url => { store(name)[url] = seed[name][url]; });
+        });
+        const api = {
+            _stores: stores,
+            _log: log,
+            match: async (request) => {
+                const url = typeof request === 'string' ? request : request.url;
+                log.matched.push(url);
+                const names = Object.keys(stores);
+                for (let i = 0; i < names.length; i++) {
+                    const hit = stores[names[i]][url];
+                    if (hit) return hit;
+                }
+                return undefined;
+            },
+            open: async (name) => {
+                log.opened.push(name);
+                return {
+                    put: async (request, response) => {
+                        const url = typeof request === 'string' ? request : request.url;
+                        log.put.push({ cache: name, url: url, status: response.status });
+                        store(name)[url] = response;
+                    },
+                    match: async (request) => store(name)[typeof request === 'string' ? request : request.url],
+                    delete: async (request) => {
+                        const url = typeof request === 'string' ? request : request.url;
+                        log.deleted.push({ cache: name, url: url });
+                        const had = !!store(name)[url];
+                        delete store(name)[url];
+                        return had;
+                    }
+                };
+            }
+        };
+        return api;
+    }
+
+    const quiet = { log: () => {}, warn: () => {}, error: () => {} };
+
+    /** The named service-worker functions, wired to the fakes given. */
+    function loadWorker(deps) {
+        const names = ['isMediaRequest', 'isDocumentRequest', 'mediaFailure',
+                       'rangeResponse', 'mediaStrategy', 'cacheFirstStrategy'];
+        const src = names.map(n => fnSource(swSource, n)).join('\n');
+        const factory = new Function(
+            'caches', 'fetch', 'console', 'Response', 'Headers', 'URL', 'MEDIA_CACHE',
+            src + '\n;return { ' + names.join(', ') + ' };');
+        return factory(deps.caches, deps.fetch, quiet, FakeResponse, FakeHeaders, URL,
+                       'english-portal-media-v1');
+    }
+
+    const MP3 = 'https://api.dictionaryapi.dev/media/pronunciations/en/bus-uk.mp3';
+
+    function clipBody() {
+        // 10 recognisable bytes, so a slice can be checked byte for byte.
+        return new Uint8Array([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]).buffer;
+    }
+
+    function clipResponse(init) {
+        return new FakeResponse(clipBody(), Object.assign({
+            status: 200,
+            headers: { 'Content-Type': 'audio/mpeg' }
+        }, init || {}));
+    }
+
+    // ---- the source-level invariants ---------------------------------------
+
+    describe('the shape of the worker', () => {
+        test('media is routed BEFORE the static-asset test and before the default', () => {
+            const handler = swSource.slice(swSource.indexOf("self.addEventListener('fetch'"));
+            const mediaAt = handler.indexOf('isMediaRequest(request, url)');
+            const staticAt = handler.indexOf('isStaticAsset(url)');
+            const defaultAt = handler.indexOf('cacheFirstStrategy(request, DYNAMIC_CACHE)');
+            expect(mediaAt).toBeGreaterThan(-1);
+            expect(mediaAt).toBeLessThan(staticAt);
+            expect(mediaAt).toBeLessThan(defaultAt);
+        });
+
+        test('media has its own cache, and activate() does not delete it', () => {
+            expect(swSource).toMatch(/const MEDIA_CACHE = 'english-portal-media-v1'/);
+            const activate = swSource.slice(swSource.indexOf("addEventListener('activate'"),
+                                            swSource.indexOf("addEventListener('fetch'"));
+            expect(activate).toContain('cacheName !== MEDIA_CACHE');
+        });
+
+        test('STATIC_CACHE was bumped off v21, or a returning learner keeps the defect', () => {
+            // index.html is network-first and app.js cache-first, so the new
+            // markup would meet the old app.js. And the fix itself only ships
+            // when the worker is replaced.
+            expect(swSource).not.toContain("english-portal-static-v21'");
+            expect(swSource).toMatch(/const STATIC_CACHE = 'english-portal-static-v(2[2-9]|[3-9]\d)'/);
+        });
+
+        test('an unplayable cached clip can be evicted by the surface that found it', () => {
+            const handler = swSource.slice(swSource.indexOf("addEventListener('message'"));
+            expect(handler).toContain("'media-failed'");
+            expect(handler).toContain('MEDIA_CACHE');
+            expect(handler).toContain('cache.delete(data.url)');
+        });
+    });
+
+    describe('isMediaRequest', () => {
+        const sw = loadWorker({ caches: fakeCaches(), fetch: async () => clipResponse() });
+
+        test('trusts request.destination when the browser supplies one', () => {
+            expect(sw.isMediaRequest(req('https://x/y', { destination: 'audio' }), new URL('https://x/y'))).toBe(true);
+            expect(sw.isMediaRequest(req('https://x/y', { destination: 'video' }), new URL('https://x/y'))).toBe(true);
+        });
+
+        test('recognises an audio Accept header', () => {
+            const r = req('https://x/y', { headers: { Accept: 'audio/webm,audio/ogg' } });
+            expect(sw.isMediaRequest(r, new URL('https://x/y'))).toBe(true);
+        });
+
+        test('recognises audio by extension, which is the only test a bare fetch() passes', () => {
+            expect(sw.isMediaRequest(req(MP3), new URL(MP3))).toBe(true);
+            ['/a.ogg', '/a.wav', '/a.m4a', '/a.opus', '/a.webm', '/a.flac', '/a.aac']
+                .forEach(p => expect(sw.isMediaRequest(req('https://x' + p), new URL('https://x' + p))).toBe(true));
+        });
+
+        test('does NOT claim the app shell, and does not claim a document', () => {
+            ['/app.js', '/styles.css', '/icons/icon-16x16.png', '/index.html']
+                .forEach(p => expect(sw.isMediaRequest(req('https://x' + p), new URL('https://x' + p))).toBe(false));
+            const doc = req('https://x/', { mode: 'navigate', destination: 'document',
+                                            headers: { Accept: 'text/html,*/*' } });
+            expect(sw.isMediaRequest(doc, new URL('https://x/'))).toBe(false);
+            expect(sw.isDocumentRequest(doc)).toBe(true);
+        });
+    });
+
+    describe('⚠️ THE DEFECT: a failed request must not resolve to HTML', () => {
+        const OFFLINE = new FakeResponse('<!DOCTYPE html><title>Offline</title>', {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' }
+        });
+
+        function withFailingNetwork() {
+            const caches = fakeCaches({ 'english-portal-static-v22': { '/offline.html': OFFLINE } });
+            const sw = loadWorker({
+                caches: caches,
+                fetch: async () => { throw new TypeError('Failed to fetch'); }
+            });
+            return { sw, caches };
+        }
+
+        test('a failed AUDIO request fails as audio: 504, no body, no HTML', async () => {
+            const { sw, caches } = withFailingNetwork();
+            const response = await sw.cacheFirstStrategy(
+                req(MP3, { destination: 'audio' }), 'english-portal-dynamic-v3');
+
+            // The assertion the defect fails: not an HTML page, and not 200.
+            expect(response.status).toBe(504);
+            expect(response.ok).toBe(false);
+            expect(response.headers.get('content-type')).toBeFalsy();
+            expect(await response.text()).toBe('');
+            expect(response).not.toBe(OFFLINE);
+
+            // And the branch: offline.html was never even looked up for a clip.
+            expect(caches._log.matched).not.toContain('/offline.html');
+        });
+
+        test('mediaStrategy fails the same way, with nothing cached', async () => {
+            const { sw, caches } = withFailingNetwork();
+            const response = await sw.mediaStrategy(req(MP3, { destination: 'audio' }));
+            expect(response.status).toBe(504);
+            expect(await response.text()).toBe('');
+            expect(caches._log.matched).not.toContain('/offline.html');
+        });
+
+        test('a NAVIGATION still gets the offline page — the fix is not a removal', async () => {
+            const { sw } = withFailingNetwork();
+            const response = await sw.cacheFirstStrategy(
+                req('https://x/somewhere', {
+                    mode: 'navigate',
+                    destination: 'document',
+                    headers: { Accept: 'text/html' }
+                }), 'english-portal-dynamic-v3');
+            expect(response).toBe(OFFLINE);
+            expect(await response.text()).toContain('Offline');
+        });
+
+        test('a failed data request gets text/plain at 503, not a HTML page at 200', async () => {
+            // The same defect with a different victim: JSON.parse() on an HTML
+            // page throws a syntax error, so the caller reports corrupt data
+            // rather than "you are offline".
+            const { sw } = withFailingNetwork();
+            const response = await sw.cacheFirstStrategy(
+                req('https://x/data/thing.json', { headers: { Accept: 'application/json' } }),
+                'english-portal-dynamic-v3');
+            expect(response.status).toBe(503);
+            expect(response.headers.get('content-type')).toBe('text/plain');
+            expect(await response.text()).not.toContain('<!DOCTYPE html>');
+        });
+    });
+
+    describe('Range and 206 are tolerated, and a fragment is never stored', () => {
+        test('a 206 from the network is returned and NOT cached', async () => {
+            const caches = fakeCaches();
+            const partial = new FakeResponse(new Uint8Array([12, 13]).buffer, {
+                status: 206,
+                headers: { 'Content-Type': 'audio/mpeg', 'Content-Range': 'bytes 2-3/10' }
+            });
+            const sw = loadWorker({ caches: caches, fetch: async () => partial });
+
+            const response = await sw.mediaStrategy(
+                req(MP3, { destination: 'audio', headers: { Range: 'bytes=2-3' } }));
+
+            expect(response.status).toBe(206);
+            // THE POINT: half a clip must not be stored under the whole clip's
+            // URL. Stored, it would be served later as a complete file — a
+            // corrupt clip that survives going offline.
+            expect(caches._log.put).toEqual([]);
+        });
+
+        test('a range request against a complete cached clip is answered with a real 206', async () => {
+            const caches = fakeCaches({ 'english-portal-media-v1': { [MP3]: clipResponse() } });
+            const sw = loadWorker({
+                caches: caches,
+                fetch: async () => { throw new Error('the network must not be needed here'); }
+            });
+
+            const response = await sw.mediaStrategy(
+                req(MP3, { destination: 'audio', headers: { Range: 'bytes=2-4' } }));
+
+            expect(response.status).toBe(206);
+            expect(response.headers.get('content-range')).toBe('bytes 2-4/10');
+            expect(response.headers.get('content-length')).toBe('3');
+            expect(response.headers.get('accept-ranges')).toBe('bytes');
+            expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([12, 13, 14]);
+        });
+
+        test('`bytes=0-` — what Chromium actually sends — gets the whole file as a 206', async () => {
+            const caches = fakeCaches({ 'english-portal-media-v1': { [MP3]: clipResponse() } });
+            const sw = loadWorker({ caches: caches, fetch: async () => { throw new Error('no'); } });
+            const response = await sw.mediaStrategy(
+                req(MP3, { destination: 'audio', headers: { Range: 'bytes=0-' } }));
+            expect(response.status).toBe(206);
+            expect(response.headers.get('content-range')).toBe('bytes 0-9/10');
+        });
+
+        test('a suffix range means the LAST n bytes, not the first', async () => {
+            const caches = fakeCaches({ 'english-portal-media-v1': { [MP3]: clipResponse() } });
+            const sw = loadWorker({ caches: caches, fetch: async () => { throw new Error('no'); } });
+            const response = await sw.mediaStrategy(
+                req(MP3, { destination: 'audio', headers: { Range: 'bytes=-3' } }));
+            expect(response.headers.get('content-range')).toBe('bytes 7-9/10');
+            expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([17, 18, 19]);
+        });
+
+        test('a range past the end is a 416 with a Content-Range, not a slice of nothing', async () => {
+            const caches = fakeCaches({ 'english-portal-media-v1': { [MP3]: clipResponse() } });
+            const sw = loadWorker({ caches: caches, fetch: async () => { throw new Error('no'); } });
+            const response = await sw.mediaStrategy(
+                req(MP3, { destination: 'audio', headers: { Range: 'bytes=50-60' } }));
+            expect(response.status).toBe(416);
+            expect(response.headers.get('content-range')).toBe('bytes */10');
+        });
+
+        test('an OPAQUE cached clip cannot be sliced, so the range goes to the network', async () => {
+            const opaque = new FakeResponse(clipBody(), { status: 0, type: 'opaque' });
+            const caches = fakeCaches({ 'english-portal-media-v1': { [MP3]: opaque } });
+            let fetched = 0;
+            const sw = loadWorker({
+                caches: caches,
+                fetch: async () => {
+                    fetched++;
+                    return new FakeResponse(new Uint8Array([12]).buffer, { status: 206 });
+                }
+            });
+            const response = await sw.mediaStrategy(
+                req(MP3, { destination: 'audio', headers: { Range: 'bytes=2-2' } }));
+            expect(fetched).toBe(1);
+            expect(response.status).toBe(206);
+            expect(caches._log.put).toEqual([]);
+        });
+    });
+
+    describe('offline replay (NFR-4, R-9)', () => {
+        test('a complete clip is stored on first play and served from cache after', async () => {
+            const caches = fakeCaches();
+            let fetched = 0;
+            const sw = loadWorker({
+                caches: caches,
+                fetch: async () => { fetched++; return clipResponse(); }
+            });
+            const first = await sw.mediaStrategy(req(MP3, { destination: 'audio' }));
+            expect(first.status).toBe(200);
+            expect(fetched).toBe(1);
+            expect(caches._log.put).toEqual([
+                { cache: 'english-portal-media-v1', url: MP3, status: 200 }
+            ]);
+
+            const second = await sw.mediaStrategy(req(MP3, { destination: 'audio' }));
+            expect(second.status).toBe(200);
+            expect(fetched).toBe(1);   // never went back to the network
+        });
+
+        test('an opaque clip is stored too — deliberately, and the reason is written down', async () => {
+            const caches = fakeCaches();
+            const sw = loadWorker({
+                caches: caches,
+                fetch: async () => new FakeResponse(clipBody(), { status: 0, type: 'opaque' })
+            });
+            await sw.mediaStrategy(req(MP3, { destination: 'audio' }));
+            expect(caches._log.put).toHaveLength(1);
+            expect(swSource).toContain('OPAQUE RESPONSES ARE CACHED, AND THAT IS A JUDGEMENT CALL');
+        });
+
+        test('offline with a cached clip replays it instead of failing', async () => {
+            const caches = fakeCaches({ 'english-portal-media-v1': { [MP3]: clipResponse() } });
+            const sw = loadWorker({
+                caches: caches,
+                fetch: async () => { throw new TypeError('Failed to fetch'); }
+            });
+            const response = await sw.mediaStrategy(req(MP3, { destination: 'audio' }));
+            expect(response.status).toBe(200);
+            expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toHaveLength(10);
+        });
+
+        test('a broken Cache API does not stop the clip being fetched', async () => {
+            const broken = {
+                match: async () => { throw new DOMException('nope'); },
+                open: async () => { throw new DOMException('nope'); }
+            };
+            const sw = loadWorker({ caches: broken, fetch: async () => clipResponse() });
+            const response = await sw.mediaStrategy(req(MP3, { destination: 'audio' }));
+            expect(response.status).toBe(200);
+        });
+    });
+});
+
+/**
+ * =============================================================================
+ * US-408 — API audio for word models, and the precedence that keeps CON-6 true
+ * =============================================================================
+ *
+ * `CON-6`: *"One optional API — api.dictionaryapi.dev, enhancement only · its
+ * failure must never block an exercise or corrupt data."*
+ *
+ * Days before this was written the same API hung the vocabulary section for
+ * eighteen seconds (`US-245` / `I-13`) because it was consulted FIRST for a word
+ * already authored in data.js. The tests below are the audio-shaped version of
+ * that regression suite, and the third case is the one that caused it: the API
+ * ABSENT, the API ERRORING, and the API HANGING FOREVER. A pending fetch is as
+ * bad as a failed one, and the property being proved is that a pending one is
+ * INVISIBLE — there is no control for it to own.
+ *
+ * The block between the BEGIN/END markers depends on `global.fetch`,
+ * `global.navigator`, `global.Audio`, `global.URL` and `global.setTimeout` and on
+ * nothing in app.js, so it is extracted and run.
+ */
+describe('WordAudio — a recording of a person, when there is one (US-408 / CON-6)', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const ROOT = path.join(__dirname, '..', '..');
+    const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+
+    const BEGIN = '// ===== BEGIN WORD AUDIO (US-408) =====';
+    const END = '// ===== END WORD AUDIO (US-408) =====';
+
+    function block() {
+        const from = appSource.indexOf(BEGIN);
+        const to = appSource.indexOf(END);
+        expect(from).toBeGreaterThan(-1);
+        expect(to).toBeGreaterThan(from);
+        return appSource.slice(from + BEGIN.length, to);
+    }
+
+    /** One top-level function's source, by brace matching. */
+    function fnSource(name) {
+        const start = appSource.indexOf('function ' + name + '(');
+        expect(start).toBeGreaterThan(-1);
+        let depth = 0;
+        for (let i = appSource.indexOf('{', start); i < appSource.length; i++) {
+            if (appSource[i] === '{') depth++;
+            else if (appSource[i] === '}' && --depth === 0) return appSource.slice(start, i + 1);
+        }
+        throw new Error('unbalanced braces in ' + name);
+    }
+
+    const MP3 = 'https://api.dictionaryapi.dev/media/pronunciations/en/happy-uk.mp3';
+
+    /** One entry in the shape api.dictionaryapi.dev actually returns. */
+    function entry(word, audioUrls, extra) {
+        return Object.assign({
+            word: word,
+            phonetics: (audioUrls || []).map(url => ({ text: '/ˈhæpi/', audio: url })),
+            meanings: [{ definitions: [{ definition: 'x' }] }]
+        }, extra || {});
+    }
+
+    let win;
+    let WordAudio;
+    let fetchCalls;
+    let fetchImpl;
+    let audioLog;
+
+    function makeWindow(options) {
+        const opts = options || {};
+        fetchCalls = [];
+        audioLog = [];
+        const w = {
+            URL: URL,
+            setTimeout: setTimeout,
+            clearTimeout: clearTimeout,
+            navigator: {
+                onLine: opts.onLine === undefined ? true : opts.onLine,
+                serviceWorker: opts.serviceWorker
+            },
+            AbortSignal: { timeout: (ms) => ({ _ms: ms }) },
+            AppErrorHandler: { logError: () => {} }
+        };
+        w.Audio = function (url) {
+            const element = {
+                src: url,
+                onerror: null,
+                play: () => (opts.playRejects
+                    ? Promise.reject(new DOMException('NotAllowedError'))
+                    : Promise.resolve())
+            };
+            audioLog.push(element);
+            if (opts.audioThrows) throw new Error('no media element');
+            return element;
+        };
+        if (opts.noFetch) {
+            w.fetch = undefined;
+        } else {
+            w.fetch = (url, init) => {
+                fetchCalls.push({ url: url, init: init });
+                return fetchImpl(url, init);
+            };
+        }
+        return w;
+    }
+
+    function load(options) {
+        win = makeWindow(options);
+        WordAudio = new Function('window', block() + '\n;return window.WordAudio;')(win);
+        return WordAudio;
+    }
+
+    /** Drain the microtask queue that lookup()'s .then chain runs on. */
+    async function flush() {
+        for (let i = 0; i < 12; i++) await Promise.resolve();
+    }
+
+    function jsonResponse(body) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
+    }
+
+    beforeEach(() => {
+        fetchImpl = () => jsonResponse([entry('happy', [MP3])]);
+        load();
+    });
+
+    // -----------------------------------------------------------------------
+    describe('ONE origin, enforced in code and not only in the CSP (CON-6)', () => {
+        test('a clip on the one allowed API origin is accepted', () => {
+            expect(WordAudio.apiAudioUrl(MP3)).toBe(MP3);
+        });
+
+        test('⚠️ a clip on ANY other host is refused, gstatic included', () => {
+            // dictionaryapi.dev really does return these. Allowing them would make
+            // "one optional API" false for the sake of one word's recording.
+            [
+                'https://ssl.gstatic.com/dictionary/static/sounds/20200429/happy--_gb_1.mp3',
+                '//ssl.gstatic.com/dictionary/static/sounds/20200429/happy--_gb_1.mp3',
+                'https://lex-audio.useremarkable.com/mp3/happy_us_1.mp3',
+                // The look-alike: a suffix match or an `includes()` test would
+                // pass this one.
+                'https://api.dictionaryapi.dev.evil.example/happy.mp3',
+                'https://evil.example/?x=https://api.dictionaryapi.dev/happy.mp3'
+            ].forEach(url => expect(WordAudio.apiAudioUrl(url)).toBe(''));
+        });
+
+        test('http is a different origin from https, and is refused', () => {
+            expect(WordAudio.apiAudioUrl('http://api.dictionaryapi.dev/media/x.mp3')).toBe('');
+        });
+
+        test('a relative path is refused rather than resolved against our own origin', () => {
+            // `new URL(x)` with no base is deliberate: a bare path here would
+            // otherwise become a same-origin URL and look local and trustworthy.
+            ['/media/x.mp3', 'media/x.mp3', '', '   ', null, undefined, 42, {}]
+                .forEach(v => expect(WordAudio.apiAudioUrl(v)).toBe(''));
+        });
+
+        test('clipFromEntries skips the refused clips and takes the first allowed one', () => {
+            const clip = WordAudio.clipFromEntries([entry('happy', [
+                '',
+                '//ssl.gstatic.com/dictionary/static/sounds/happy.mp3',
+                MP3
+            ])]);
+            expect(clip.url).toBe(MP3);
+            expect(clip.word).toBe('happy');
+        });
+
+        test('an entry whose only clips are off-origin yields no clip at all', () => {
+            const clip = WordAudio.clipFromEntries([
+                entry('happy', ['https://ssl.gstatic.com/x.mp3'])
+            ]);
+            expect(clip).toBeNull();
+            expect(WordAudio.clipFromEntries([])).toBeNull();
+            expect(WordAudio.clipFromEntries(null)).toBeNull();
+            expect(WordAudio.clipFromEntries([{ }])).toBeNull();
+        });
+    });
+
+    // -----------------------------------------------------------------------
+    describe('FR-CNT-5 — the clip is credited, and the credit never guesses', () => {
+        test('licence name and source URL both appear', () => {
+            const text = WordAudio.creditFor(
+                { license: { name: 'CC BY-SA 3.0' }, sourceUrls: ['https://en.wiktionary.org/wiki/happy'] },
+                null);
+            expect(text).toContain('CC BY-SA 3.0');
+            expect(text).toContain('https://en.wiktionary.org/wiki/happy');
+        });
+
+        test("the clip's own licence wins over the entry's", () => {
+            const text = WordAudio.creditFor(
+                { license: { name: 'CC BY-SA 3.0' }, sourceUrls: ['https://entry.example'] },
+                { license: { name: 'BY-SA 4.0' }, sourceUrl: 'https://clip.example' });
+            expect(text).toContain('BY-SA 4.0');
+            expect(text).toContain('https://clip.example');
+            expect(text).not.toContain('CC BY-SA 3.0');
+        });
+
+        test('⚠️ with no licence stated, it says so rather than inventing one', () => {
+            const text = WordAudio.creditFor({}, {});
+            expect(text).toContain('api.dictionaryapi.dev');
+            expect(text).toContain('licence was not stated');
+            expect(text).not.toMatch(/CC BY|BY-SA|public domain/i);
+        });
+
+        test('a real lookup carries the credit through to the clip', async () => {
+            fetchImpl = () => jsonResponse([entry('happy', [MP3], {
+                license: { name: 'CC BY-SA 3.0' },
+                sourceUrls: ['https://en.wiktionary.org/wiki/happy']
+            })]);
+            WordAudio.lookup('happy', () => {});
+            await flush();
+            expect(WordAudio.known('happy').credit).toContain('CC BY-SA 3.0');
+        });
+    });
+
+    // -----------------------------------------------------------------------
+    describe('the API ABSENT', () => {
+        test('no fetch at all in this browser: no throw, no clip, TTS still speaks', () => {
+            load({ noFetch: true });
+            expect(WordAudio.lookup('happy', () => { throw new Error('must not be called'); }))
+                .toBeUndefined();
+            expect(WordAudio.known('happy')).toBeNull();
+
+            let spoken = 0;
+            expect(WordAudio.playModel('happy', () => { spoken++; })).toBe('tts');
+            expect(spoken).toBe(1);
+        });
+
+        test('offline: navigator.onLine === false means the request is never made', async () => {
+            load({ onLine: false });
+            WordAudio.lookup('happy', () => {});
+            await flush();
+            expect(fetchCalls).toEqual([]);
+            expect(WordAudio.known('happy')).toBeNull();
+        });
+
+        test('a word with no recording is asked about ONCE, then remembered', async () => {
+            fetchImpl = () => Promise.resolve({ ok: false, status: 404 });
+            WordAudio.lookup('happy', () => {});
+            await flush();
+            expect(WordAudio.known('happy')).toBeNull();
+            WordAudio.lookup('happy', () => {});
+            WordAudio.lookup('HAPPY', () => {});
+            await flush();
+            expect(fetchCalls).toHaveLength(1);
+        });
+
+        test('there is a ceiling on lookups per page load', async () => {
+            expect(WordAudio.MAX_LOOKUPS).toBeGreaterThan(0);
+            fetchImpl = () => Promise.resolve({ ok: false, status: 404 });
+            for (let i = 0; i < WordAudio.MAX_LOOKUPS + 10; i++) {
+                WordAudio.lookup('word' + i, () => {});
+                await flush();
+            }
+            expect(fetchCalls).toHaveLength(WordAudio.MAX_LOOKUPS);
+        });
+    });
+
+    // -----------------------------------------------------------------------
+    describe('the API ERRORING', () => {
+        test('a rejected fetch is a missing recording, not an exception', async () => {
+            fetchImpl = () => Promise.reject(new TypeError('Failed to fetch'));
+            let called = 0;
+            expect(WordAudio.lookup('happy', () => { called++; })).toBeUndefined();
+            await flush();
+            expect(called).toBe(0);
+            expect(WordAudio.known('happy')).toBeNull();
+            let spoken = 0;
+            expect(WordAudio.playModel('happy', () => { spoken++; })).toBe('tts');
+            expect(spoken).toBe(1);
+        });
+
+        test('a fetch that throws synchronously is survived too', () => {
+            fetchImpl = () => { throw new Error('blocked by CSP'); };
+            expect(() => WordAudio.lookup('happy', () => {})).not.toThrow();
+            expect(WordAudio.known('happy')).toBeNull();
+        });
+
+        test('a non-promise return value from fetch is survived', () => {
+            fetchImpl = () => undefined;
+            expect(() => WordAudio.lookup('happy', () => {})).not.toThrow();
+        });
+
+        test('malformed JSON is a missing recording', async () => {
+            fetchImpl = () => Promise.resolve({
+                ok: true, status: 200, json: () => Promise.reject(new SyntaxError('<!DOCTYPE html>'))
+            });
+            WordAudio.lookup('happy', () => {});
+            await flush();
+            expect(WordAudio.known('happy')).toBeNull();
+        });
+
+        test('⚠️ HTML where JSON was expected — the old offline.html fallback — is survived', async () => {
+            // Before the service-worker fix, a failed lookup resolved to
+            // offline.html AT STATUS 200. This is what that looked like here.
+            fetchImpl = () => jsonResponse('<!DOCTYPE html><title>Offline</title>');
+            WordAudio.lookup('happy', () => {});
+            await flush();
+            expect(WordAudio.known('happy')).toBeNull();
+        });
+    });
+
+    // -----------------------------------------------------------------------
+    describe('⚠️ the API HANGING — the case that caused US-245', () => {
+        beforeEach(() => { jest.useFakeTimers(); });
+        afterEach(() => { jest.useRealTimers(); });
+
+        test('a fetch that never settles never calls back, and cannot be awaited', async () => {
+            load();
+            fetchImpl = () => new Promise(() => {});   // forever
+            const result = WordAudio.lookup('happy', () => { throw new Error('must not fire'); });
+
+            // The strongest guarantee available: there is no promise to await, so
+            // no caller can accidentally make this blocking.
+            expect(result).toBeUndefined();
+
+            jest.advanceTimersByTime(WordAudio.LOOKUP_TIMEOUT_MS * 3);
+            await flush();
+            expect(WordAudio.known('happy')).toBeNull();
+
+            // And the model still plays, at once, with the fetch still pending.
+            let spoken = 0;
+            expect(WordAudio.playModel('happy', () => { spoken++; })).toBe('tts');
+            expect(spoken).toBe(1);
+        });
+
+        test('the deadline does not depend on AbortSignal.timeout existing', async () => {
+            load();
+            win.AbortSignal = undefined;      // older Safari
+            fetchImpl = () => new Promise(() => {});
+            expect(() => WordAudio.lookup('happy', () => {})).not.toThrow();
+            jest.advanceTimersByTime(WordAudio.LOOKUP_TIMEOUT_MS + 1);
+            await flush();
+            // Not memoised as a miss: a hang is "we still do not know", and a
+            // later visit is allowed to ask again.
+            fetchImpl = () => jsonResponse([entry('happy', [MP3])]);
+            WordAudio.lookup('happy', () => {});
+            await flush();
+            expect(WordAudio.known('happy').url).toBe(MP3);
+        });
+
+        test('an answer that arrives AFTER the deadline is discarded, not shown late', async () => {
+            load();
+            let settle;
+            fetchImpl = () => new Promise(resolve => { settle = resolve; });
+            let called = 0;
+            WordAudio.lookup('happy', () => { called++; });
+
+            jest.advanceTimersByTime(WordAudio.LOOKUP_TIMEOUT_MS + 1);
+            await flush();
+            expect(called).toBe(0);
+
+            // The slow answer finally arrives. The screen must not rearrange
+            // itself under a learner who has moved on.
+            settle({ ok: true, status: 200, json: () => Promise.resolve([entry('happy', [MP3])]) });
+            await flush();
+            expect(called).toBe(0);
+        });
+
+        test('a slow lookup is bounded by a timeout well under US-245\'s 18 seconds', () => {
+            expect(WordAudio.LOOKUP_TIMEOUT_MS).toBeLessThanOrEqual(4000);
+        });
+    });
+
+    // -----------------------------------------------------------------------
+    describe('precedence: whichever model is ALREADY in hand, preferring the clip', () => {
+        test('with a clip in hand the recording plays and TTS does not', async () => {
+            WordAudio.lookup('happy', () => {});
+            await flush();
+            let spoken = 0;
+            expect(WordAudio.playModel('happy', () => { spoken++; })).toBe('clip');
+            expect(spoken).toBe(0);
+            expect(audioLog).toHaveLength(1);
+            expect(audioLog[0].src).toBe(MP3);
+        });
+
+        test('with nothing in hand the synthesiser plays IMMEDIATELY and nothing is fetched', () => {
+            let spoken = 0;
+            expect(WordAudio.playModel('happy', () => { spoken++; })).toBe('tts');
+            expect(spoken).toBe(1);
+            // The press must never be the thing that starts a network request.
+            expect(fetchCalls).toEqual([]);
+        });
+
+        test('playModel never touches the network on any path', () => {
+            const src = block();
+            const playModel = src.slice(src.indexOf('function playModel('));
+            expect(playModel).not.toContain('fetch(');
+            expect(playModel).not.toContain('lookup(');
+            expect(playModel).not.toContain('await');
+        });
+
+        test('a clip that will not play falls back to TTS inside the same press', async () => {
+            load({ playRejects: true });
+            WordAudio.lookup('happy', () => {});
+            await flush();
+            let spoken = 0;
+            WordAudio.playModel('happy', () => { spoken++; });
+            await flush();
+            expect(spoken).toBe(1);
+        });
+
+        test('an Audio constructor that throws falls back to TTS', async () => {
+            load({ audioThrows: true });
+            WordAudio.lookup('happy', () => {});
+            await flush();
+            let spoken = 0;
+            WordAudio.playModel('happy', () => { spoken++; });
+            expect(spoken).toBe(1);
+        });
+
+        test('an <audio> error event falls back to TTS', async () => {
+            WordAudio.lookup('happy', () => {});
+            await flush();
+            let spoken = 0;
+            WordAudio.playModel('happy', () => { spoken++; });
+            expect(audioLog).toHaveLength(1);
+            audioLog[0].onerror(new Event('error'));
+            expect(spoken).toBe(1);
+        });
+    });
+
+    // -----------------------------------------------------------------------
+    describe('an unplayable cached clip is evicted by the surface that found it', () => {
+        test('the service worker is told to drop it, and it is not offered again', async () => {
+            const posted = [];
+            load({
+                playRejects: true,
+                serviceWorker: { controller: { postMessage: (m) => posted.push(m) } }
+            });
+            WordAudio.lookup('happy', () => {});
+            await flush();
+            expect(WordAudio.known('happy')).toBeTruthy();
+
+            WordAudio.playModel('happy', () => {});
+            await flush();
+
+            expect(posted).toEqual([{ type: 'media-failed', url: MP3 }]);
+            // And this session stops offering it, so one silent press is the
+            // whole cost of a pinned failure.
+            expect(WordAudio.known('happy')).toBeNull();
+        });
+
+        test('no service worker controller is not an error', async () => {
+            load({ playRejects: true, serviceWorker: undefined });
+            WordAudio.lookup('happy', () => {});
+            await flush();
+            expect(() => WordAudio.playModel('happy', () => {})).not.toThrow();
+        });
+    });
+
+    // -----------------------------------------------------------------------
+    describe('the enrichment is free for a word the app already fetched', () => {
+        test('offer() takes the clip out of a response fetchWordData already paid for', () => {
+            WordAudio.offer(entry('Happy', [MP3]));
+            expect(WordAudio.known('happy').url).toBe(MP3);
+            expect(fetchCalls).toEqual([]);
+        });
+
+        test('parseAPIResponse hands the entry over, so the JSON is not fetched twice', () => {
+            const parse = fnSource('parseAPIResponse');
+            expect(parse).toContain('WordAudio.offer(apiData)');
+            // And it is guarded, because app.js has no import graph: a build that
+            // has not loaded this block must not break vocabulary.
+            expect(parse).toMatch(/if \(window\.WordAudio\) WordAudio\.offer/);
+        });
+
+        test('offer() survives nonsense without storing anything', () => {
+            expect(() => WordAudio.offer(null)).not.toThrow();
+            expect(() => WordAudio.offer({})).not.toThrow();
+            expect(() => WordAudio.offer({ word: 'x' })).not.toThrow();
+            expect(WordAudio.known('x')).toBeNull();
+        });
+    });
+
+    // -----------------------------------------------------------------------
+    describe('the block reaches for nothing in app.js', () => {
+        test('it extracts and runs with only browser globals supplied', () => {
+            // The same guarantee as RecordingArchive's: this is what makes the
+            // suite able to run it at all, and it is easy to break by accident.
+            expect(() => load()).not.toThrow();
+            expect(typeof WordAudio.playModel).toBe('function');
+        });
+
+        test('it does not name state, vocabularyData, Toast or speechAPI', () => {
+            const src = block();
+            ['state.', 'vocabularyData', 'Toast.', 'speechAPI.', 'CONFIG.']
+                .forEach(name => expect(src).not.toContain(name));
+        });
+    });
+});
+
+/**
+ * =============================================================================
+ * US-408 — the vocabulary card's native-audio control, walked in jsdom
+ * =============================================================================
+ *
+ * The module above is honest in isolation; this is where CON-6 is actually kept
+ * or broken, because this is where a control exists. The property under test is
+ * the one `US-245` cost eighteen seconds to learn: THERE IS NO STATE IN WHICH A
+ * CONTROL IS WAITING FOR api.dictionaryapi.dev. Not "waits briefly" — does not
+ * exist until there is nothing left to wait for.
+ */
+describe('the vocabulary card and its native-audio control (US-408 / CON-6)', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const ROOT = path.join(__dirname, '..', '..');
+    const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+    const indexSource = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+
+    function fnSource(name) {
+        const start = appSource.indexOf('function ' + name + '(');
+        expect(start).toBeGreaterThan(-1);
+        let depth = 0;
+        for (let i = appSource.indexOf('{', start); i < appSource.length; i++) {
+            if (appSource[i] === '{') depth++;
+            else if (appSource[i] === '}' && --depth === 0) return appSource.slice(start, i + 1);
+        }
+        throw new Error('unbalanced braces in ' + name);
+    }
+
+    const MP3 = 'https://api.dictionaryapi.dev/media/pronunciations/en/happy-uk.mp3';
+    const CLIP = { word: 'happy', url: MP3, ipa: '/ˈhæpi/', credit: 'Recording from api.dictionaryapi.dev, licensed CC BY-SA 3.0. Source: https://en.wiktionary.org/wiki/happy.' };
+
+    let card;
+    let fakeAudio;
+    let spoken;
+    let toasts;
+    let lookupCalls;
+    let onReady;
+
+    function build(options) {
+        const opts = options || {};
+        document.body.innerHTML = `
+            <div class="word-card">
+                <h3 id="currentWord">${opts.showing === undefined ? 'Happy' : opts.showing}</h3>
+                <p id="definition"></p>
+                <button id="speakWord">Pronounce</button>
+                <button id="wordAudioNative" hidden>A person saying it</button>
+                <p id="wordAudioCredit" hidden></p>
+            </div>`;
+        spoken = [];
+        toasts = [];
+        lookupCalls = [];
+        onReady = null;
+        fakeAudio = { played: [], failNext: !!opts.playFails };
+
+        const WordAudio = {
+            known: (word) => (opts.knownClips || {})[String(word).toLowerCase()] || null,
+            lookup: (word, ready) => {
+                lookupCalls.push(word);
+                onReady = ready;      // the test decides when, or never
+                return undefined;
+            },
+            playClip: (clip, onFailure) => {
+                if (fakeAudio.failNext) {
+                    onFailure();
+                    return true;
+                }
+                fakeAudio.played.push(clip.url);
+                return true;
+            }
+        };
+        const win = { WordAudio: WordAudio };
+        const factory = new Function(
+            'document', 'window', 'WordAudio', 'speechAPI', 'Toast',
+            fnSource('setWordAudioControl') + '\n' + fnSource('prefetchWordAudio') +
+            '\n;return { setWordAudioControl: setWordAudioControl, prefetchWordAudio: prefetchWordAudio };');
+        card = factory(document, win, WordAudio,
+                       { speak: (text) => spoken.push(text) },
+                       { info: (m) => toasts.push(m) });
+        return card;
+    }
+
+    const button = () => document.getElementById('wordAudioNative');
+    const credit = () => document.getElementById('wordAudioCredit');
+
+    describe('the markup it draws into', () => {
+        test('index.html ships the control hidden, not disabled', () => {
+            // Hidden-and-absent is the guarantee. Shown-and-disabled would be a
+            // control the network owns, which is what CON-6 forbids.
+            expect(indexSource).toMatch(/id="wordAudioNative"[^>]*hidden/);
+            expect(indexSource).toMatch(/id="wordAudioCredit"[^>]*hidden/);
+            expect(indexSource).not.toMatch(/id="wordAudioNative"[^>]*disabled/);
+        });
+
+        test('the always-available TTS control is untouched', () => {
+            expect(indexSource).toContain('id="speakWord"');
+            expect(fnSource('initializeVocabularyButtons'))
+                .toContain("document.getElementById('speakWord').onclick");
+        });
+    });
+
+    describe('with no clip', () => {
+        test('the control stays hidden and empty', () => {
+            build();
+            card.setWordAudioControl(null);
+            expect(button().hidden).toBe(true);
+            expect(credit().hidden).toBe(true);
+            expect(credit().textContent).toBe('');
+            expect(button().onclick).toBeNull();
+        });
+    });
+
+    describe('with a clip in hand', () => {
+        test('the control appears, is NOT disabled, and is credited (FR-CNT-5)', () => {
+            build();
+            card.setWordAudioControl(CLIP);
+            expect(button().hidden).toBe(false);
+            expect(button().disabled).toBe(false);
+            expect(credit().hidden).toBe(false);
+            expect(credit().textContent).toContain('CC BY-SA 3.0');
+            expect(credit().textContent).toContain('https://en.wiktionary.org/wiki/happy');
+        });
+
+        test('pressing it plays the recording and does not speak', () => {
+            build();
+            card.setWordAudioControl(CLIP);
+            button().click();
+            expect(fakeAudio.played).toEqual([MP3]);
+            expect(spoken).toEqual([]);
+        });
+
+        test('a clip that fails AT THE PRESS speaks the word, says so once, and goes away', () => {
+            build({ playFails: true });
+            card.setWordAudioControl(CLIP);
+            button().click();
+            expect(spoken).toEqual(['happy']);
+            // Not a dead button: the control is removed rather than left there
+            // failing every time it is pressed.
+            expect(button().hidden).toBe(true);
+            expect(credit().hidden).toBe(true);
+            expect(toasts).toHaveLength(1);
+            expect(toasts[0]).toContain('phone');
+        });
+
+        test('the credit is rendered as text, never as markup', () => {
+            build();
+            card.setWordAudioControl({
+                word: 'happy', url: MP3,
+                credit: '<img src=x onerror=alert(1)> licensed CC BY-SA'
+            });
+            expect(credit().querySelector('img')).toBeNull();
+            expect(credit().textContent).toContain('<img');
+        });
+    });
+
+    describe('⚠️ the staleness guard', () => {
+        test("a clip arriving for the previous word is NOT attached to this one", () => {
+            // A human voice saying the wrong word is more convincing, and
+            // therefore worse, than a wrong TTS read.
+            build({ showing: 'Happy' });
+            card.prefetchWordAudio('happy');
+            expect(lookupCalls).toEqual(['happy']);
+
+            // The learner presses Next while the lookup is in flight.
+            document.getElementById('currentWord').textContent = 'Sad';
+            onReady('happy', CLIP);
+
+            expect(button().hidden).toBe(true);
+            expect(credit().textContent).toBe('');
+        });
+
+        test('a clip arriving for the word still on screen IS attached', () => {
+            build({ showing: 'Happy' });
+            card.prefetchWordAudio('happy');
+            onReady('happy', CLIP);
+            expect(button().hidden).toBe(false);
+        });
+
+        test('the comparison is case-insensitive, because the card shows title case', () => {
+            build({ showing: 'HAPPY' });
+            card.prefetchWordAudio('Happy');
+            onReady('happy', CLIP);
+            expect(button().hidden).toBe(false);
+        });
+    });
+
+    describe('⚠️ a pending lookup leaves nothing spinning', () => {
+        test('while the lookup never resolves, the card is complete and the control absent', () => {
+            build();
+            card.prefetchWordAudio('happy');
+            // onReady is never called. This is the eighteen-second case.
+            expect(button().hidden).toBe(true);
+            expect(button().disabled).toBe(false);   // never shown-and-disabled
+            expect(document.querySelector('.word-card').textContent).toContain('Happy');
+        });
+
+        test('an in-hand clip is used with no lookup at all', () => {
+            build({ knownClips: { happy: CLIP } });
+            card.prefetchWordAudio('happy');
+            expect(lookupCalls).toEqual([]);
+            expect(button().hidden).toBe(false);
+        });
+
+        test('a build with no WordAudio at all still renders the card', () => {
+            build();
+            const factory = new Function('document', 'window',
+                fnSource('prefetchWordAudio') + '\n;return prefetchWordAudio;');
+            const prefetch = factory(document, {});
+            expect(() => prefetch('happy')).not.toThrow();
+            expect(button().hidden).toBe(true);
+        });
+    });
+
+    describe('where the loader calls it, which is the whole of CON-6 here', () => {
+        const loader = fnSource('loadVocabularyWord');
+
+        test('the clip is asked for AFTER the quiz is drawn and answerable', () => {
+            const quizAt = loader.indexOf('displayVocabQuiz(wordData.quiz)');
+            const prefetchAt = loader.indexOf('prefetchWordAudio(wordData.word)');
+            expect(quizAt).toBeGreaterThan(-1);
+            expect(prefetchAt).toBeGreaterThan(quizAt);
+        });
+
+        test('nothing in the loader awaits the clip', () => {
+            expect(loader).not.toMatch(/await\s+prefetchWordAudio/);
+            expect(loader).not.toMatch(/await\s+WordAudio/);
+            // And the only thing actually awaited is the one call that always was.
+            const awaited = (loader.match(/await\s+[A-Za-z_$][\w$]*\(/g) || []);
+            expect(awaited).toEqual(['await fetchWordData(']);
+        });
+
+        test('the previous word\'s control is cleared BEFORE that await', () => {
+            const clearAt = loader.indexOf('setWordAudioControl(null)');
+            const awaitAt = loader.indexOf('await fetchWordData');
+            expect(clearAt).toBeGreaterThan(-1);
+            expect(clearAt).toBeLessThan(awaitAt);
+        });
+
+        test('the review card owns the control too, since it reuses the word card', () => {
+            const review = fnSource('renderVocabReviewCard');
+            expect(review).toContain('setWordAudioControl(');
+            // A review must not start a lookup: the learner is mid-answer.
+            expect(review).not.toContain('prefetchWordAudio');
+        });
+    });
+
+    describe('the CSP change is deliberate and bounded (CON-6)', () => {
+        const csp = (indexSource.match(/http-equiv="Content-Security-Policy"[\s\S]*?content="([\s\S]*?)"/) || [])[1] || '';
+
+        test('media-src is declared at all, which it was not', () => {
+            expect(csp).toMatch(/media-src[^;]*;/);
+        });
+
+        test('blob: is allowed — the already-shipped recording playback needs it', () => {
+            // RecordingArchive (US-136), the A->B->A comparison (US-404) and the
+            // free-production card (US-601) all play a learner's own recording
+            // from a blob: URL, and 'self' does not match a blob: URL.
+            expect(csp).toMatch(/media-src[^;]*blob:/);
+            expect(appSource).toContain('URL.createObjectURL');
+        });
+
+        test('exactly ONE remote origin is allowed for media, and it is the API', () => {
+            const media = csp.match(/media-src([^;]*)/)[1];
+            const remote = media.match(/https?:\/\/[^\s;]+/g) || [];
+            expect(remote).toEqual(['https://api.dictionaryapi.dev']);
+        });
+
+        test('no new origin is introduced: connect-src already named it', () => {
+            const origins = new Set((csp.match(/https?:\/\/[^\s;]+/g) || []));
+            // fonts.googleapis.com / fonts.gstatic.com were already there; the
+            // interesting assertion is that the media hosts dictionaryapi.dev
+            // ALSO returns clips from are not.
+            expect(origins.has('https://api.dictionaryapi.dev')).toBe(true);
+            expect(origins.has('https://ssl.gstatic.com')).toBe(false);
+        });
+
+        test('media routing did not quietly take over content wiring', () => {
+            // WHAT THIS REPLACED, because the change is worth recording. The
+            // original assertion here was
+            //     expect(appSource).not.toContain('data/pronunciation/connected-speech.js')
+            // under the name "the service worker precaches the same set it always
+            // did" — which asserted on app.js rather than on the service worker, so
+            // its name described neither its subject nor its claim. It was a
+            // BOUNDARY GUARD an agent wrote around its own edit scope ("the content
+            // files are somebody else's to wire"), not a property of the app. Once
+            // that file was wired — which was always the plan — the guard failed on
+            // a COMMENT naming the file, which is the giveaway: a durable test does
+            // not care what the prose says.
+            //
+            // What is worth asserting is the property that made the wiring safe:
+            // pronContentList() gathers from EVERY source that declares the array,
+            // so a fourth content file needs no edit here. Naming one global was how
+            // 15 authored items sat loaded-but-unreachable, and unreachable WITHOUT
+            // a warning, because pronNoticingItems() only warns about items it
+            // dropped and these were never loaded to be dropped.
+            const gather = appSource.slice(appSource.indexOf('function pronContentList('));
+            const body = gather.slice(0, gather.indexOf('\n}') + 2);
+            expect(body).toContain('PRONUNCIATION_VOWELS_STRESS');
+            expect(body).toContain('PRONUNCIATION_CONNECTED_SPEECH');
+            // Gathered, not returned from the first match — the bug being prevented.
+            expect(body).toMatch(/sources\.forEach|out\.push/);
+            // And the precache/index.html invariant is assets.test.js's job, which
+            // checks it in both directions. This test does not duplicate it.
+        });
+    });
+});
+
+// ===========================================================================
+// US-406 — the duration hint (FR-PRN-7 / FR-PRN-5 / BR-3)
+// ===========================================================================
+//
+// TWO KINDS OF TEST, because the feature has two halves and they fail differently.
+//
+//   1. THE MODULE. `DurationHint` is between BEGIN/END markers and depends on
+//      `global.AudioContext` and nothing in app.js, so it is extracted and RUN.
+//      The thresholds and the envelope analysis are the two things here that must
+//      be proved rather than read: a threshold that drifts turns noise into a
+//      finding, and an envelope that measures press-to-press instead of the voiced
+//      span makes the whole comparison a lie.
+//   2. THE SURFACE. appendDurationHint() and its helpers are run too, against a
+//      fake microphone, a fake decoder, a fake voice and the REAL authored pairs —
+//      so the assertions below are the sentences a learner actually reads, not a
+//      paraphrase of them. The fake RecordingArchive has exactly three methods
+//      (recorderMissing / startCapture / stopCapture) plus a save() that fails the
+//      test if it is ever called, which is how "nothing is stored" is proved: any
+//      other call would be a TypeError.
+//
+// What these tests CANNOT prove is the acoustics. They prove that a 600ms voiced
+// span against a 400ms model is reported as +50% and described as consistent with
+// an added vowel; they cannot prove that a Telugu-L1 learner saying "bus-u" on a
+// real phone actually produces 600ms, nor that a device's TTS times honestly. That
+// is AS-3 territory and remains unverified.
+
+describe('DurationHint — the module (US-406 / FR-PRN-7)', () => {
+    const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+    const BEGIN = '// ===== BEGIN DURATION HINT (US-406) =====';
+    const END = '// ===== END DURATION HINT (US-406) =====';
+
+    function block() {
+        const from = appSource.indexOf(BEGIN);
+        const to = appSource.indexOf(END);
+        expect(from).toBeGreaterThan(-1);
+        expect(to).toBeGreaterThan(from);
+        return appSource.slice(from + BEGIN.length, to);
+    }
+
+    /** ±level alternating, so the RMS of any whole number of frames is `level`. */
+    function samples(parts, rate) {
+        const sr = rate || 16000;
+        const counts = parts.map(p => Math.round((p.ms * sr) / 1000));
+        const out = new Float32Array(counts.reduce((a, b) => a + b, 0));
+        let at = 0;
+        parts.forEach((p, i) => {
+            for (let j = 0; j < counts[i]; j++) out[at + j] = p.level * (j % 2 ? 1 : -1);
+            at += counts[i];
+        });
+        return out;
+    }
+
+    let DH;
+    beforeEach(() => {
+        DH = new Function('window', block() + '\n;return window.DurationHint;')({});
+    });
+
+    describe('it extracts and runs with no app.js around it', () => {
+        test('a window with nothing on it is enough to load the module', () => {
+            expect(typeof DH.verdict).toBe('function');
+            expect(typeof DH.analyse).toBe('function');
+        });
+
+        test('with no AudioContext it says so instead of throwing', () => {
+            expect(DH.decoderMissing()).toBe(true);
+            return DH.measure({ byteLength: 10 }).then(r => {
+                expect(r.ok).toBe(false);
+                expect(r.code).toBe('no-decoder');
+            });
+        });
+    });
+
+    describe('the threshold, and that it scales with syllables', () => {
+        test('one syllable: +15% is noise, +40% is evidence', () => {
+            expect(DH.NOISE_EXCESS).toBe(0.15);
+            expect(DH.EVIDENCE_EXCESS).toBe(0.40);
+            expect(DH.thresholds(1)).toEqual({ evidence: 1.4, noise: 1.15, syllables: 1 });
+        });
+
+        test('two syllables or more: the app declines rather than guesses', () => {
+            // +40%/2 = +20%, which is not far enough above the +15% noise floor to
+            // be told apart from speaking carefully. The rule producing the
+            // refusal is the SAME rule, not a special case bolted on.
+            expect(DH.thresholds(2)).toBeNull();
+            expect(DH.thresholds(3)).toBeNull();
+            expect(DH.thresholds(9)).toBeNull();
+        });
+
+        test('a nonsense syllable count is treated as one, never as zero', () => {
+            // Dividing by zero would produce Infinity and a bar nothing can clear.
+            expect(DH.thresholds(0)).toEqual({ evidence: 1.4, noise: 1.15, syllables: 1 });
+            expect(DH.thresholds(NaN).syllables).toBe(1);
+        });
+    });
+
+    describe('scope comes from the authored IPA, never from spelling', () => {
+        test('a diphthong is one syllable, not two vowels', () => {
+            expect(DH.syllableCount('/kəʊt/')).toBe(1);
+            expect(DH.syllableCount('/ʃiːp/')).toBe(1);
+            expect(DH.syllableCount('/ˈkʌmftəbl/')).toBe(2);
+        });
+
+        test('/tʃ/ and /dʒ/ are one segment, so *watch* is not a cluster', () => {
+            expect(DH.finalConsonants('/wɒtʃ/')).toBe(1);
+            // *asked* is /ɑːskt/ — three consonants after the vowel, which is why
+            // REQUIREMENTS.md §3.1 lists it as the T-P3 example it does.
+            expect(DH.finalConsonants('/ɑːskt/')).toBe(3);
+            expect(DH.finalConsonants('/teksts/')).toBe(4);
+        });
+
+        test('a word ending in a vowel is out of scope entirely', () => {
+            // There is no final consonant for an epenthetic vowel to follow, so
+            // *zoo* is not a T-P2 word and the hint is not offered on it.
+            expect(DH.finalConsonants('/zuː/')).toBe(0);
+            expect(DH.riskFor('zoo', '/zuː/')).toBeNull();
+        });
+
+        test('one final consonant is T-P2, two or more is T-P3', () => {
+            expect(DH.riskFor('bus', '/bʌs/')).toMatchObject({ code: 'T-P2', syllables: 1, cluster: 1 });
+            expect(DH.riskFor('asked', '/ɑːskt/')).toMatchObject({ code: 'T-P3', cluster: 3 });
+            expect(DH.riskFor('films', '/fɪlmz/')).toMatchObject({ code: 'T-P3', cluster: 3 });
+        });
+
+        test('no IPA means no scope decision, so no hint', () => {
+            // The content is the only source of syllables and clusters. Guessing
+            // from spelling would move the threshold on a wrong guess.
+            expect(DH.riskFor('van', '')).toBeNull();
+            expect(DH.riskFor('', '/væn/')).toBeNull();
+        });
+    });
+
+    describe('what is measured is the voiced span, not press-to-press', () => {
+        test('leading and trailing silence are not part of the word', () => {
+            const r = DH.analyse(samples([
+                { ms: 500, level: 0 }, { ms: 400, level: 0.5 }, { ms: 900, level: 0 }
+            ]), 16000);
+            expect(r.ok).toBe(true);
+            // 1.8 seconds of recording, 400ms of word. The whole feature turns on
+            // this number being 400 and not 1800.
+            expect(r.ms).toBe(400);
+            expect(r.startMs).toBe(500);
+        });
+
+        test('a pause inside the span is refused, not measured', () => {
+            const r = DH.analyse(samples([
+                { ms: 100, level: 0.5 }, { ms: 400, level: 0 }, { ms: 100, level: 0.5 }
+            ]), 16000);
+            expect(r.ok).toBe(false);
+            expect(r.code).toBe('gap');
+        });
+
+        test('a short gap inside one word is kept', () => {
+            // A stop consonant has silence in it. 200ms is under the limit.
+            const r = DH.analyse(samples([
+                { ms: 150, level: 0.5 }, { ms: 200, level: 0 }, { ms: 150, level: 0.5 }
+            ]), 16000);
+            expect(r.ok).toBe(true);
+            expect(r.ms).toBe(500);
+        });
+
+        test('silence is silence, and says so', () => {
+            const r = DH.analyse(samples([{ ms: 800, level: 0 }]), 16000);
+            expect(r.ok).toBe(false);
+            expect(r.code).toBe('silent');
+        });
+
+        test('a span too short or too long to be one word is refused', () => {
+            expect(DH.analyse(samples([{ ms: 30, level: 0.5 }]), 16000).code).toBe('implausible');
+            expect(DH.analyse(samples([{ ms: 5000, level: 0.5 }]), 16000).code).toBe('implausible');
+        });
+
+        test('no samples at all is a refusal, not a zero', () => {
+            expect(DH.analyse(null, 16000).code).toBe('no-audio');
+            expect(DH.analyse(new Float32Array(0), 16000).code).toBe('no-audio');
+        });
+
+        test('the same word at two sample rates measures the same', () => {
+            const at = (sr) => DH.analyse(samples([
+                { ms: 100, level: 0.4 }, { ms: 300, level: 0.4 }
+            ], sr), sr).ms;
+            expect(at(8000)).toBe(400);
+            expect(at(44100)).toBe(400);
+        });
+    });
+
+    describe('the five things it says, and the one thing it never says', () => {
+        const one = { word: 'bus', ipa: '/bʌs/', syllables: 1, cluster: 1, code: 'T-P2' };
+
+        test('clearly longer: consistent with, and explicitly not proof of', () => {
+            const v = DH.verdict(400, 600, one);
+            expect(v.band).toBe('consistent');
+            expect(v.percent).toBe(50);
+            expect(v.text).toContain('Measured: the model 0.40s, your recording 0.60s.');
+            expect(v.text).toContain('That is 50% longer');
+            expect(v.text).toContain('**This is consistent with a vowel after the final consonant of *bus*.');
+            expect(v.text).toContain('It is not proof of one:**');
+            expect(v.text).toContain('speaking slowly, pausing before the end, or breathing out after the word');
+            expect(v.text).toContain('nothing here can separate them');
+            // And it hands the judgement back, at the control that already exists.
+            expect(v.text).toContain('Press "▶ Model, you, model"');
+        });
+
+        test('slightly longer: a real difference it refuses to attribute', () => {
+            const v = DH.verdict(400, 520, one);
+            expect(v.band).toBe('unclear');
+            expect(v.percent).toBe(30);
+            expect(v.text).toContain('It is a real difference, but **it is not enough to tell an ' +
+                'added vowel from simply speaking more slowly**');
+            expect(v.text).toContain('this app cannot tell those two apart');
+        });
+
+        test('the too-small band reports nothing as a finding', () => {
+            const v = DH.verdict(400, 430, one);
+            expect(v.band).toBe('too-small');
+            expect(v.text).toContain('**that difference is too small to mean anything.**');
+            expect(v.text).toContain('Two recordings of the same person saying the same word ' +
+                'differ by more than this');
+            expect(v.text).toContain('Nothing was found here.');
+            // It does not point at the comparison, because there is nothing to
+            // check: sending a learner to listen for a vowel on 8% would be the
+            // suggestion doing the work the measurement could not.
+            expect(v.text).not.toContain('Model, you, model');
+        });
+
+        test('the same length lands in that band too, at 0%', () => {
+            const v = DH.verdict(400, 400, one);
+            expect(v.band).toBe('too-small');
+            expect(v.percent).toBe(0);
+            expect(v.text).toContain('That is 0% longer');
+            expect(v.text).toContain('too small to mean anything');
+        });
+
+        test('shorter: nothing found, and not a pass either', () => {
+            const v = DH.verdict(400, 350, one);
+            expect(v.band).toBe('shorter');
+            expect(v.text).toContain('Yours was **shorter** than the model');
+            expect(v.text).toContain('That does not mean it was right');
+            expect(v.text).toContain('It means this particular measurement found nothing.');
+        });
+
+        test('more than one syllable: the numbers, and no interpretation', () => {
+            const v = DH.verdict(600, 900, { word: 'asking', ipa: '/ˈɑːskɪŋ/', syllables: 2, cluster: 1 });
+            expect(v.band).toBe('not-offered');
+            expect(v.percent).toBeNull();
+            expect(v.text).toContain('too little for this app to tell it apart from speaking carefully');
+            expect(v.text).toContain('the two numbers above are all there is');
+        });
+
+        test('a missing number is never filled in with a zero', () => {
+            expect(DH.verdict(0, 600, one).band).toBe('unmeasurable');
+            expect(DH.verdict(400, 0, one).band).toBe('unmeasurable');
+            expect(DH.verdict(0, 600, one).text).toContain('Nothing was measured this time');
+        });
+
+        test('a cluster is named as a cluster', () => {
+            const v = DH.verdict(400, 700, { word: 'asked', ipa: '/ɑːskt/', syllables: 1, cluster: 2 });
+            expect(v.text).toContain('the consonants at the end of *asked*');
+        });
+
+        test('NO BAND EVER SAYS THE LEARNER ADDED A VOWEL', () => {
+            // The single most important assertion in this file. Every phrasing that
+            // would turn a measurement into an accusation, in every band.
+            const all = [
+                DH.verdict(400, 600, one), DH.verdict(400, 520, one), DH.verdict(400, 430, one),
+                DH.verdict(400, 400, one), DH.verdict(400, 350, one), DH.verdict(0, 0, one),
+                DH.verdict(600, 900, { word: 'asking', syllables: 2, cluster: 1 })
+            ];
+            all.forEach(v => {
+                const t = v.text.toLowerCase();
+                expect(t).not.toContain('you added');
+                expect(t).not.toContain('you inserted');
+                expect(t).not.toContain('extra vowel sound after');
+                expect(t).not.toContain('incorrect');
+                // "wrong" survives in one place only — "a short recording can still
+                // have the wrong sounds in it", which is a hedge against the app
+                // being read as a pass. What is forbidden is calling the learner's
+                // attempt wrong.
+                expect(t).not.toMatch(/\b(you|yours|that|it|this) (was|were|is|are) wrong\b/);
+                expect(t).not.toMatch(/\bscore\b/);
+                expect(t).not.toMatch(/\bscores\b/);
+                // "scored" is allowed in exactly one shape: a sentence denying that
+                // anything was. Any other sentence containing it would be a score.
+                v.text.split(/(?<=\.)\s/).forEach(sentence => {
+                    if (/scored/i.test(sentence)) {
+                        expect(sentence.toLowerCase()).toContain('nothing');
+                    }
+                });
+                expect(t).not.toMatch(/\b(pass|fail)(ed)?\b/);
+                expect(t).not.toMatch(/\bout of \d/);
+                // No band carries a mark of any kind.
+                expect(v.scored).toBe(false);
+            });
+        });
+
+        test('every band that interprets anything also names an innocent cause', () => {
+            expect(DH.verdict(400, 600, one).text).toContain('speaking slowly');
+            expect(DH.verdict(400, 520, one).text).toContain('speaking more slowly');
+            expect(DH.verdict(400, 430, one).text).toContain('the phone\'s voice from one play to the next');
+        });
+    });
+
+    describe('the refusals are in the learner\'s terms', () => {
+        test('each one names what happened and what still works', () => {
+            expect(DH.refusal('no-decoder')).toContain('cannot measure the length of a recording');
+            expect(DH.refusal('no-decoder')).toContain('Everything else on this card works.');
+            expect(DH.refusal('silent')).toContain('The recording is silent');
+            expect(DH.refusal('gap')).toContain('There is a pause in the middle of the recording');
+            expect(DH.refusal('implausible')).toContain('not the length of a single short word');
+            expect(DH.refusal('no-model')).toContain('The phone\'s voice could not be timed');
+            expect(DH.refusal('anything-else')).toContain('could not be measured');
+        });
+
+        test('no refusal blames the learner or implies a score', () => {
+            ['no-decoder', 'silent', 'gap', 'implausible', 'no-model', 'x'].forEach(code => {
+                const t = DH.refusal(code).toLowerCase();
+                expect(t).not.toContain('wrong');
+                expect(t).not.toContain('failed');
+                expect(t).not.toContain('error');
+            });
+        });
+    });
+
+    describe('the module writes nothing anywhere', () => {
+        test('it names no store, no SRS and no mistake taxonomy', () => {
+            const code = block()
+                .replace(/\/\*[\s\S]*?\*\//g, '')
+                .split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+            ['SRS.', 'Mistakes.', 'BlobStore', 'localStorage', 'saveProgress',
+             'RecordingArchive', 'state.'].forEach(forbidden => {
+                expect(code).not.toContain(forbidden);
+            });
+        });
+    });
+});
+
+describe('the duration hint on screen (US-406 / FR-PRN-5)', () => {
+    const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+
+    /** One top-level function's source, by brace matching. */
+    function fnSource(name) {
+        const start = appSource.indexOf('function ' + name + '(');
+        expect(start).toBeGreaterThan(-1);
+        let depth = 0;
+        for (let i = appSource.indexOf('{', start); i < appSource.length; i++) {
+            if (appSource[i] === '{') depth++;
+            else if (appSource[i] === '}' && --depth === 0) return appSource.slice(start, i + 1);
+        }
+        throw new Error('unbalanced braces in ' + name);
+    }
+
+    function codeOnly(source) {
+        return source.replace(/\/\*[\s\S]*?\*\//g, '')
+            .split('\n').filter(line => !/^\s*\/\//.test(line)).join('\n');
+    }
+
+    /** The authored pairs, as the app sees them. */
+    function contentPairs() {
+        const read = (file, name) => {
+            const src = fs.readFileSync(path.join(ROOT, 'data', 'pronunciation', file), 'utf8');
+            return new Function(src + '\n;return typeof ' + name + ' !== "undefined" ? ' + name + ' : null;')();
+        };
+        const v = read('vowels-stress.js', 'PRONUNCIATION_VOWELS_STRESS');
+        const c = read('consonants.js', 'PRONUNCIATION_CONSONANTS');
+        return [].concat((v && v.pairs) || [], (c && c.pairs) || []);
+    }
+
+    const pairs = contentPairs();
+    const pairById = (id) => pairs.filter(p => p.id === id)[0];
+
+    function samples(parts, rate) {
+        const sr = rate || 16000;
+        const counts = parts.map(p => Math.round((p.ms * sr) / 1000));
+        const out = new Float32Array(counts.reduce((a, b) => a + b, 0));
+        let at = 0;
+        parts.forEach((p, i) => {
+            for (let j = 0; j < counts[i]; j++) out[at + j] = p.level * (j % 2 ? 1 : -1);
+            at += counts[i];
+        });
+        return out;
+    }
+
+    let saveCalls;
+    let captures;
+    let spoken;
+    let timeouts;
+    let clock;
+
+    /**
+     * Everything the surface reaches for, faked, and NOTHING ELSE. The archive fake
+     * carries only the three methods the card is allowed to use; save() throws.
+     */
+    function build(options) {
+        const opts = options || {};
+        saveCalls = [];
+        captures = [];
+        spoken = [];
+        timeouts = [];
+        clock = 1000;
+
+        const win = {};
+        if (!opts.noDecoder) {
+            win.AudioContext = function () {
+                this.decodeAudioData = (buffer, ok, fail) => {
+                    if (opts.undecodable) { fail(new Error('nope')); return; }
+                    ok({
+                        sampleRate: buffer._rate,
+                        getChannelData: () => buffer._samples
+                    });
+                };
+                this.close = () => {};
+            };
+        }
+        const DurationHint = new Function('window',
+            appSource.slice(
+                appSource.indexOf('// ===== BEGIN DURATION HINT (US-406) ====='),
+                appSource.indexOf('// ===== END DURATION HINT (US-406) =====')
+            ) + '\n;return window.DurationHint;')(win);
+
+        const Archive = {
+            recorderMissing: () => !!opts.noMic,
+            startCapture: (surface, handlers) => {
+                captures.push({ surface: surface, handlers: handlers });
+                if (opts.micDenied) {
+                    handlers.onerror(new Error('NotAllowedError'));
+                    return Promise.resolve(false);
+                }
+                handlers.onstart();
+                return Promise.resolve(true);
+            },
+            stopCapture: () => true,
+            save: () => {
+                saveCalls.push(1);
+                throw new Error('US-406 must never write to the archive');
+            }
+        };
+
+        const speech = opts.noVoice ? undefined : {
+            cancel: () => {},
+            speak: (u) => {
+                spoken.push(u);
+                if (opts.neverStarts) { u.onend(); return; }
+                u.onstart();
+                clock += (opts.modelMs || 400) + (spoken.length === 2 ? (opts.secondDelta || 0) : 0);
+                if (!opts.neverEnds) u.onend();
+            }
+        };
+
+        const window_ = {
+            DurationHint: DurationHint,
+            RecordingArchive: Archive,
+            speechSynthesis: speech
+        };
+
+        const names = ['document', 'window', 'Date', 'setTimeout', 'FileReader',
+                       'SpeechSynthesisUtterance', 'AppErrorHandler', 'DurationHint',
+                       'RecordingArchive', 'PRON_RATE_NORMAL'];
+        const body = [
+            fnSource('appendGrammarText'),
+            fnSource('grammarParagraph'),
+            fnSource('pronAudioUsable'),
+            fnSource('pronDurationStatus'),
+            fnSource('pronKeywordIpa'),
+            fnSource('pronDurationTarget'),
+            fnSource('pronTimeModel'),
+            fnSource('pronTimeModelTwice'),
+            fnSource('pronBlobBuffer'),
+            fnSource('pronDurationReport'),
+            fnSource('appendDurationHint'),
+            fnSource('pronMeasureAndCompare'),
+            'const pronParagraph = grammarParagraph;',
+            'const PRON_DURATION_SURFACE = "pron-duration";',
+            'const PRON_MODEL_TIMEOUT_MS = 6000;',
+            'let pronDuration = { word: "", risk: null, learner: null, busy: false };',
+            'let pronCompare = { playing: ' + (opts.comparisonPlaying ? 'true' : 'false') + ' };',
+            'return { append: appendDurationHint, target: pronDurationTarget, ipa: pronKeywordIpa };'
+        ].join('\n\n');
+
+        const Utterance = function (text) { this.text = text; };
+        return new Function(...names, body)(
+            document, window_, { now: () => clock },
+            (fn, ms) => { timeouts.push({ fn: fn, ms: ms }); return timeouts.length; },
+            undefined, Utterance, { logError: () => {} }, DurationHint, Archive, 1
+        );
+    }
+
+    /** A recording of a given voiced length, as the blob the recorder hands over. */
+    function clip(voicedMs, rate) {
+        const sr = rate || 16000;
+        const data = samples([
+            { ms: 250, level: 0 }, { ms: voicedMs, level: 0.5 }, { ms: 400, level: 0 }
+        ], sr);
+        return {
+            size: data.length * 4,
+            arrayBuffer: () => Promise.resolve({
+                byteLength: data.length * 4, _samples: data, _rate: sr
+            })
+        };
+    }
+
+    async function flush() {
+        for (let i = 0; i < 24; i++) await Promise.resolve();
+    }
+
+    function host() {
+        return document.getElementById('durationHost');
+    }
+
+    beforeEach(() => {
+        document.body.innerHTML =
+            '<div id="durationHost"></div><div id="pronCompareStatus"></div>';
+    });
+
+    const resultText = () => document.getElementById('pronDurationResult').textContent;
+    const band = () => document.getElementById('pronDurationResult').getAttribute('data-band');
+    const statusText = () => document.getElementById('pronDurationStatus').textContent;
+
+    /** Record, stop, and let the whole chain settle. */
+    async function run(card, voicedMs, rate) {
+        document.getElementById('pronDurationRecord').click();
+        // The press-to-press number is deliberately absurd: if it ever reaches the
+        // comparison, the assertions on 0.60s below fail.
+        captures[0].handlers.onstop(clip(voicedMs, rate), { durationMs: 99000 });
+        await flush();
+    }
+
+    describe('which pairs it is offered on at all', () => {
+        test('*sheep* / *ship* — one syllable, final consonant — gets the card', () => {
+            const card = build();
+            card.append(host(), pairById('iː-ɪ'));
+            expect(document.getElementById('pronDurationCard')).not.toBeNull();
+            expect(document.getElementById('pronDurationRecord').textContent)
+                .toBe('⏱ Record just "sheep"');
+        });
+
+        test('*zoo* / *Sue* gets NO card, because neither word ends in a consonant', () => {
+            // Not a limitation worked around: an epenthetic vowel follows a final
+            // consonant, and these words have none. A card here would be measuring
+            // something the arithmetic cannot interpret.
+            const card = build();
+            expect(card.append(host(), pairById('z-s'))).toBeNull();
+            expect(document.getElementById('pronDurationCard')).toBeNull();
+            expect(host().textContent).toBe('');
+        });
+
+        test('the IPA comes from the content, and a keyword with none is skipped', () => {
+            const card = build();
+            const vw = pairById('v-w');
+            expect(card.ipa(vw, 'van')).toBe('');            // authored nowhere
+            expect(card.ipa(pairById('iː-ɪ'), 'sheep')).toBe('/ʃiːp/');
+            // So the /v/~/w/ card falls through to the second keyword rather than
+            // guessing *van* from its spelling.
+            expect(card.target(vw).word).toBe('wet');
+        });
+
+        test('every card the real content produces is a one-syllable word', () => {
+            pairs.forEach(pair => {
+                const card = build();
+                const target = card.target(pair);
+                if (!target) return;
+                expect(target.syllables).toBe(1);
+                expect(target.cluster).toBeGreaterThan(0);
+            });
+        });
+    });
+
+    describe('what the learner sees before they record anything', () => {
+        test('the no-recording state is stated, not left as a blank panel', () => {
+            const card = build();
+            card.append(host(), pairById('iː-ɪ'));
+            expect(statusText()).toBe('No recording yet, so there is nothing to compare. ' +
+                'Nothing here is scored and nothing is stored.');
+            expect(document.getElementById('pronDurationResult').hidden).toBe(true);
+        });
+
+        test('it asks for ONE word, and says why not both', () => {
+            const card = build();
+            card.append(host(), pairById('iː-ɪ'));
+            const text = document.getElementById('pronDurationCard').textContent;
+            expect(text).toContain('Record just sheep, once, on its own, with no pause.');
+            expect(text).toContain('the recording above is of two words, and the gap between ' +
+                'them is not part of either one');
+            expect(text).toContain('This clip is measured and then dropped');
+            expect(text).toContain('the recordings above are untouched');
+        });
+
+        test('it says what duration is and is not evidence of, up front', () => {
+            const card = build();
+            card.append(host(), pairById('iː-ɪ'));
+            const text = document.getElementById('pronDurationCard').textContent;
+            expect(text).toContain('It cannot hear whether the vowel is there.');
+            expect(text).toContain('what that is — and is not — evidence of');
+        });
+    });
+
+    describe('the four outcomes, as the learner reads them', () => {
+        test('clearly longer: 0.60s against 0.40s is +50% and consistent with a vowel', async () => {
+            const card = build({ modelMs: 400 });
+            card.append(host(), pairById('iː-ɪ'));
+            await run(card, 600);
+            expect(band()).toBe('consistent');
+            expect(resultText()).toContain('Measured: the model 0.40s, your recording 0.60s.');
+            expect(resultText()).toContain('That is 50% longer');
+            expect(resultText()).toContain('This is consistent with a vowel after the final consonant of sheep.');
+            expect(resultText()).toContain('It is not proof of one:');
+            expect(resultText()).toContain('Press "▶ Model, you, model"');
+            expect(statusText()).toBe('Measured. Nothing has been scored, and nothing about this is stored.');
+        });
+
+        test('slightly longer: +30% is a real difference it will not attribute', async () => {
+            const card = build({ modelMs: 400 });
+            card.append(host(), pairById('iː-ɪ'));
+            await run(card, 520);
+            expect(band()).toBe('unclear');
+            expect(resultText()).toContain('That is 30% longer');
+            expect(resultText()).toContain('not enough to tell an added vowel from simply speaking more slowly');
+        });
+
+        test('the same: +0% is refused as noise', async () => {
+            const card = build({ modelMs: 400 });
+            card.append(host(), pairById('iː-ɪ'));
+            await run(card, 400);
+            expect(band()).toBe('too-small');
+            expect(resultText()).toContain('That is 0% longer');
+            expect(resultText()).toContain('too small to mean anything');
+            expect(resultText()).toContain('Nothing was found here.');
+        });
+
+        test('a difference under the noise floor is refused too', async () => {
+            const card = build({ modelMs: 400 });
+            card.append(host(), pairById('iː-ɪ'));
+            await run(card, 440);      // +10%
+            expect(band()).toBe('too-small');
+            expect(resultText()).toContain('That is 10% longer');
+            expect(resultText()).toContain('too small to mean anything');
+        });
+
+        test('shorter: nothing found, and explicitly not a pass', async () => {
+            const card = build({ modelMs: 400 });
+            card.append(host(), pairById('iː-ɪ'));
+            await run(card, 300);
+            expect(band()).toBe('shorter');
+            expect(resultText()).toContain('Yours was shorter than the model');
+            expect(resultText()).toContain('That does not mean it was right');
+        });
+
+        test('the press-to-press duration never reaches the comparison', async () => {
+            // 99 seconds was handed in as meta.durationMs. What is reported is the
+            // 0.60s voiced span. This is the difference between a hint and a lie.
+            const card = build({ modelMs: 400 });
+            card.append(host(), pairById('iː-ɪ'));
+            await run(card, 600);
+            expect(resultText()).toContain('your recording 0.60s');
+            expect(resultText()).not.toContain('99');
+        });
+    });
+
+    describe('the model duration is measured, never invented', () => {
+        test('the word is spoken twice, at the normal rate, and the longer is kept', async () => {
+            const card = build({ modelMs: 400, secondDelta: 200 });
+            card.append(host(), pairById('iː-ɪ'));
+            await run(card, 900);
+            expect(spoken.map(u => u.text)).toEqual(['sheep', 'sheep']);
+            spoken.forEach(u => expect(u.rate).toBe(1));      // PRON_RATE_NORMAL
+            // 400 and 600 were measured; the longer one is used, which SHRINKS the
+            // ratio (900/600 = +50%, not 900/400 = +125%) and makes the hint less
+            // likely to fire. Every bias in this feature points that way.
+            expect(resultText()).toContain('the model 0.60s');
+            expect(resultText()).toContain('That is 50% longer');
+        });
+
+        test('a voice that never starts is a refusal, not an estimate', async () => {
+            const card = build({ neverStarts: true });
+            card.append(host(), pairById('iː-ɪ'));
+            await run(card, 600);
+            expect(band()).toBe('refused');
+            expect(resultText()).toContain('The phone\'s voice could not be timed this time');
+            expect(resultText()).toContain('The written exercise and the comparison need no measurement');
+            // No number was put on the left of the comparison.
+            expect(resultText()).not.toContain('Measured: the model');
+        });
+
+        test('a voice that never ends times out into the same refusal', async () => {
+            const card = build({ neverEnds: true });
+            card.append(host(), pairById('iː-ɪ'));
+            document.getElementById('pronDurationRecord').click();
+            captures[0].handlers.onstop(clip(600), { durationMs: 99000 });
+            await flush();
+            // The watchdog is the only thing that will finish this, and what it
+            // reports is failure.
+            expect(timeouts.length).toBeGreaterThan(0);
+            expect(timeouts[0].ms).toBe(6000);
+            timeouts[0].fn();
+            await flush();
+            expect(band()).toBe('refused');
+            expect(resultText()).toContain('could not be timed');
+        });
+
+        test('no speech synthesis at all: refused, and the card still stands', async () => {
+            const card = build({ noVoice: true });
+            card.append(host(), pairById('iː-ɪ'));
+            await run(card, 600);
+            expect(band()).toBe('refused');
+            expect(resultText()).toContain('The phone\'s voice could not be timed');
+        });
+
+        test('a clip that cannot be measured does not make the learner sit through two plays', async () => {
+            const card = build({ modelMs: 400 });
+            card.append(host(), pairById('iː-ɪ'));
+            document.getElementById('pronDurationRecord').click();
+            captures[0].handlers.onstop(clip(0), { durationMs: 99000 });   // silence
+            await flush();
+            expect(spoken).toEqual([]);
+            expect(band()).toBe('refused');
+            expect(resultText()).toContain('The recording is silent');
+        });
+    });
+
+    describe('the honest edge cases', () => {
+        test('a pause in the middle is refused with the reason', async () => {
+            const card = build({ modelMs: 400 });
+            card.append(host(), pairById('iː-ɪ'));
+            document.getElementById('pronDurationRecord').click();
+            const data = samples([
+                { ms: 100, level: 0.5 }, { ms: 500, level: 0 }, { ms: 200, level: 0.5 }
+            ], 16000);
+            captures[0].handlers.onstop({
+                size: 400,
+                arrayBuffer: () => Promise.resolve({ byteLength: 400, _samples: data, _rate: 16000 })
+            }, { durationMs: 800 });
+            await flush();
+            expect(band()).toBe('refused');
+            expect(resultText()).toContain('There is a pause in the middle of the recording');
+        });
+
+        test('no microphone: the card explains itself and draws no controls', () => {
+            const card = build({ noMic: true });
+            card.append(host(), pairById('iː-ɪ'));
+            expect(document.getElementById('pronDurationCard')).not.toBeNull();
+            expect(document.getElementById('pronDurationRecord')).toBeNull();
+            expect(document.getElementById('pronDurationCard').textContent).toContain(
+                'this device has no microphone the app can use — so there is no length to compare');
+            expect(document.getElementById('pronDurationCard').textContent).toContain(
+                'Nothing else on this card changes.');
+        });
+
+        test('a refused microphone says so and scores nothing', async () => {
+            const card = build({ micDenied: true });
+            card.append(host(), pairById('iː-ɪ'));
+            document.getElementById('pronDurationRecord').click();
+            await flush();
+            expect(statusText()).toContain('No microphone, so there is no length to measure');
+            expect(statusText()).toContain('the question above needs no recording');
+        });
+
+        test('no Web Audio: the hint is not offered and the card says why', () => {
+            const card = build({ noDecoder: true });
+            card.append(host(), pairById('iː-ɪ'));
+            expect(document.getElementById('pronDurationRecord')).toBeNull();
+            expect(document.getElementById('pronDurationCard').textContent).toContain(
+                'This browser cannot measure the length of a recording');
+            expect(document.getElementById('pronDurationCard').textContent).toContain(
+                'Everything else on this card works.');
+        });
+
+        test('an undecodable blob is a refusal, not a crash', async () => {
+            const card = build({ undecodable: true });
+            card.append(host(), pairById('iː-ɪ'));
+            await run(card, 600);
+            expect(band()).toBe('refused');
+            expect(resultText()).toContain('could not be measured');
+        });
+
+        test('a browser with no Blob.arrayBuffer and no FileReader refuses cleanly', async () => {
+            const card = build({ modelMs: 400 });
+            card.append(host(), pairById('iː-ɪ'));
+            document.getElementById('pronDurationRecord').click();
+            captures[0].handlers.onstop({ size: 100 }, { durationMs: 800 });
+            await flush();
+            expect(band()).toBe('refused');
+            expect(spoken).toEqual([]);
+        });
+
+        test('it will not record over a comparison that is still playing', () => {
+            const card = build({ comparisonPlaying: true });
+            card.append(host(), pairById('iː-ɪ'));
+            document.getElementById('pronDurationRecord').click();
+            expect(captures).toEqual([]);
+            expect(statusText()).toContain('The model-you-model comparison is still playing');
+            expect(statusText()).toContain('otherwise the model ends up inside your recording');
+        });
+
+        test('a device with neither microphone nor Web Audio still gets one sentence', () => {
+            const card = build({ noMic: true, noDecoder: true });
+            expect(() => card.append(host(), pairById('iː-ɪ'))).not.toThrow();
+            expect(document.getElementById('pronDurationCard').textContent).toContain('microphone');
+        });
+    });
+
+    describe('nothing is scored and nothing is stored', () => {
+        test('a full successful run touches the archive not at all', async () => {
+            const card = build({ modelMs: 400 });
+            card.append(host(), pairById('iː-ɪ'));
+            await run(card, 600);
+            // save() throws if called, so an empty log is a proof and not a hope.
+            expect(saveCalls).toEqual([]);
+            // Its own recorder surface, so the A->B->A card's isRecording('pron')
+            // never sees this one.
+            expect(captures[0].surface).toBe('pron-duration');
+        });
+
+        test('it does not write into the comparison\'s status line either', async () => {
+            const card = build({ modelMs: 400 });
+            card.append(host(), pairById('iː-ɪ'));
+            await run(card, 600);
+            expect(document.getElementById('pronCompareStatus').textContent).toBe('');
+        });
+
+        test('the surface names no SRS, no Mistakes, no store and no progress', () => {
+            const region = appSource.slice(
+                appSource.indexOf('// US-406 / FR-PRN-7 — the duration comparison'),
+                appSource.indexOf('// ===== BEGIN DURATION HINT (US-406) ====='));
+            expect(region.length).toBeGreaterThan(2000);
+            const code = codeOnly(region);
+            ['SRS.', 'Mistakes.', 'BlobStore', 'localStorage', 'saveProgress(',
+             'pronRecordAttempt', 'recordItemAttempt', 'updateDueCount',
+             'RecordingArchive.save', 'RecordingArchive.open', 'RecordingArchive.list',
+             'RecordingArchive.render', 'markExerciseComplete', 'awardXP'].forEach(forbidden => {
+                expect(code).not.toContain(forbidden);
+            });
+            // Nor a percentage of its own: every number the learner sees is
+            // computed by DurationHint.verdict().
+            expect(code).not.toMatch(/Math\.round\([^)]*100\)/);
+        });
+
+        test('no result is turned into a colour, a meter or a badge', () => {
+            const css = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
+            const rules = css.slice(css.indexOf('.pron-duration'),
+                                    css.indexOf('/* --- Free production'));
+            expect(rules).toContain('.pron-duration');
+            // A green/amber/red band would be a score drawn in CSS.
+            expect(rules).not.toMatch(/\.pron-duration.*(success|warning|danger|correct|wrong)/);
+            expect(rules).not.toContain('data-band');
+        });
+    });
+
+    describe('what US-404 shipped is untouched', () => {
+        const compare = fnSource('appendPronunciationComparison');
+
+        test('the hint is appended to the comparison card, after its controls', () => {
+            // The LAST call is the one on the normal path, and it comes after the
+            // archive div — so the hint is under a working comparison, never above
+            // it. (The first call is the no-microphone branch, tested below.)
+            const at = compare.lastIndexOf('appendDurationHint(box, pair)');
+            expect(at).toBeGreaterThan(-1);
+            expect(at).toBeGreaterThan(compare.lastIndexOf("archive.id = 'pronCompareArchive'"));
+            expect(at).toBeLessThan(compare.indexOf('refreshPronunciationArchive();'));
+        });
+
+        test('the no-microphone branch gets it too, rather than hiding it', () => {
+            const branch = compare.slice(0, compare.indexOf('const row = document.createElement'));
+            expect(branch).toContain('appendDurationHint(box, pair)');
+        });
+
+        test('A->B->A still plays both models at PRON_RATE_SLOW', () => {
+            const run = fnSource('pronRunComparison');
+            const rates = run.match(/pronSpeakSequence\(words, ([A-Z_]+),/g) || [];
+            expect(rates).toHaveLength(2);
+            rates.forEach(call => expect(call).toContain('PRON_RATE_SLOW'));
+            // And the hint's own timing is the other rate, on purpose: comparing a
+            // 0.6-rate model against natural speech would measure the rate.
+            expect(fnSource('pronTimeModel')).toContain('u.rate = PRON_RATE_NORMAL;');
+            expect(codeOnly(fnSource('pronTimeModel'))).not.toContain('PRON_RATE_SLOW');
+        });
+
+        test('the comparison code knows nothing about the hint beyond calling it', () => {
+            const run = codeOnly(fnSource('pronRunComparison'));
+            expect(run).not.toContain('DurationHint');
+            expect(run).not.toContain('pronDuration');
+            expect(codeOnly(fnSource('pronPlayLearner'))).not.toContain('DurationHint');
+            expect(codeOnly(fnSource('keepPronunciationRecording'))).not.toContain('DurationHint');
+        });
+
+        test('the produce card still ends on the no-score note', () => {
+            const produce = fnSource('renderPronunciationProduce');
+            expect(produce).toContain('Nothing on this screen is scored');
+            const comparison = produce.indexOf('appendPronunciationComparison(host, pair)');
+            expect(produce.indexOf('Nothing on this screen is scored')).toBeGreaterThan(comparison);
+        });
+    });
+});
+

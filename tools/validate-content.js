@@ -93,7 +93,9 @@ const CHECKS = {
     references: 'prerequisites, review.itemIds and the srsType/srsRef/srsKey triple all resolve',
     placeholders: 'no PLACEHOLDER / TODO / FIXME left in shipped content',
     'pronunciation-pairs': 'every pair set carries the fields pronunciationPairs() requires',
-    prosody: 'FR-PRN-8: every prosody item is gradable and requiresImitation is false everywhere'
+    prosody: 'FR-PRN-8: every prosody item is gradable and requiresImitation is false everywhere',
+    'minimal-pair': 'CONTENT_AUTHORING_GUIDE §9.1 rule 2: a minimal pair differs in exactly one IPA segment, and `differsIn` names it',
+    'word-stress': 'stressNumbers has exactly one primary and one entry per syllable, and stressIndex / display / IPA agree with it'
 };
 
 // `showDifferenceOnCorrect` is conditional on `accept.length`, and the
@@ -209,19 +211,31 @@ function loadCorpus(opts) {
 
     const parseErrors = [];
     const sources = {};
-    const run = rel => {
+    /**
+     * @param {string} rel
+     * @param {boolean} [throwIsFatal] false for the files in `files.other`: those
+     *        are strands with no shape checks, and the sandbox is not a browser,
+     *        so a file that legitimately touches `document` at load time would
+     *        fail here for a reason that is not a content defect. A SYNTAX error
+     *        is still fatal — that is unambiguous, and the same thing the
+     *        `syntax` CI job asserts over every tracked file.
+     */
+    const run = (rel, throwIsFatal) => {
         const src = fs.readFileSync(path.join(root, rel), 'utf8');
         sources[rel] = src;
         try {
             new vm.Script(src, { filename: rel });
         } catch (e) {
-            parseErrors.push({ file: rel, message: e.message });
+            parseErrors.push({ file: rel, message: e.message, kind: 'syntax', fatal: true });
             return false;
         }
         try {
             vm.runInContext(src, ctx, { filename: rel });
         } catch (e) {
-            parseErrors.push({ file: rel, message: 'threw while loading: ' + e.message });
+            parseErrors.push({
+                file: rel, message: 'threw while loading: ' + e.message,
+                kind: 'throw', fatal: throwIsFatal !== false
+            });
             return false;
         }
         return true;
@@ -307,12 +321,32 @@ function loadCorpus(opts) {
         });
     });
 
+    // ---- everything else under data/ -----------------------------------
+    // `data.js` and any future strand in `data/`'s root. There are no SHAPE
+    // checks for these — that is still true and still reported as a note — but
+    // they are now LOADED, which is what makes the cross-strand checks
+    // (word-stress, placeholders) discovery-based rather than
+    // pronunciation-only. The reason this matters concretely: word stress was
+    // marked on `vocabularyData` in data.js while this file was being written,
+    // and a checker that only walked data/pronunciation/ would have declared the
+    // corpus clean without ever looking at the 61 items that had just landed.
+    const other = [];           // { file, declaredAs, root }
+    files.other.forEach(rel => {
+        if (!run(rel, false)) return;
+        topLevelConsts(sources[rel]).forEach(name => {
+            const value = lexical(ctx, name);
+            if (!value || typeof value !== 'object') return;
+            other.push({ file: rel, declaredAs: name, root: value });
+        });
+    });
+
     return {
         root: root, files: files, ctx: ctx, sources: sources,
         parseErrors: parseErrors, consoleOutput: consoleOutput,
         Mistakes: Mistakes, SRS: SRS, Levels: Levels,
         grammarLessons: lexical(ctx, 'grammarLessons') || {},
-        points: points, registrations: registrations, pronunciation: pronunciation
+        points: points, registrations: registrations, pronunciation: pronunciation,
+        other: other
     };
 }
 
@@ -439,11 +473,224 @@ function deepFind(obj, key, trail, out) {
     }
     Object.keys(obj).forEach(k => {
         const at = trail ? trail + '.' + k : k;
-        if (k === key) out.push({ path: at, value: obj[k] });
+        if (k === key) out.push({ path: at, value: obj[k], parent: obj });
         deepFind(obj[k], key, at, out);
     });
     return out;
 }
+
+/**
+ * Every plain object under `root`, with its path and its chain of ancestors
+ * (nearest first). Used by the checks that have to ask a question of an object
+ * AND of the object that contains it — e.g. `stressNumbers` lives on a `stress`
+ * sub-object in data.js while the IPA it must agree with sits on the vocabulary
+ * entry one level up. Walking rather than naming paths is what lets those checks
+ * find a shape nobody told this file about.
+ */
+function deepWalk(root, visit) {
+    const seen = new Set();
+    const step = (node, path, ancestors) => {
+        if (!node || typeof node !== 'object') return;
+        if (seen.has(node)) return;
+        seen.add(node);
+        if (Array.isArray(node)) {
+            node.forEach((v, i) => step(v, path + '[' + i + ']', ancestors));
+            return;
+        }
+        visit(node, path, ancestors);
+        const deeper = [node].concat(ancestors);
+        Object.keys(node).forEach(k => step(node[k], path ? path + '.' + k : k, deeper));
+    };
+    step(root, '', []);
+}
+
+// ---------------------------------------------------------------------------
+// IPA segmentation
+// ---------------------------------------------------------------------------
+/*
+ * "A minimal pair differs in exactly one phoneme" (CONTENT_AUTHORING_GUIDE
+ * §9.1 rule 2, and the last checkbox of §10) cannot be checked by diffing
+ * `aIpa` against `bIpa` as strings, and the reason is not subtle: a phoneme is
+ * not a character.
+ *
+ *   /kɒt/ ~ /kəʊt/   3 chars vs 4 — a character diff calls this two changes,
+ *                    and it is the corpus's own ɒ~əʊ contrast, all nine rows.
+ *   /ɔː/ ~ /əʊ/      2 chars vs 2, both differing — a character diff calls it
+ *                    two changes; it is one segment against one segment.
+ *   /tʃ/ ~ /dʒ/      likewise.
+ *   /ʃiːp/ ~ /ʃɪp/   4 vs 3, and `ː` belongs to the vowel before it.
+ *
+ * A checker that rejects those is worse than no checker: it fires on every
+ * correct diphthong pair, so it gets deleted in a week. So the strings are
+ * SEGMENTED first, and the invariant is asserted over segments.
+ *
+ * What the segmenter knows:
+ *   - the multi-character segments English transcription uses: the two
+ *     affricates and the eight diphthongs (IPA_MULTI below);
+ *   - `ː` (and `ˑ`) belong to the vowel in front of them, so `iː` is one
+ *     segment and never `i` + something;
+ *   - combining marks and modifier letters attach to the segment before them —
+ *     dental `d̪`, syllabic `l̩`, aspirated `tʰ`, nasalised `ã`;
+ *   - a tie bar writes an affricate as `t͡ʃ`, which must segment identically to
+ *     `tʃ` or two rows using different conventions would look contrastive;
+ *   - `/ /`, `[ ]`, `.`, spaces and the stress marks `ˈ` `ˌ` are NOT segments;
+ *     they are delimiters and prosody, and a diff must not see them at all.
+ *
+ * What it deliberately does not know: nothing here decides whether a symbol is
+ * a phoneme *of English*. That would be a 44-symbol inventory, i.e. a hardcoded
+ * list of exactly the kind this file refuses to carry (see the header). The
+ * check is "one segment differs", which is answerable without an inventory.
+ */
+const IPA_MULTI = [
+    'tʃ', 'dʒ',                                             // affricates
+    'eɪ', 'aɪ', 'ɔɪ', 'aʊ', 'əʊ', 'oʊ', 'ɪə', 'eə', 'ʊə',   // diphthongs
+    'ɛə', 'ɔə'                                              // older/variant notations of the same two
+].sort((a, b) => b.length - a.length);
+
+// Delimiters and prosody. Checked BEFORE the "attaches to the previous segment"
+// rule, because `ˈ` and `ˌ` are Unicode modifier letters and would otherwise be
+// swallowed by the segment in front of them — /ədˈvaɪz/ would come out with a
+// segment `dˈ` that no other transcription of /d/ could ever equal.
+const IPA_NOT_A_SEGMENT = /[ˈˌ.\s|‖‿/[\]()⁀\-–—'"`]/;
+const IPA_TIE = /[\u0361\u035C\u0362]/;                    // the tie bar in t͡ʃ / d͡ʒ
+const IPA_ATTACHES = /[\p{Mn}\p{Me}\p{Lm}\p{Sk}]/u;         // ː ˑ ʰ ʲ ʷ ̪ ̩ ̃ …
+const IPA_VOWEL = /[iɪyʏeɛøœæaɶɑɒɔoʊuʉɯɤʌɜɞəɐɚɝɨ]/;
+const IPA_SONORANT = /^[lmnrŋɱɲɳʎʁɹɻjw]/;                   // may not license a syllabic neighbour
+const IPA_SYLLABIC_MARK = /[\u0329\u030D]/;                 // an explicitly syllabic l / n
+
+/** Typographic variants that are the same phoneme written two ways. */
+function normaliseIpa(s) {
+    return String(s == null ? '' : s)
+        .normalize('NFC')
+        .replace(/:/g, 'ː')        // ASCII colon used as a length mark
+        .replace(/g/g, 'ɡ')        // ASCII g for U+0261
+        .replace(/ɹ/g, 'r');       // narrow vs broad transcription of English /r/
+}
+
+/**
+ * Split an IPA string into phoneme-sized segments.
+ * @param {string} input  with or without `/ /` or `[ ]`, stress marks and all.
+ * @returns {string[]}
+ */
+function segmentIpa(input) {
+    const str = normaliseIpa(input);
+    const segs = [];
+    let i = 0;
+    while (i < str.length) {
+        if (IPA_NOT_A_SEGMENT.test(str[i]) || IPA_TIE.test(str[i])) { i++; continue; }
+        let seg = null;
+        for (let k = 0; k < IPA_MULTI.length; k++) {
+            if (str.startsWith(IPA_MULTI[k], i)) { seg = IPA_MULTI[k]; break; }
+        }
+        if (seg === null) seg = str[i];
+        i += seg.length;
+        for (;;) {
+            if (i < str.length && IPA_TIE.test(str[i])) {
+                // A tie bar pulls the next base letter into this segment.
+                seg += str[i];
+                i++;
+                if (i < str.length && !IPA_NOT_A_SEGMENT.test(str[i])) { seg += str[i]; i++; }
+                continue;
+            }
+            if (i < str.length && IPA_ATTACHES.test(str[i]) && !IPA_NOT_A_SEGMENT.test(str[i])) {
+                seg += str[i];
+                i++;
+                continue;
+            }
+            break;
+        }
+        // `t͡ʃ` and `tʃ` are the same segment, so the tie itself is not part of it.
+        segs.push(seg.replace(new RegExp(IPA_TIE.source, 'g'), ''));
+    }
+    return segs;
+}
+
+/**
+ * Which segments are syllable nuclei. A vowel always is. A liquid or nasal is
+ * one when it carries the syllabic diacritic, or when it stands where no vowel
+ * can be reached: preceded by an OBSTRUENT and not followed by a vowel —
+ * /ˈkʌmftəbl/ is three syllables, /ˈhɒspɪtl/ three, /ɪmˈpɔːtnt/ three.
+ * "preceded by an obstruent" and not merely "by a consonant" is what keeps
+ * /fɪlm/ at one syllable rather than two.
+ */
+function ipaNuclei(segs) {
+    return segs.map((seg, i) => {
+        if (IPA_VOWEL.test(seg[0])) return true;
+        if (IPA_SYLLABIC_MARK.test(seg)) return true;
+        if (!IPA_SONORANT.test(seg)) return false;
+        const prev = segs[i - 1];
+        const next = segs[i + 1];
+        if (!prev || IPA_VOWEL.test(prev[0]) || IPA_SONORANT.test(prev)) return false;
+        return !next || !IPA_VOWEL.test(next[0]);
+    });
+}
+
+/** How many syllables the transcription has. */
+function ipaSyllableCount(input) {
+    return ipaNuclei(segmentIpa(input)).filter(Boolean).length;
+}
+
+/**
+ * The 0-based syllable the primary stress mark falls on: the number of nuclei
+ * before `ˈ`. null when there is no primary mark to read.
+ */
+function ipaPrimaryStressSyllable(input) {
+    const str = normaliseIpa(input);
+    const at = str.indexOf('ˈ');
+    if (at === -1) return null;
+    return ipaSyllableCount(str.slice(0, at));
+}
+
+/**
+ * Compare two transcriptions segment by segment.
+ *
+ * "Differs in exactly one phoneme" is not only substitution. *eat* and *heat*
+ * differ by the presence of one segment, and h-dropping is a real Telugu-L1
+ * interference, so a pair authored that way must not be rejected as "differs in
+ * two things" merely because the two strings have different lengths. So the
+ * comparison recognises three one-segment differences and nothing else:
+ *
+ *   substitute  same length, exactly one position differs
+ *   insert      `b` has one segment `a` does not, everything else aligns
+ *   delete      the mirror of insert
+ *
+ * @returns {{a, b, kind, positions, count, segment, sameLength}}
+ *   kind     'substitute' | 'insert' | 'delete' | 'unaligned'
+ *   count    how many one-segment operations it took; anything but 1 fails
+ *   segment  for insert/delete, the segment that is present on one side only
+ */
+function compareIpa(aIpa, bIpa) {
+    const a = segmentIpa(aIpa);
+    const b = segmentIpa(bIpa);
+    const base = { a: a, b: b, sameLength: a.length === b.length, segment: null };
+
+    if (a.length === b.length) {
+        const positions = [];
+        a.forEach((seg, i) => { if (seg !== b[i]) positions.push(i); });
+        return Object.assign(base, { kind: 'substitute', positions: positions, count: positions.length });
+    }
+    const shorter = a.length < b.length ? a : b;
+    const longer = a.length < b.length ? b : a;
+    if (longer.length - shorter.length !== 1) {
+        return Object.assign(base, { kind: 'unaligned', positions: [], count: Infinity });
+    }
+    let i = 0;
+    while (i < shorter.length && shorter[i] === longer[i]) i++;
+    for (let k = i; k < shorter.length; k++) {
+        if (shorter[k] !== longer[k + 1]) {
+            return Object.assign(base, { kind: 'unaligned', positions: [], count: Infinity });
+        }
+    }
+    return Object.assign(base, {
+        kind: a.length < b.length ? 'insert' : 'delete',
+        positions: [i], count: 1, segment: longer[i]
+    });
+}
+
+/** Notations authors use for "and nothing on this side". */
+const IPA_ZERO = ['∅', 'ø', '-', '–', '—', '0', 'none', 'nothing', ''];
+
+
 
 // ---------------------------------------------------------------------------
 // validate()
@@ -463,20 +710,41 @@ function validate(opts) {
     const note = (check, file, where, message) => add('note', check, file, where, message);
 
     const { Mistakes, SRS, Levels, points, registrations, pronunciation, files, sources } = corpus;
+    const other = corpus.other || [];
 
     // --- parse ----------------------------------------------------------
-    corpus.parseErrors.forEach(p => err('parse', p.file, null, p.message));
+    // A `throw` while loading is fatal for grammar and pronunciation (those files
+    // are pure data and the browser runs them the same way) and a NOTE for the
+    // other strands, where the sandbox's lack of a DOM is a plausible innocent
+    // cause. A SYNTAX error is fatal everywhere.
+    corpus.parseErrors.forEach(p => {
+        if (p.fatal === false) {
+            note('parse', p.file, null,
+                 p.message + ' — reported and not failed because this file is not grammar or ' +
+                 'pronunciation content and the vm sandbox is not a browser, so a load-time ' +
+                 'reference to document/localStorage would fail here innocently. The consequence ' +
+                 'is real, though: nothing inside this file was seen by any check.');
+        } else {
+            err('parse', p.file, null, p.message);
+        }
+    });
 
     // A content file that warns while merely loading is telling us something.
     corpus.consoleOutput.filter(o => o.level === 'warn' || o.level === 'error').forEach(o => {
         note('parse', '(load)', null, 'console.' + o.level + ' during load: ' + o.text);
     });
 
-    // Any data/ file that is neither grammar nor pronunciation is a strand this
-    // validator has no checks for. Say so rather than passing it silently.
+    // Any data/ file that is neither grammar nor pronunciation is a strand with
+    // no SHAPE checks. It IS loaded and it IS walked by the cross-strand checks
+    // (word-stress, minimal-pair, placeholders), so this note is narrower than it
+    // used to be — but it is still a note, because nothing here knows what a
+    // valid vocabulary entry or reading passage looks like.
     files.other.forEach(rel => {
+        const roots = other.filter(o => o.file === rel).map(o => o.declaredAs);
         note('parse', rel, null,
-             'discovered but not validated: no checks exist for this file yet. ' +
+             'no shape checks exist for this strand. It is loaded (' +
+             (roots.length ? roots.length + ' top-level object(s): ' + roots.join(', ') : 'no top-level objects found') +
+             ') and the cross-strand checks walk it, but nothing validates the shape of its items. ' +
              'If it is a new content strand, teach this script its shape.');
     });
 
@@ -939,6 +1207,287 @@ function validate(opts) {
         });
     });
 
+    // --- minimal-pair ---------------------------------------------------
+    // CONTENT_AUTHORING_GUIDE §9.1 rule 2 and §10's last pronunciation checkbox:
+    // "every `minimalPairs` row has both members transcribed and differs in
+    // exactly one phoneme, named in `differsIn` — check the vowels, that is
+    // where the trap is." The guide's own rejection table is the defect class:
+    // *laugh/lap*, *path/part*, *bath/bat*, *lather/ladder* and *caught/coat*
+    // were all proposed, all look like clean consonant contrasts, and all differ
+    // in the vowel as well. A pair that differs in two places does not isolate
+    // the feature the drill trains, so a learner who gets it wrong learns
+    // nothing about why — and the drill's own "the difference is X" feedback is
+    // then false.
+    //
+    // Found by walking for the key rather than by reading `root.pairs`, so a set
+    // authored under a new shape is checked without this file knowing the shape.
+    //
+    // `everyRoot` is every object tree that was loaded, grammar included. Not
+    // because a grammar point carries minimal pairs today — none does — but
+    // because "where would an author put this next?" is not a question this file
+    // gets to answer, and the two checks below cost nothing on a tree that has
+    // neither key.
+    const everyRoot = pronunciation.concat(other).concat(
+        points.filter(p => p.point).map(p => ({
+            file: p.file, declaredAs: p.declaredAs || p.point.id, root: p.point
+        })));
+
+    let minimalPairRows = 0;
+    everyRoot.forEach(({ file, declaredAs, root }) => {
+        deepFind(root, 'minimalPairs').forEach(hit => {
+            if (!Array.isArray(hit.value)) {
+                err('minimal-pair', file, declaredAs + '.' + hit.path,
+                    '`minimalPairs` is ' + JSON.stringify(hit.value) + ', not an array');
+                return;
+            }
+            const set = hit.parent || {};
+            // The two phonemes the SET claims to contrast, so a row can be
+            // caught training a different contrast from the one it sits under.
+            const claimed = (Array.isArray(set.phonemes) ? set.phonemes : [])
+                .map(p => String(p && p.symbol || '').replace(/[/[\]]/g, ''))
+                .filter(Boolean);
+
+            hit.value.forEach((row, i) => {
+                minimalPairRows++;
+                const where = declaredAs + '.' + hit.path + '[' + i + '] ' +
+                              ((row && row.a) || '?') + '/' + ((row && row.b) || '?');
+                if (!row || typeof row !== 'object') {
+                    err('minimal-pair', file, where, 'null or non-object minimalPairs row');
+                    return;
+                }
+                const missing = ['a', 'b', 'aIpa', 'bIpa', 'differsIn'].filter(k => !nonEmptyString(row[k]));
+                if (missing.length) {
+                    err('minimal-pair', file, where,
+                        'missing ' + missing.map(k => '`' + k + '`').join(', ') + '. Both members must be ' +
+                        'transcribed and the differing segment named, or the "differs in exactly one ' +
+                        'phoneme" invariant cannot be stated, let alone checked — and the drill\'s ' +
+                        '"the difference is X" feedback has nothing truthful to say.');
+                    return;
+                }
+
+                const cmp = compareIpa(row.aIpa, row.bIpa);
+                const segs = JSON.stringify(cmp.a) + ' vs ' + JSON.stringify(cmp.b);
+                if (cmp.kind === 'unaligned') {
+                    err('minimal-pair', file, where,
+                        row.aIpa + ' segments into ' + cmp.a.length + ' phoneme(s) and ' + row.bIpa +
+                        ' into ' + cmp.b.length + ' — ' + segs + ' — and they do not align on any single ' +
+                        'added or dropped segment either. §9.1 rule 2: a minimal pair differs in EXACTLY ' +
+                        'ONE phoneme. Two words differing in two things do not isolate the feature the ' +
+                        'drill trains, so a learner who gets it wrong learns nothing about why.');
+                    return;
+                }
+                if (cmp.count !== 1) {
+                    err('minimal-pair', file, where,
+                        row.aIpa + ' ~ ' + row.bIpa + ' differ in ' + cmp.count +
+                        ' segment position(s) (' +
+                        cmp.positions.map(p => p + ': ' + cmp.a[p] + '/' + cmp.b[p]).join(', ') +
+                        ') — ' + segs + '. §9.1 rule 2: a minimal pair differs in EXACTLY ONE phoneme, ' +
+                        'and the trap is the vowel (the guide rejected laugh/lap, path/part, bath/bat, ' +
+                        'lather/ladder and caught/coat for exactly this). Record it in the set\'s ' +
+                        '`caveats` with its reason rather than deleting it silently.');
+                    return;
+                }
+
+                // Exactly one segment differs. Now: does `differsIn` say so?
+                const at = cmp.positions[0];
+                const observed = cmp.kind === 'substitute' ? [cmp.a[at], cmp.b[at]]
+                               : cmp.kind === 'insert' ? ['∅', cmp.segment]
+                               : [cmp.segment, '∅'];
+                const named = String(row.differsIn).split(/\s*(?:\/|~|vs\.?)\s*/);
+                const zeroish = s => IPA_ZERO.indexOf(String(s).trim().toLowerCase()) !== -1;
+                const namesIt = named.length === 2 &&
+                    named.every((s, k) => s === observed[k] ||
+                                          (observed[k] === '∅' && zeroish(s)));
+                if (named.filter(s => s !== '').length !== 2 && cmp.kind === 'substitute') {
+                    note('minimal-pair', file, where,
+                         '`differsIn` is ' + JSON.stringify(row.differsIn) + ', which does not read as ' +
+                         'two segments separated by "/". The pair itself is fine — it differs in exactly ' +
+                         'one segment, ' + observed.join('/') + ' — so this is reported and not failed, ' +
+                         'but the field is the one the drill quotes back to the learner.');
+                } else if (!namesIt && cmp.kind !== 'substitute') {
+                    note('minimal-pair', file, where,
+                         'differs by one ' + (cmp.kind === 'insert' ? 'added' : 'dropped') + ' segment ' +
+                         cmp.segment + ' (' + segs + '), which satisfies §9.1 rule 2 — an h-dropping or ' +
+                         'cluster-reduction pair is a one-phoneme difference. Reported and not failed ' +
+                         'because `differsIn` reads ' + JSON.stringify(row.differsIn) + ' and this repo has ' +
+                         'no settled notation for "and nothing on the other side"; pick one and use it ' +
+                         'everywhere.');
+                } else if (!namesIt) {
+                    err('minimal-pair', file, where,
+                        '`differsIn` says ' + JSON.stringify(row.differsIn) + ' but the segment that ' +
+                        'actually differs is ' + observed[0] + '/' + observed[1] + ' (position ' + at +
+                        ' of ' + segs + '). The drill names `differsIn` to the learner after a miss, so a ' +
+                        'wrong value teaches the wrong contrast on the one screen where the learner is ' +
+                        'paying most attention.');
+                }
+                if (cmp.kind !== 'substitute') return;   // the set's `phonemes` are two sounds
+                if (claimed.length === 2 && observed.indexOf(claimed[0]) === -1 &&
+                    observed.indexOf(claimed[1]) === -1) {
+                    err('minimal-pair', file, where,
+                        'contrasts ' + observed.join('/') + ', but the set it sits in is the ' +
+                        claimed.join('/') + ' set (from its own `phonemes`). Every row of a set must ' +
+                        'train that set\'s contrast: the whole set shares one SRS key and one ' +
+                        'articulatoryCue, so a row training a different pair of sounds is scored and ' +
+                        'explained as if it were this one.');
+                } else if (claimed.length === 2 &&
+                           (observed[0] !== claimed[0] || observed[1] !== claimed[1]) &&
+                           observed.indexOf(claimed[0]) !== -1 && observed.indexOf(claimed[1]) !== -1) {
+                    note('minimal-pair', file, where,
+                         'is oriented ' + observed.join('/') + ' while the set\'s `phonemes` are listed ' +
+                         claimed.join('/') + '. Reported and not failed — a flipped row is still a valid ' +
+                         'minimal pair for the same contrast — but every other row in the corpus puts ' +
+                         'the set\'s first phoneme in `a`, and the drill\'s A/B labelling reads off `a`.');
+                }
+            });
+        });
+    });
+
+    // --- word-stress ----------------------------------------------------
+    // `stressNumbers` is the canonical marking (CONTENT_AUTHORING_GUIDE §9.4):
+    // one number per syllable, `1` primary / `2` secondary / `0` unstressed,
+    // exactly one `1` per word, and `stressNumbers.length === syllables.length`.
+    // `stressIndex` and `display` are DENORMALISED from it — app.js:4004 and
+    // renderStressWord() draw the beat from `stressNumbers` and never parse
+    // `display` — so when they disagree the app marks one syllable and prints
+    // another, and the learner is being taught two different words.
+    //
+    // Deliberately found by walking every loaded root for the key, not by
+    // reading `pronunciation[].stress`. That is not neatness: while this check
+    // was being written, word stress was being marked on `vocabularyData` in
+    // data.js, on a `stress` sub-object of a shape this file has no schema for.
+    // A path-based version would have reported the 21 items in vowels-stress.js
+    // as the whole corpus and called it clean.
+    let stressMarked = 0;
+    const ipaNear = (obj, ancestors) => {
+        const chain = [obj].concat(ancestors);
+        for (let i = 0; i < chain.length; i++) {
+            const from = ['ipa', 'pronunciation', 'phonetic'];
+            for (let k = 0; k < from.length; k++) {
+                if (nonEmptyString(chain[i][from[k]])) {
+                    return { ipa: chain[i][from[k]], field: from[k], level: i };
+                }
+            }
+        }
+        return null;
+    };
+
+    everyRoot.forEach(({ file, declaredAs, root }) => {
+        deepWalk(root, (obj, path, ancestors) => {
+            if (!Object.prototype.hasOwnProperty.call(obj, 'stressNumbers')) return;            stressMarked++;
+            const label = (obj.id || obj.word ||
+                           (ancestors[0] && (ancestors[0].id || ancestors[0].word)) || path);
+            const where = declaredAs + '.' + path + ' ' + label;
+            const n = obj.stressNumbers;
+
+            if (!nonEmptyArray(n) || !n.every(x => typeof x === 'number')) {
+                err('word-stress', file, where,
+                    '`stressNumbers` is ' + JSON.stringify(n) + '; it must be a non-empty array of ' +
+                    'numbers, one per syllable. app.js:11908 warns and draws no beat at all when it is ' +
+                    'missing or empty, so the item renders as a word with no stress marked.');
+                return;
+            }
+            const bad = n.filter(x => x !== 0 && x !== 1 && x !== 2);
+            if (bad.length) {
+                err('word-stress', file, where,
+                    '`stressNumbers` contains ' + JSON.stringify(bad) + '. The convention is ' +
+                    'ARPAbet/CMUdict: 1 primary, 2 secondary, 0 unstressed, and renderStressWord() ' +
+                    'has a branch for those three and nothing else.');
+            }
+            const primaries = n.reduce((acc, x, i) => (x === 1 ? acc.concat(i) : acc), []);
+            if (primaries.length !== 1) {
+                err('word-stress', file, where,
+                    '`stressNumbers` ' + JSON.stringify(n) + ' has ' + primaries.length +
+                    ' primary (1) mark(s). An English word has exactly one primary stress: with none ' +
+                    'the drill has no correct answer to mark, and with two it has two, so a learner ' +
+                    'answering correctly is told they are wrong.');
+            }
+            const primary = primaries.length === 1 ? primaries[0] : n.indexOf(1);
+
+            const syl = obj.syllables;
+            if (nonEmptyArray(syl) && syl.length !== n.length) {
+                err('word-stress', file, where,
+                    '`syllables` has ' + syl.length + ' entries (' + JSON.stringify(syl) +
+                    ') but `stressNumbers` has ' + n.length + ' (' + JSON.stringify(n) +
+                    '). They are one number per syllable by definition; renderStressWord() zips them, ' +
+                    'so the shorter one decides how much of the word is drawn and the rest is dropped ' +
+                    'or drawn unmarked.');
+            } else if (!nonEmptyArray(syl)) {
+                note('word-stress', file, where,
+                     'is stress-marked but carries no `syllables` array, so the one-number-per-syllable ' +
+                     'invariant cannot be checked against anything and a renderer has nothing to attach ' +
+                     'the marks to.');
+            }
+
+            if (obj.stressIndex !== undefined && obj.stressIndex !== primary) {
+                err('word-stress', file, where,
+                    '`stressIndex` is ' + JSON.stringify(obj.stressIndex) + ' but `stressNumbers` ' +
+                    JSON.stringify(n) + ' puts the primary at ' + primary + '. §9.4: stressIndex is ' +
+                    'DENORMALISED from stressNumbers so a renderer never has to scan — a denormalised ' +
+                    'field that disagrees with its source is a lie in whichever of the two the next ' +
+                    'reader happens to trust, and for `choose-stress` drills the options are the ' +
+                    'syllables themselves, so correctIndex === stressIndex marks the wrong one.');
+            }
+            if (obj.drill && obj.drill.mode === 'choose-stress' &&
+                typeof obj.drill.correctIndex === 'number' && obj.drill.correctIndex !== primary) {
+                err('word-stress', file, where,
+                    "drill.mode is 'choose-stress' with correctIndex " + obj.drill.correctIndex +
+                    ' but the primary stress is on syllable ' + primary + '. §9.4: for this mode the ' +
+                    'options ARE the syllables, so the drill marks the learner wrong for picking the ' +
+                    'syllable the rest of the item says is stressed.');
+            }
+
+            if (nonEmptyString(obj.display)) {
+                const parts = String(obj.display).split(/[\s·•.|/-]+/).filter(s => s !== '');
+                const shouted = parts.reduce((acc, s, i) =>
+                    (/[A-Z]/.test(s) && s === s.toUpperCase() ? acc.concat(i) : acc), []);
+                if (parts.length !== n.length) {
+                    note('word-stress', file, where,
+                         '`display` ' + JSON.stringify(obj.display) + ' splits into ' + parts.length +
+                         ' part(s) against ' + n.length + ' syllable(s). Reported and not failed: ' +
+                         '`display` is display-only (§9.4, "never parse it") and its separator ' +
+                         'convention is not fixed anywhere, so this may be a hyphenation choice rather ' +
+                         'than a defect. Worth a look all the same.');
+                } else if (shouted.length !== 1 || shouted[0] !== primary) {
+                    err('word-stress', file, where,
+                        '`display` ' + JSON.stringify(obj.display) + ' capitalises syllable(s) ' +
+                        JSON.stringify(shouted) + ' but the primary stress is on ' + primary +
+                        '. `display` is the only stress marking a learner actually reads, so when it ' +
+                        'disagrees with `stressNumbers` the page marks one beat and prints another.');
+                }
+            }
+
+            const near = ipaNear(obj, ancestors);
+            if (near) {
+                const marked = ipaPrimaryStressSyllable(near.ipa);
+                if (marked === null && n.length > 1) {
+                    err('word-stress', file, where,
+                        '`' + near.field + '` is ' + near.ipa + ', which carries no primary stress mark ' +
+                        '(`ˈ`) although the word has ' + n.length + ' syllables. §10: stress is marked ' +
+                        'on all multi-syllable words — and this item asserts a stress pattern, so the ' +
+                        'transcription printed beside it has to agree rather than stay silent.');
+                } else if (marked !== null && marked !== primary) {
+                    err('word-stress', file, where,
+                        '`' + near.field + '` is ' + near.ipa + ', whose `ˈ` falls after ' + marked +
+                        ' syllable(s), but `stressNumbers` ' + JSON.stringify(n) + ' puts the primary ' +
+                        'on syllable ' + primary + '. The IPA and the marked-up syllables are two ' +
+                        'renderings of one fact and they disagree, so one of the two is teaching the ' +
+                        'wrong word.');
+                }
+                const counted = ipaSyllableCount(near.ipa);
+                if (counted !== n.length) {
+                    note('word-stress', file, where,
+                         '`' + near.field + '` ' + near.ipa + ' segments to ' + counted +
+                         ' syllable nucleus/nuclei against ' + n.length + ' marked syllable(s). ' +
+                         'Reported and not failed on purpose: counting nuclei needs a judgement about ' +
+                         'syllabic consonants (/ˈkʌmftəbl/, /ˈhɒspɪtl/) and about whether /aɪə/ in ' +
+                         '*quiet* or *fire* is one syllable or two, and English speakers differ. The ' +
+                         'primary-stress position above does not need that judgement, which is why ' +
+                         'that one fails and this one only asks.');
+                }
+            }
+        });
+    });
+
     // ---------------------------------------------------------------------
     const errors = findings.filter(f => f.severity === 'error');
     const notes = findings.filter(f => f.severity === 'note');
@@ -961,6 +1510,9 @@ function validate(opts) {
             pairSets: pronunciation.reduce((n, x) => n + ((x.root.pairs || []).length), 0),
             stressItems: pronunciation.reduce((n, x) => n + ((x.root.stress || []).length), 0),
             noticingItems: pronunciation.reduce((n, x) => n + ((x.root.noticing || []).length), 0),
+            otherRoots: other.length,
+            minimalPairRows: minimalPairRows,
+            stressMarkedItems: stressMarked,
             categoryRefs: refs.length,
             errors: errors.length,
             notes: notes.length
@@ -984,6 +1536,9 @@ function formatReport(result) {
            s.practiceItems + ' practice items, ' + s.pairSets + ' pair set(s), ' +
            s.stressItems + ' stress item(s), ' + s.noticingItems + ' prosody item(s), ' +
            s.categoryRefs + ' mistake-category reference(s).');
+    L.push('Cross-strand: ' + s.minimalPairRows + ' minimal-pair row(s) segmented, ' +
+           s.stressMarkedItems + ' stress-marked item(s) checked across ' +
+           (s.pronunciationRoots + s.otherRoots) + ' loaded root(s).');
     L.push('');
 
     const validatedFiles = result.corpus.files.all.slice();
@@ -1059,6 +1614,12 @@ module.exports = {
     collectShapes: collectShapes,
     declaredOptional: declaredOptional,
     expectedShape: expectedShape,
+    deepFind: deepFind,
+    deepWalk: deepWalk,
+    segmentIpa: segmentIpa,
+    compareIpa: compareIpa,
+    ipaSyllableCount: ipaSyllableCount,
+    ipaPrimaryStressSyllable: ipaPrimaryStressSyllable,
     validate: validate,
     formatReport: formatReport
 };

@@ -200,7 +200,20 @@
     // content), `lsn.gist` (the listening section asks no comprehension question)
     // and `rdw.inference` (comprehension questions carry no type metadata, so
     // logging every wrong answer as "needed reading between the lines" would be a
-    // false claim). That sentence is a DATED OBSERVATION and is written as one; the
+    // false claim).
+    //
+    // IT IS THREE NOW, which is exactly why the sentence above is dated rather
+    // than stated as a standing fact. `vocab.collocation` gained producers in
+    // CONTENT, not in app.js: US-225 (prepositions.js) routes its arbitrary
+    // collocations there rather than to a grammar row, so a learner who writes
+    // "good in maths" is not told they have a grammar gap; US-244
+    // (gerund-infinitive.js) does the same for "enjoy to read". That is 14 `logAs`
+    // sites across the two files, and no code in this module or in app.js changed
+    // to make it happen — which is the argument for why "does anything produce
+    // this?" cannot be a field here. The row still has no drill DESTINATION, which
+    // is a separate fact and remains true.
+    //
+    // That sentence is a DATED OBSERVATION and is written as one; the
     // live answer is in app.js, beside the code that would have to change —
     // mistakeDrillDestinations(), recordVocabMistake() and
     // comprehensionMistakeCategory() each say which id they do not produce and why.

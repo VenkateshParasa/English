@@ -1604,8 +1604,10 @@ async function fetchWordData(word) {
     // first, and a timing-out request cost 3 attempts x a 5s timeout plus 1s and
     // 2s of backoff before the local fallback ran. "Happy" — data.js's very first
     // foundation word — sat behind a spinner for eighteen seconds on flaky mobile
-    // data, which is precisely what NFR-8 forbids: the dictionary API is
-    // enhancement-only and its failure must never block an exercise.
+    // data, which is precisely what CON-6 forbids: `api.dictionaryapi.dev` is the
+    // one optional API, enhancement only, and "its failure must never block an
+    // exercise". (CON-6, not NFR-8 — NFR-8 is service-worker media caching. The
+    // first version of this comment cited NFR-8 and was wrong.)
     //
     // Serving curated directly is not a degraded path, it is the better one. A
     // curated entry carries an authored `quiz` with hand-written distractors and
@@ -1656,6 +1658,12 @@ async function fetchWordData(word) {
 }
 
 function parseAPIResponse(apiData) {
+    // US-408. This response was already paid for, and it carries
+    // `phonetics[].audio`. Taking the clip here means the enrichment costs a
+    // non-curated word nothing extra — see WordAudio.offer(). It cannot fail
+    // loudly: offer() validates the origin and stores null when there is nothing.
+    if (window.WordAudio) WordAudio.offer(apiData);
+
     const meaning = apiData.meanings[0];
     const definition = meaning.definitions[0];
     const correctDefinition = definition.definition;
@@ -1677,6 +1685,481 @@ function getLocalWordData(word) {
     const localWords = vocabularyData[state.currentDifficulty] || vocabularyData[DEFAULT_LEVEL];
     return localWords.find(w => w.word.toLowerCase() === word.toLowerCase()) ||
            localWords[state.currentWordIndex % localWords.length];
+}
+
+// ===== BEGIN WORD AUDIO (US-408) =====
+/**
+ * WordAudio — a recording of a person saying one word, when there is one.
+ * ===========================================================================
+ *
+ * WHAT THIS IS FOR. `api.dictionaryapi.dev` entries carry `phonetics[].audio`:
+ * short clips of a human saying the headword. For a single word that is a better
+ * model than a synthesiser, and NFR-8/`FR-CNT-5` (US-408) ask for it. TTS models
+ * a word by rule; a recording IS the word.
+ *
+ * ---------------------------------------------------------------------------
+ * PRECEDENCE. THIS IS THE WHOLE STORY, AND IT IS NOT "THE CLIP IS BETTER".
+ * ---------------------------------------------------------------------------
+ *
+ * Days before this was written, the vocabulary section hung for EIGHTEEN SECONDS
+ * on the word "Happy" because it asked this same API first for a word already
+ * authored in data.js, behind 3 attempts × a 5s timeout plus backoff (`US-245`,
+ * `I-13` — the first defect in this repo reported from production rather than
+ * found by reading). The lesson is not "use a shorter timeout". It is that
+ * `CON-6` — one optional API, enhancement only, *"its failure must never block
+ * an exercise"* — is broken by WAITING, and a pending fetch is
+ * indistinguishable from a failed one while you are still inside it.
+ *
+ * So the precedence here is deliberately NOT by quality. It is by availability:
+ *
+ *     playModel() plays whichever model is ALREADY IN HAND, preferring the clip.
+ *     Nothing is ever in hand BECAUSE of the press.
+ *
+ * TTS is the unconditional path. It needs no network, works offline (`NFR-4`),
+ * is already what every other model button in the app uses, and is never
+ * removed, delayed, disabled or relabelled by anything in this module. The clip
+ * is strictly additive: it is looked up in the background AFTER the card is
+ * already rendered and already answerable, and it changes what a press does only
+ * once it is sitting in a variable.
+ *
+ * THE SLOW CONNECTION — the case that caused `US-245`, spelled out.
+ *   - No control is ever owned by the lookup. `#wordAudioNative` starts `hidden`
+ *     and is REVEALED by a clip arriving; it is never shown-and-disabled and
+ *     never shows a spinner. There is nothing on screen for a pending fetch to
+ *     hold, which is a stronger guarantee than a short timeout: pending is not
+ *     merely brief, it is INVISIBLE.
+ *   - Nothing awaits it. lookup() returns `undefined` on purpose so that no
+ *     caller can accidentally make it blocking, and its only output is a
+ *     callback. The vocabulary loader calls it and immediately returns.
+ *   - It is bounded twice over: `AbortSignal.timeout` where the browser has it,
+ *     AND a wall-clock deadline that does not depend on that existing. After the
+ *     deadline the answer is DISCARDED even if it eventually arrives, so the
+ *     screen cannot rearrange itself under a learner who has moved on.
+ *   - One attempt. No retry ladder (`retryWithBackoff` is right for a resource
+ *     you need; for an enrichment it only converts a fast failure into a slow
+ *     one — `US-245` again).
+ *   - A timeout is NOT memoised as "no clip". An error is, for this session: a
+ *     404 means this word has no recording, a hang means we still do not know,
+ *     and conflating them would either re-hammer a dead word or permanently
+ *     silence a live one.
+ *
+ * ---------------------------------------------------------------------------
+ * ONE ORIGIN, ENFORCED HERE AND NOT ONLY IN THE CSP
+ * ---------------------------------------------------------------------------
+ * `phonetics[].audio` is NOT always on the API's own origin: dictionaryapi.dev
+ * also returns clips hosted on `ssl.gstatic.com`, and protocol-relative
+ * `//host/path` URLs. `CON-6` allows exactly ONE optional API, so a clip is
+ * accepted only when it parses to exactly `https://api.dictionaryapi.dev` —
+ * every other host is refused, in code, by apiAudioUrl(). index.html's
+ * `media-src` says the same thing; neither is trusted to be the only guard,
+ * because a CSP violation is a console message and a silent dead button, while
+ * this is a decision with a reason attached.
+ *
+ * A word whose only clip is on gstatic therefore has no clip, and stays on TTS.
+ * That is a smaller loss than making "one optional API" untrue.
+ *
+ * ---------------------------------------------------------------------------
+ * FR-CNT-5 — ATTRIBUTION
+ * ---------------------------------------------------------------------------
+ * *"CC BY-SA sources (dictionary entries, audio clips) are credited with licence
+ * and source URL."* creditFor() builds that line from what the API actually
+ * sends (`phonetics[].license` / `.sourceUrl`, falling back to the entry's
+ * `license` / `sourceUrls`) and NEVER invents a licence name: if the API states
+ * none, the credit says the source and says the licence was not stated. A
+ * credit that guesses is worse than one that admits a gap.
+ *
+ * WHY AN IIFE WITH NO app.js DEPENDENCIES. Same reason as RecordingArchive:
+ * app.js cannot be required by the suite, so __tests__/unit/sections.test.js
+ * extracts the source between the BEGIN/END markers and evaluates it against a
+ * fake `fetch`. Everything here reaches for `global.fetch`, `global.navigator`,
+ * `global.Audio`, `global.setTimeout` and nothing else. Do not reach for an
+ * app.js global from inside this block; pass it in.
+ */
+(function (global) {
+    'use strict';
+
+    /** The ONE optional API (CON-6). Both the entry lookup and the clip host. */
+    const API_ORIGIN = 'https://api.dictionaryapi.dev';
+    const ENTRY_URL = API_ORIGIN + '/api/v2/entries/en/';
+
+    /**
+     * 3s, and the number matters less than what it is a deadline ON: nothing is
+     * waiting for it. It is short because a clip that arrives after the learner
+     * has read the word, answered the quiz and pressed Next is not an
+     * enhancement, it is a surprise.
+     */
+    const LOOKUP_TIMEOUT_MS = 3000;
+
+    /**
+     * A ceiling on lookups per page load. A learner walking a long vocabulary
+     * list would otherwise make one request per word for as long as they keep
+     * pressing Next. Nothing breaks at the ceiling — the section carries on with
+     * TTS, which is what it does for every word that has no clip anyway.
+     */
+    const MAX_LOOKUPS = 60;
+
+    /**
+     * word -> clip object, or null for "asked, and there is none".
+     * `undefined` (absent) means "not asked yet", which is why null is used
+     * explicitly: the three states are different and a timeout must not be
+     * recorded as the second one.
+     */
+    const clips = Object.create(null);
+    const inFlight = Object.create(null);
+    let lookups = 0;
+
+    function key(word) {
+        return typeof word === 'string' ? word.trim().toLowerCase() : '';
+    }
+
+    function logError(e, context) {
+        try {
+            if (global.AppErrorHandler && typeof global.AppErrorHandler.logError === 'function') {
+                global.AppErrorHandler.logError(e, context);
+            } else if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[word audio] ' + context + ':', e);
+            }
+        } catch (ignored) { /* a hostile console must never break an exercise */ }
+    }
+
+    /**
+     * A clip URL this app is allowed to play, or ''.
+     *
+     * Refuses, in order: anything that is not a string; a protocol-relative
+     * `//host/path` (whose host is NOT ours and which would silently inherit
+     * https:); anything that will not parse; and anything whose origin is not
+     * exactly the one allowed API. `new URL` with no base is deliberate — a
+     * relative path has no business being here and must not resolve against our
+     * own origin and look local.
+     */
+    function apiAudioUrl(raw) {
+        if (typeof raw !== 'string') return '';
+        const trimmed = raw.trim();
+        if (!trimmed) return '';
+        let parsed;
+        try {
+            parsed = new global.URL(trimmed);
+        } catch (e) {
+            return '';
+        }
+        if (parsed.origin !== API_ORIGIN) return '';
+        return parsed.href;
+    }
+
+    /**
+     * FR-CNT-5. Licence and source URL, from what was actually sent.
+     *
+     * `phonetics[i]` carries its own `license`/`sourceUrl` on dictionaryapi.dev
+     * (the clip and the definition can come from different Wiktionary revisions),
+     * so the clip's own metadata wins over the entry's.
+     */
+    function creditFor(entry, phonetic) {
+        const licence = (phonetic && phonetic.license && phonetic.license.name) ||
+                        (entry && entry.license && entry.license.name) || '';
+        const source = (phonetic && phonetic.sourceUrl) ||
+                       (entry && Array.isArray(entry.sourceUrls) && entry.sourceUrls[0]) || '';
+        let text = 'Recording from api.dictionaryapi.dev';
+        if (licence) text += ', licensed ' + licence;
+        else text += '. The licence was not stated by the source';
+        if (source) text += '. Source: ' + source;
+        return text + '.';
+    }
+
+    /** The first playable clip in an API response, with its credit, or null. */
+    function clipFromEntries(data) {
+        if (!Array.isArray(data)) return null;
+        for (let i = 0; i < data.length; i++) {
+            const entry = data[i];
+            const phonetics = (entry && entry.phonetics) || [];
+            if (!Array.isArray(phonetics)) continue;
+            for (let j = 0; j < phonetics.length; j++) {
+                const url = apiAudioUrl(phonetics[j] && phonetics[j].audio);
+                if (!url) continue;
+                return {
+                    word: (entry && entry.word) || '',
+                    url: url,
+                    ipa: (phonetics[j] && phonetics[j].text) || '',
+                    credit: creditFor(entry, phonetics[j])
+                };
+            }
+        }
+        return null;
+    }
+
+    /** The clip for this word if it is ALREADY here. Never triggers a fetch. */
+    function known(word) {
+        return clips[key(word)] || null;
+    }
+
+    /**
+     * Take a clip out of an API response somebody else already paid for.
+     *
+     * fetchWordData() fetches this exact URL for a non-curated word, and a second
+     * request for the same JSON is bytes a mobile learner pays for twice. Calling
+     * this from parseAPIResponse() means the enrichment is free on that path.
+     */
+    function offer(entry) {
+        if (!entry || !entry.word) return;
+        const k = key(entry.word);
+        if (!k || clips[k]) return;
+        clips[k] = clipFromEntries([entry]);
+    }
+
+    /**
+     * Ask, in the background, whether this word has a recording.
+     *
+     * @returns {undefined} ON PURPOSE. There is no promise to await and no
+     *          handle to hold, so no caller can turn this into a wait. Its only
+     *          output is `onReady(word, clip)`, called at most once, and only
+     *          when a clip actually exists and arrived inside the deadline.
+     */
+    function lookup(word, onReady) {
+        const k = key(word);
+        // Asked already (hit or known-miss), in flight, or over the ceiling.
+        if (!k || clips[k] !== undefined || inFlight[k] || lookups >= MAX_LOOKUPS) return;
+        if (typeof global.fetch !== 'function') return;
+        // navigator.onLine === false is the one cheap, reliable negative: it does
+        // not prove reachability, but it does prove there is no point trying.
+        if (global.navigator && global.navigator.onLine === false) return;
+
+        inFlight[k] = true;
+        lookups += 1;
+
+        let settled = false;
+        // `undefined` here means "the deadline passed" and is NOT stored, so a
+        // later visit may ask again. null means "there is none", and is stored.
+        const settle = (clip) => {
+            if (settled) return;
+            settled = true;
+            delete inFlight[k];
+            if (clip === undefined) return;
+            clips[k] = clip;
+            if (clip && typeof onReady === 'function') {
+                try {
+                    onReady(k, clip);
+                } catch (e) {
+                    logError(e, 'word audio callback');
+                }
+            }
+        };
+
+        const deadline = global.setTimeout(() => settle(undefined), LOOKUP_TIMEOUT_MS);
+
+        let options;
+        try {
+            // Belt as well as braces: where AbortSignal.timeout exists the socket
+            // is actually released. Where it does not, the deadline above still
+            // holds, because it never depended on this.
+            if (global.AbortSignal && typeof global.AbortSignal.timeout === 'function') {
+                options = { signal: global.AbortSignal.timeout(LOOKUP_TIMEOUT_MS) };
+            }
+        } catch (e) {
+            options = undefined;
+        }
+
+        let request;
+        try {
+            request = global.fetch(ENTRY_URL + encodeURIComponent(k), options);
+        } catch (e) {
+            // A fetch() that throws synchronously is a failed lookup, not a crash.
+            global.clearTimeout(deadline);
+            settle(null);
+            return;
+        }
+        if (!request || typeof request.then !== 'function') {
+            global.clearTimeout(deadline);
+            settle(null);
+            return;
+        }
+
+        request.then(response => {
+            if (!response || !response.ok) return null;
+            return response.json();
+        }).then(data => {
+            global.clearTimeout(deadline);
+            settle(clipFromEntries(data));
+        }).catch(() => {
+            // Offline, aborted, 404, malformed JSON — for this session they all
+            // mean the same thing to a learner: there is no recording, and the
+            // synthesiser is still there.
+            global.clearTimeout(deadline);
+            settle(null);
+        });
+    }
+
+    /**
+     * A cached clip that will not play is worse than no clip: the service worker
+     * stores cross-origin media opaquely and cannot tell a recording from a 404
+     * page, so THIS is the only place in the system that can know. Tell the
+     * worker to drop it, and stop offering it for the rest of this session.
+     */
+    function reportUnplayable(clip) {
+        if (!clip || !clip.url) return;
+        const k = key(clip.word);
+        if (k) clips[k] = null;
+        try {
+            const sw = global.navigator && global.navigator.serviceWorker;
+            if (sw && sw.controller && typeof sw.controller.postMessage === 'function') {
+                sw.controller.postMessage({ type: 'media-failed', url: clip.url });
+            }
+        } catch (e) {
+            logError(e, 'reporting unplayable media');
+        }
+    }
+
+    /**
+     * Play a clip.
+     *
+     * THE CONTRACT, because getting it wrong makes the word say itself twice:
+     *   returns false  nothing started. `onFailure` is NOT called — the CALLER
+     *                  falls back, synchronously, inside the same press.
+     *   returns true   playback started. Any later failure (an `error` event, a
+     *                  rejected play()) calls `onFailure` exactly once.
+     * So exactly one fallback happens on exactly one code path, whichever way it
+     * breaks.
+     */
+    function playClip(clip, onFailure) {
+        if (!clip || !clip.url || typeof global.Audio !== 'function') {
+            reportUnplayable(clip);
+            return false;
+        }
+        let failed = false;
+        const fail = () => {
+            if (failed) return;
+            failed = true;
+            reportUnplayable(clip);
+            if (typeof onFailure === 'function') onFailure();
+        };
+        try {
+            const audio = new global.Audio(clip.url);
+            audio.onerror = fail;
+            const started = audio.play();
+            if (started && typeof started.catch === 'function') {
+                started.catch(() => fail());
+            }
+            return true;
+        } catch (e) {
+            logError(e, 'word audio playback');
+            reportUnplayable(clip);
+            return false;
+        }
+    }
+
+    /**
+     * Play a model of ONE word: the recording if it is already here, the
+     * synthesiser otherwise. The precedence rule of this whole module, in one
+     * function, and it does not touch the network on any path.
+     *
+     * @param speak  the TTS fallback, called with no arguments. Required — a
+     *               model with no fallback is a control that can go silent.
+     */
+    function playModel(word, speak) {
+        const clip = known(word);
+        // playClip() returning true means it owns the fallback from here.
+        if (clip && playClip(clip, speak)) return 'clip';
+        if (typeof speak === 'function') {
+            speak();
+            return 'tts';
+        }
+        return 'none';
+    }
+
+    global.WordAudio = {
+        known: known,
+        lookup: lookup,
+        offer: offer,
+        playModel: playModel,
+        playClip: playClip,
+        apiAudioUrl: apiAudioUrl,
+        creditFor: creditFor,
+        clipFromEntries: clipFromEntries,
+        reportUnplayable: reportUnplayable,
+        LOOKUP_TIMEOUT_MS: LOOKUP_TIMEOUT_MS,
+        MAX_LOOKUPS: MAX_LOOKUPS,
+        API_ORIGIN: API_ORIGIN,
+        // Test seam only. Nothing in app.js calls this.
+        _reset: function () {
+            Object.keys(clips).forEach(k => { delete clips[k]; });
+            Object.keys(inFlight).forEach(k => { delete inFlight[k]; });
+            lookups = 0;
+        }
+    };
+})(window);
+// ===== END WORD AUDIO (US-408) =====
+
+/**
+ * Reveal or hide the vocabulary card's native-recording control (US-408).
+ *
+ * Called with a clip when one is in hand for the word CURRENTLY on screen, and
+ * with null on every word change. The staleness check is the caller's, and it is
+ * not optional: a lookup started for "happy" can resolve after the learner has
+ * pressed Next, and attaching happy's recording to "sad" would play the wrong
+ * word in a human voice — more convincing, and therefore worse, than a wrong TTS
+ * read.
+ */
+function setWordAudioControl(clip) {
+    const button = document.getElementById('wordAudioNative');
+    const credit = document.getElementById('wordAudioCredit');
+    if (!button) return;
+
+    if (!clip) {
+        button.hidden = true;
+        button.onclick = null;
+        if (credit) {
+            credit.hidden = true;
+            credit.textContent = '';
+        }
+        return;
+    }
+
+    button.hidden = false;
+    // Never disabled. See the WordAudio header: a control that waits is the
+    // US-245 hang wearing a different hat, so this one only ever exists in the
+    // state where there is nothing left to wait for.
+    button.disabled = false;
+    button.onclick = () => {
+        const spoken = () => speechAPI.speak(clip.word || '', 1);
+        if (!WordAudio.playClip(clip, () => {
+            // The clip failed at the moment of the press. Say the word anyway,
+            // say why once, and take the control away rather than leaving a
+            // button that does nothing.
+            spoken();
+            setWordAudioControl(null);
+            Toast.info('That recording would not play, so your phone\'s voice said the word instead.');
+        })) {
+            spoken();
+        }
+    };
+
+    if (credit) {
+        // FR-CNT-5, beside the thing it credits and only when it is used.
+        credit.textContent = clip.credit || '';
+        credit.hidden = !credit.textContent;
+    }
+}
+
+/**
+ * Ask for this word's recording in the background (US-408).
+ *
+ * Called AFTER the card is drawn and the quiz is answerable, so that everything
+ * `CON-6` protects has already happened before the network is touched at all.
+ */
+function prefetchWordAudio(word) {
+    if (!window.WordAudio) return;
+    const clip = WordAudio.known(word);
+    if (clip) {
+        setWordAudioControl(clip);
+        return;
+    }
+    WordAudio.lookup(word, (asked, found) => {
+        // THE STALENESS GUARD. The word on the card is the only thing that may
+        // decide whether this clip is shown, and it is read now rather than
+        // captured earlier, because `state.currentWordIndex` moves.
+        const onScreen = document.getElementById('currentWord');
+        const showing = onScreen ? onScreen.textContent.trim().toLowerCase() : '';
+        if (showing !== asked) return;
+        setWordAudioControl(found);
+    });
 }
 
 // Build plausible quiz distractors from the real definitions of OTHER vocabulary
@@ -2872,6 +3355,10 @@ async function loadVocabularyWord() {
     // Show loading indicator
     LoadingIndicator.show('vocabulary', 'Loading word...');
     document.getElementById('currentWord').textContent = 'Loading...';
+    // US-408. Whatever the last word's clip was, it is not this word's. Cleared
+    // BEFORE the await, so there is no window in which the previous word's
+    // recording is offered under the new word's heading.
+    setWordAudioControl(null);
 
     try {
         // A curated word resolves from data.js without touching the network —
@@ -2901,6 +3388,12 @@ async function loadVocabularyWord() {
         state.currentVocabWord = wordData;
         displayVocabQuiz(wordData.quiz);
         document.getElementById('vocabProgress').textContent = `${state.vocabProgress}/10`;
+
+        // US-408, and the ORDER of these two lines is the point. The card is
+        // drawn, the quiz is answerable and the exercise is complete-able before
+        // anything touches the network. CON-6 is satisfied structurally: there is
+        // no state in which this section is waiting on api.dictionaryapi.dev.
+        prefetchWordAudio(wordData.word);
     } catch (error) {
         AppErrorHandler.handleError(error, 'vocabulary word', {
             showToast: true,
@@ -2990,6 +3483,19 @@ function displayVocabQuiz(quiz) {
 }
 
 function initializeVocabularyButtons() {
+    // US-408 — WHY THIS BUTTON IS UNCHANGED, DELIBERATELY.
+    //
+    // 🔊 Pronounce reads the WORD AND ITS DEFINITION. A dictionary clip is a
+    // recording of the headword and nothing else, so it cannot do this job: half
+    // this button's output has no clip and never will. Swapping in the clip would
+    // either drop the definition read-aloud — a loss for exactly the learner who
+    // uses it — or chain a clip into a TTS utterance, giving one control two
+    // failure modes.
+    //
+    // So the recording gets its own control (#wordAudioNative), and this one
+    // stays the unconditional, offline, network-free path it has always been.
+    // That IS the precedence decision: see the WordAudio header. TTS is never
+    // delayed, degraded or relabelled by the presence or absence of a clip.
     document.getElementById('speakWord').onclick = () => {
         speechAPI.speak(`${document.getElementById('currentWord').textContent}. ${document.getElementById('definition').textContent}`);
     };
@@ -3486,10 +3992,33 @@ function pronPairById(id) {
 }
 
 /** One authored array out of the vowels/stress content file, or []. */
+/**
+ * One named array of pronunciation content, gathered from EVERY content file that
+ * declares it.
+ *
+ * Multi-source on purpose (US-409). This used to read only
+ * PRONUNCIATION_VOWELS_STRESS, which meant `data/pronunciation/connected-speech.js`
+ * could sit on disk, precached and script-tagged, and still be invisible — and
+ * INVISIBLE WITHOUT A WARNING, because pronNoticingItems() only warns about items
+ * it dropped, and these were never loaded to be dropped. That is the
+ * authored-but-unreachable defect this project has hit repeatedly (US-197 found 36
+ * items in exactly that state).
+ *
+ * `pronunciationPairs()` already gathered from two sources correctly; this is the
+ * same shape, so adding a third content file needs no edit here.
+ */
 function pronContentList(name) {
-    if (typeof PRONUNCIATION_VOWELS_STRESS === 'undefined' || !PRONUNCIATION_VOWELS_STRESS) return [];
-    const list = PRONUNCIATION_VOWELS_STRESS[name];
-    return Array.isArray(list) ? list : [];
+    const sources = [
+        typeof PRONUNCIATION_VOWELS_STRESS !== 'undefined' ? PRONUNCIATION_VOWELS_STRESS : null,
+        typeof PRONUNCIATION_CONNECTED_SPEECH !== 'undefined' ? PRONUNCIATION_CONNECTED_SPEECH : null
+    ];
+    const out = [];
+    sources.forEach(source => {
+        if (!source) return;
+        const list = source[name];
+        if (Array.isArray(list)) out.push.apply(out, list);
+    });
+    return out;
 }
 
 function stressItemById(id) {
@@ -3522,6 +4051,12 @@ function renderVocabReviewCard(item) {
     document.getElementById('example').textContent = wordData.example || '';
     state.currentVocabWord = wordData;
     displayVocabQuiz(wordData.quiz);
+    // US-408. This path REUSES the word card, so it must own the card's native
+    // audio control too — otherwise a review card would sit under the previous
+    // word's recording. An in-hand clip is offered (no network, no wait); a word
+    // with none simply hides the control. No lookup is started from a review:
+    // the review queue is the one screen where a learner is mid-answer.
+    setWordAudioControl(window.WordAudio ? WordAudio.known(wordData.word) : null);
 }
 
 // ---------------------------------------------------------------------------
@@ -10705,6 +11240,10 @@ function appendPronunciationComparison(host, pair) {
             'Say the words out loud anyway and answer the question below — that is the task, and ' +
             'it was never the recording.'));
         box.appendChild(status);
+        // US-406. Drawn on this path too, and it says the same thing in its own
+        // terms rather than being silently absent on the one device that most
+        // needs to be told why a control is missing.
+        appendDurationHint(box, pair);
         host.appendChild(box);
         return;
     }
@@ -10799,9 +11338,884 @@ function appendPronunciationComparison(host, pair) {
     archive.hidden = true;
     box.appendChild(archive);
 
+    // US-406 / FR-PRN-7. LAST, after the comparison it points back at: the hint
+    // says what was measured and hands the interpretation to A→B→A, which is only
+    // an honest thing to do if A→B→A is already on screen above it.
+    appendDurationHint(box, pair);
+
     host.appendChild(box);
     refreshPronunciationArchive();
 }
+
+// ---------------------------------------------------------------------------
+// US-406 / FR-PRN-7 — the duration comparison, on the card US-404 built
+// ---------------------------------------------------------------------------
+//
+// FR-PRN-7: "Duration comparison offered as an honest hint. If the recording is
+// materially longer than the model, prompt: 'check whether you added extra vowel
+// sounds.' Phrased as a prompt, never a verdict."
+//
+// The arithmetic, the thresholds and the envelope analysis are all in the
+// DurationHint block below, which is extracted and proved by the suite. What is
+// here is only the surface: two controls, a status line, and the strings the
+// module already wrote. THIS CODE DECIDES NOTHING — every band and every refusal
+// comes back from DurationHint.verdict() / DurationHint.refusal().
+//
+// FOUR THINGS THIS SURFACE DOES NOT DO, and each of them is a rule not a taste:
+//
+//  1. IT DOES NOT SCORE (FR-PRN-5, BR-3). No Mistakes call, no SRS call, no
+//     pronRecordAttempt(), no saveProgress(), no completion, no gate. Search this
+//     block for `SRS.` or `Mistakes.` and there is nothing to find — exactly as in
+//     appendPronunciationComparison(), which US-404 shipped the same way.
+//  2. IT DOES NOT KEEP THE RECORDING. RecordingArchive.save() is not called here.
+//     The clip is measured in memory and dropped, so the pair's archive — the
+//     first-and-most-recent set the A→B→A comparison plays — is exactly what it
+//     was before this feature existed. Nothing to migrate, nothing to retain.
+//  3. IT DOES NOT MEASURE THE A→B→A RECORDING. That one is of BOTH keywords,
+//     because the comparison above asks for both, and the span from the start of
+//     the first word to the end of the second is not the length of a word. So this
+//     card records ONE word of its own and says so. Reusing the other clip would
+//     have been free and would have been a lie about what was measured.
+//  4. IT DOES NOT INVENT A MODEL DURATION. speechSynthesis will not tell you how
+//     long an utterance will be, so the only honest number is a measured one:
+//     pronTimeModel() speaks the word and times `onstart` → `onend`. If either
+//     event never arrives the hint is refused with DurationHint.refusal('no-model')
+//     rather than estimated from a words-per-minute constant — an estimate would
+//     put a fabricated number on the left of a comparison with a real one.
+//
+// WHY IT IS ONLY OFFERED ON SOME PAIRS. pronDurationTarget() asks DurationHint
+// whether a keyword is in scope at all: the word must end in a consonant (nothing
+// for an epenthetic vowel to follow otherwise — *zoo* /zuː/ is out, and so is the
+// whole /z/~/s/ pair) and thresholds() must return limits for its syllable count,
+// which today means one syllable. A pair with no in-scope keyword gets no card at
+// all, rather than a card that measures something the numbers cannot interpret.
+
+/** How long to wait for a model utterance before giving up on timing it. A word
+ *  at rate 1 takes well under a second; this is slack for engine start-up. */
+const PRON_MODEL_TIMEOUT_MS = 6000;
+
+/** Its own surface name, so RecordingArchive.isRecording('pron') — which the
+ *  A→B→A card asks about — never sees this recorder and vice versa. */
+const PRON_DURATION_SURFACE = 'pron-duration';
+
+/**
+ * Per-card state. `learner` is a measurement, never a blob: nothing about the
+ * recording outlives the measurement, which is why there is no url to revoke.
+ */
+let pronDuration = { word: '', risk: null, learner: null, busy: false };
+
+function pronDurationStatus(text) {
+    const el = document.getElementById('pronDurationStatus');
+    if (el) el.textContent = text || '';
+}
+
+/**
+ * The AUTHORED IPA for one keyword, or '' when the content does not give one.
+ *
+ * Never guessed and never derived from spelling: the syllable count and the final
+ * cluster are read off this string, and a wrong transcription would move the
+ * threshold. Two authored places carry a whole-word IPA — `minimalPairs[].aIpa` /
+ * `bIpa` and the `{ word, ipa }` rows of `textOnlyFallback.items` — and a keyword
+ * in neither (`van`, today) simply has no IPA, so the hint is not offered on it.
+ */
+function pronKeywordIpa(pair, word) {
+    if (!pair || !word) return '';
+    const rows = pair.minimalPairs || [];
+    for (let i = 0; i < rows.length; i++) {
+        if (rows[i].a === word && rows[i].aIpa) return rows[i].aIpa;
+        if (rows[i].b === word && rows[i].bIpa) return rows[i].bIpa;
+    }
+    const fallback = (pair.textOnlyFallback && pair.textOnlyFallback.items) || [];
+    for (let j = 0; j < fallback.length; j++) {
+        if (fallback[j] && fallback[j].word === word && fallback[j].ipa) return fallback[j].ipa;
+    }
+    return '';
+}
+
+/**
+ * The first keyword of this pair the hint can honestly be offered on, as
+ * DurationHint's own risk object — or null, which means draw no card.
+ */
+function pronDurationTarget(pair) {
+    if (!window.DurationHint) return null;
+    const rows = (pair && pair.phonemes) || [];
+    for (let i = 0; i < rows.length; i++) {
+        const word = rows[i].keyword;
+        if (!word) continue;
+        const risk = DurationHint.riskFor(word, pronKeywordIpa(pair, word));
+        if (risk && DurationHint.thresholds(risk.syllables)) return risk;
+    }
+    return null;
+}
+
+/**
+ * Speak one word at PRON_RATE_NORMAL and report how long it actually took.
+ *
+ * PRON_RATE_NORMAL, not PRON_RATE_SLOW: the learner speaks at their own natural
+ * speed, and comparing a 0.6-rate model against that would measure the rate and
+ * call it a vowel. `onstart` rather than the speak() call excludes the engine's
+ * start-up latency, which on a 400ms word would otherwise be most of the number.
+ *
+ * @param {Function} onDone called with milliseconds, or 0 for "could not time it".
+ *        0 is a refusal, never a default: see pronDurationReport().
+ */
+function pronTimeModel(text, onDone) {
+    if (!text || !pronAudioUsable()) {
+        onDone(0);
+        return false;
+    }
+    let settled = false;
+    let startedAt = 0;
+    const finish = (ms) => {
+        if (settled) return;
+        settled = true;
+        onDone(ms > 0 ? ms : 0);
+    };
+    try {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(text);
+        u.rate = PRON_RATE_NORMAL;
+        u.lang = 'en-US';
+        u.onstart = () => { startedAt = Date.now(); };
+        u.onend = () => { finish(startedAt ? Date.now() - startedAt : 0); };
+        u.onerror = () => finish(0);
+        window.speechSynthesis.speak(u);
+        // The watchdog reports FAILURE — it does not guess a duration. `onend` has
+        // been observed never to fire on some Android WebView voices (US-404 hit
+        // the same thing), and a hint that timed out must say so, not estimate.
+        setTimeout(() => finish(0), PRON_MODEL_TIMEOUT_MS);
+    } catch (e) {
+        AppErrorHandler.logError(e, 'pronunciation model timing');
+        finish(0);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Time the model TWICE and keep the LONGER of the two.
+ *
+ * The same synthetic voice does not say the same word at the same length twice, so
+ * one measurement is a sample of one. Taking the longer sample makes the model
+ * look longer, which shrinks the ratio and makes the hint LESS likely to fire —
+ * the direction every other bias in DurationHint is also pushed in. If the second
+ * attempt fails, the first stands alone rather than the pair being thrown away.
+ */
+function pronTimeModelTwice(text, onDone) {
+    pronTimeModel(text, (first) => {
+        if (!first) {
+            onDone(0);
+            return;
+        }
+        pronTimeModel(text, (second) => {
+            onDone(second ? Math.max(first, second) : first);
+        });
+    });
+}
+
+/**
+ * A recording's bytes. `Blob.arrayBuffer()` is not on older Android WebViews, so
+ * FileReader is the fallback; a browser with neither gets null and a refusal.
+ */
+function pronBlobBuffer(blob) {
+    if (!blob || !blob.size) return Promise.resolve(null);
+    if (typeof blob.arrayBuffer === 'function') {
+        return blob.arrayBuffer().catch(() => null);
+    }
+    if (typeof FileReader !== 'function') return Promise.resolve(null);
+    return new Promise(resolve => {
+        try {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result || null);
+            reader.onerror = () => resolve(null);
+            reader.readAsArrayBuffer(blob);
+        } catch (e) {
+            resolve(null);
+        }
+    });
+}
+
+/**
+ * Draw the outcome. EVERY string a learner reads here comes from DurationHint —
+ * this function chooses between `verdict()` and `refusal()` and nothing else.
+ */
+function pronDurationReport(modelMs, learner) {
+    const host = document.getElementById('pronDurationResult');
+    if (!host) return null;
+    host.textContent = '';
+    host.hidden = false;
+
+    if (!learner || !learner.ok) {
+        host.setAttribute('data-band', 'refused');
+        host.appendChild(pronParagraph(DurationHint.refusal(learner ? learner.code : 'undecodable'),
+            'pron-note'));
+        return 'refused';
+    }
+    if (!modelMs) {
+        // No model number exists, so no comparison is drawn — not even against the
+        // learner's own figure on its own, which would invite them to invent the
+        // other half of the comparison themselves.
+        host.setAttribute('data-band', 'refused');
+        host.appendChild(pronParagraph(DurationHint.refusal('no-model'), 'pron-note'));
+        return 'refused';
+    }
+    const v = DurationHint.verdict(modelMs, learner.ms, pronDuration.risk);
+    host.setAttribute('data-band', v.band);
+    host.appendChild(pronParagraph(v.text, 'pron-note'));
+    return v.band;
+}
+
+/**
+ * The duration card: record one word, measure it, time the model, report.
+ *
+ * Appended INSIDE the US-404 comparison box and after its controls, so the A→B→A
+ * sequence, its buttons, its status line and its archive are untouched — this is
+ * a hint under a working comparison, and the comparison is what the learner is
+ * pointed back at in every band that says anything at all.
+ */
+function appendDurationHint(box, pair) {
+    const risk = pronDurationTarget(pair);
+    if (!risk) return null;
+    pronDuration = { word: risk.word, risk: risk, learner: null, busy: false };
+
+    const wrap = document.createElement('div');
+    wrap.className = 'pron-duration';
+    wrap.id = 'pronDurationCard';
+
+    const heading = document.createElement('h4');
+    heading.textContent = 'How long the word took';
+    wrap.appendChild(heading);
+
+    wrap.appendChild(pronParagraph(
+        'Telugu syllables like to end in a vowel, so an English word ending in a consonant ' +
+        'attracts one: *bus* becomes "bus-u". An added vowel makes the word **longer**, and ' +
+        'length is one of the very few things this app can measure about your voice honestly. ' +
+        'It cannot hear whether the vowel is there. It can tell you how long each version took, ' +
+        'and what that is — and is not — evidence of.'));
+
+    const status = document.createElement('div');
+    status.className = 'pron-compare-status';
+    status.id = 'pronDurationStatus';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+
+    const result = document.createElement('div');
+    result.className = 'pron-duration-result';
+    result.id = 'pronDurationResult';
+    result.hidden = true;
+
+    const noRecorder = !window.RecordingArchive || RecordingArchive.recorderMissing();
+    if (noRecorder || DurationHint.decoderMissing()) {
+        // Two different absences, two different sentences. Neither is an error and
+        // neither costs the learner the task: FR-A11Y-4's self-check is above this
+        // and needs no microphone, no measurement and no sound.
+        wrap.appendChild(pronParagraph(noRecorder
+            ? 'This needs a recording of your own voice, and this device has no microphone the ' +
+              'app can use — so there is no length to compare. Nothing else on this card changes.'
+            : DurationHint.refusal('no-decoder')));
+        wrap.appendChild(status);
+        wrap.appendChild(result);
+        box.appendChild(wrap);
+        return wrap;
+    }
+
+    wrap.appendChild(pronParagraph(
+        'Record just **' + risk.word + '**, once, on its own, with no pause. Not both words ' +
+        'this time: the recording above is of two words, and the gap between them is not part ' +
+        'of either one. This clip is measured and then dropped — it is not kept, and the ' +
+        'recordings above are untouched.'));
+
+    const row = document.createElement('div');
+    row.className = 'button-group';
+    row.setAttribute('role', 'group');
+    row.setAttribute('aria-label', 'Compare the length of one word');
+
+    const record = document.createElement('button');
+    record.type = 'button';
+    record.id = 'pronDurationRecord';
+    record.className = 'btn-secondary';
+    record.textContent = '⏱ Record just "' + risk.word + '"';
+    record.setAttribute('aria-label', 'Record yourself saying ' + risk.word +
+        ' on its own, to compare its length with the model');
+
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.id = 'pronDurationStop';
+    stop.className = 'btn-secondary';
+    stop.textContent = '⏹ Stop and measure';
+    stop.disabled = true;
+    stop.setAttribute('aria-label', 'Stop recording and measure the length');
+
+    record.addEventListener('click', () => {
+        if (pronDuration.busy) return;
+        if (pronCompare.playing) {
+            pronDurationStatus('The model-you-model comparison is still playing. Let it finish, ' +
+                'then record — otherwise the model ends up inside your recording.');
+            return;
+        }
+        pronDuration.busy = true;
+        RecordingArchive.startCapture(PRON_DURATION_SURFACE, {
+            onstart: () => {
+                record.disabled = true;
+                stop.disabled = false;
+                result.hidden = true;
+                pronDurationStatus('🔴 Recording. Say "' + risk.word + '" once, then press Stop.');
+            },
+            onstop: (blob, meta) => {
+                record.disabled = false;
+                stop.disabled = true;
+                pronDurationStatus('Measuring the recording, then timing the phone\'s voice twice.');
+                pronMeasureAndCompare(blob);
+            },
+            onerror: (e) => {
+                AppErrorHandler.logError(e, 'pronunciation duration recording');
+                pronDuration.busy = false;
+                record.disabled = false;
+                stop.disabled = true;
+                pronDurationStatus('No microphone, so there is no length to measure. Nothing has ' +
+                    'been scored either way, and the question above needs no recording.');
+            }
+        });
+    });
+
+    stop.addEventListener('click', () => {
+        if (RecordingArchive.stopCapture()) {
+            record.disabled = false;
+            stop.disabled = true;
+        }
+    });
+
+    row.appendChild(record);
+    row.appendChild(stop);
+    wrap.appendChild(row);
+    wrap.appendChild(status);
+    wrap.appendChild(result);
+    box.appendChild(wrap);
+
+    // The state before anything is measured, said out loud rather than left as a
+    // blank panel: "no recording yet" is one of this card's outcomes.
+    pronDurationStatus('No recording yet, so there is nothing to compare. Nothing here is ' +
+        'scored and nothing is stored.');
+    return wrap;
+}
+
+/**
+ * Measure the clip, then time the model, then report. In that order on purpose:
+ * a clip that cannot be measured means the model is never spoken, so a learner
+ * whose recording was silent does not sit through two plays to be told so.
+ */
+function pronMeasureAndCompare(blob) {
+    const finish = (modelMs, learner) => {
+        pronDuration.busy = false;
+        pronDuration.learner = learner;
+        const band = pronDurationReport(modelMs, learner);
+        pronDurationStatus(band === 'refused'
+            ? 'No comparison this time. Nothing has been scored.'
+            : 'Measured. Nothing has been scored, and nothing about this is stored.');
+    };
+    pronBlobBuffer(blob).then(buffer => {
+        if (!buffer) {
+            finish(0, { ok: false, code: 'no-audio', ms: 0 });
+            return;
+        }
+        DurationHint.measure(buffer).then(learner => {
+            if (!learner.ok) {
+                finish(0, learner);
+                return;
+            }
+            pronTimeModelTwice(pronDuration.word, (modelMs) => finish(modelMs, learner));
+        });
+    });
+}
+
+// ===== BEGIN DURATION HINT (US-406) =====
+/**
+ * DurationHint — how long the word took, and what that is and is not evidence of.
+ * ===========================================================================
+ *
+ * `FR-PRN-7`: *"Duration comparison offered as an honest hint — if the recording
+ * is materially longer than the model, prompt: 'check whether you added extra
+ * vowel sounds.' Phrased as a prompt, never a verdict."*
+ *
+ * WHY DURATION AT ALL. Telugu is strongly CV-structured, so a final English
+ * consonant attracts a vowel (`T-P2`: *bus* → "bus-u") and a cluster gets one
+ * inserted into it (`T-P3`: *asked* → "ask-ed"). An added vowel is an added
+ * syllable, and an added syllable takes TIME. Duration is one of the very few
+ * things this app can measure about a learner's voice honestly — unlike "was
+ * that the right sound", which it cannot measure at all and must never pretend
+ * to (`FR-PRN-5`).
+ *
+ * ---------------------------------------------------------------------------
+ * THE HONESTY LINE, AND EVERY PLACE THIS CODE STOPS SHORT OF IT
+ * ---------------------------------------------------------------------------
+ *
+ * A longer recording is EVIDENCE CONSISTENT WITH an added vowel. It is not proof
+ * of one. A learner who spoke slowly, hesitated, breathed out at the end, or
+ * simply has a slower natural tempo than a synthesiser measures longer too, and
+ * nothing here can tell those apart. So:
+ *
+ *   1. IT NEVER SAYS "YOU ADDED A VOWEL". verdict() reports the two numbers, the
+ *      percentage, and what that is *consistent with*. Every sentence that
+ *      mentions a vowel also names at least one other thing that would produce
+ *      the same measurement.
+ *   2. IT IS NEVER SCORED, NEVER GATED, NEVER WRITTEN. There is no Mistakes
+ *      call, no SRS call, no pronRecordAttempt(), no recordItemAttempt() and no
+ *      saveProgress() anywhere in this block or in the card that draws it. It
+ *      cannot unlock anything and it cannot lapse anything (`FR-PRN-5`,
+ *      `FR-SPK-9`, `BR-3`).
+ *   3. IT REFUSES TO INTERPRET NOISE. Below the noise floor the text says the
+ *      difference is too small to mean anything, and says why, rather than
+ *      reporting 7% as a finding.
+ *   4. THE LEARNER CAN CHECK IT THEMSELVES. Every band points at the A→B→A
+ *      comparison (`US-404`), which already exists for exactly this: the app
+ *      says what it measured, and the person who can hear the end of the word
+ *      decides what it means.
+ *
+ * ---------------------------------------------------------------------------
+ * THE THRESHOLD, AND WHY IT IS THIS NUMBER
+ * ---------------------------------------------------------------------------
+ *
+ *   noise floor      +15%, flat. Below it, nothing is reported as a finding.
+ *   evidence floor   +40% DIVIDED BY THE SYLLABLE COUNT.
+ *
+ * The arithmetic behind +40%. An epenthetic vowel is short and unstressed —
+ * roughly half the duration of an average syllable, not a whole one. On a word
+ * of `n` syllables it therefore adds about `0.5 / n` of the word's length. For a
+ * one-syllable word that is ~+50%, so +40% sits just inside it: a real
+ * epenthesis on *bus* should clear the bar, and the bar is still far enough above
+ * the noise floor that ordinary variation cannot reach it.
+ *
+ * Where the +15% comes from: two recordings of one person saying one word differ
+ * by more than a tenth without anything being wrong, the TTS voice has its own
+ * tempo that has nothing to do with English, and the silence trim has a frame of
+ * error at each end. Anything under +15% is measurement, not pronunciation.
+ *
+ * THE RULE IS PER SYLLABLE, AND IT MAKES THE APP DECLINE. thresholds() returns
+ * null unless the evidence floor clears the noise floor by a clear margin, and
+ * for anything longer than one syllable it does not: on a two-syllable word an
+ * added vowel is only ~+25%, which is not far enough above +15% to be told apart
+ * from someone speaking carefully. So the hint is offered ONLY on one-syllable
+ * words. That is not a limitation that was worked around; it is the honest
+ * consequence of the arithmetic, and every word the pronunciation content puts
+ * in scope is one syllable anyway.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT IS ACTUALLY MEASURED — and this is where a naive version is worthless
+ * ---------------------------------------------------------------------------
+ *
+ * NOT the recording's length. `RecordingArchive` reports `durationMs`, which is
+ * the time from pressing Record to pressing Stop. A learner who takes a second
+ * to find the Stop button "measures" 250% longer than the model while having
+ * pronounced the word perfectly. Comparing that number to a model would be
+ * worse than saying nothing.
+ *
+ * So the learner's side is the VOICED SPAN: the audio is decoded, an RMS
+ * envelope is taken in 10ms frames, and the span from the first to the last
+ * frame above the threshold is what gets compared. analyse() also refuses when
+ * it finds a long silence INSIDE that span, because that is a learner who paused
+ * or said the word twice, and their total span means nothing.
+ *
+ * The model's side is the TTS utterance timed from `onstart` to `onend`, at
+ * PRON_RATE_NORMAL — never at PRON_RATE_SLOW, which is what the A→B→A comparison
+ * uses. Comparing a 0.6-rate model against a naturally-spoken recording would
+ * measure the rate and call it a vowel. `onstart` rather than the speak() call is
+ * deliberate: it excludes the engine's start-up latency, which on a 400ms word
+ * would otherwise be a large fraction of the measurement.
+ *
+ * BOTH REMAINING BIASES POINT THE SAME WAY, TOWARDS SAYING NOTHING. Any residual
+ * TTS latency makes the model look LONGER, and trimming a quiet onset makes the
+ * learner look SHORTER; both shrink the ratio and make the hint less likely to
+ * fire, never more. A hint that under-reports is a hint that keeps its word.
+ *
+ * WHY AN IIFE WITH NO app.js DEPENDENCIES. The same reason as RecordingArchive:
+ * app.js cannot be required by the suite, and the thresholds and the envelope
+ * analysis are the two things here that must be PROVED rather than read. The
+ * block depends on `global.AudioContext` / `webkitAudioContext` and nothing else,
+ * and analyse() is pure — it takes samples and a sample rate.
+ */
+(function (global) {
+    'use strict';
+
+    /** See the header. Per syllable for the evidence floor, flat for the noise. */
+    const EVIDENCE_EXCESS = 0.40;
+    const NOISE_EXCESS = 0.15;
+    /** How far the evidence floor must clear the noise floor to be worth stating. */
+    const MIN_MARGIN = 0.15;
+
+    /** 10ms frames: fine enough to place a word edge, coarse enough to be quiet. */
+    const FRAME_MS = 10;
+    /** −20dB below the loudest frame, with an absolute floor for a noisy room. */
+    const RELATIVE_FLOOR = 0.1;
+    const ABSOLUTE_FLOOR = 0.01;
+    /** Silence longer than this INSIDE the span means a pause, not a word. */
+    const MAX_INTERNAL_GAP_MS = 300;
+    /** Outside this range a "measurement" is a bug, not a short word. */
+    const MIN_SENSIBLE_MS = 80;
+    const MAX_SENSIBLE_MS = 4000;
+
+    /**
+     * IPA vowel letters. Diphthongs are SEQUENCES of these, which is why the
+     * syllable count is a count of vowel RUNS and not of vowel letters: 'əʊ' in
+     * /kəʊt/ is one nucleus.
+     */
+    const VOWELS = 'iɪyʏeøɛœæaɶɑɒɔoʊuʉɯʌəɐɜɞɘɵ';
+
+    /** Strip the notation that is not a segment: slashes, stress, length, spacing. */
+    function segments(ipa) {
+        return String(ipa == null ? '' : ipa)
+            .replace(/[\/\[\]ˈˌ.\s‿|]/g, '')
+            // A length mark belongs to the vowel before it and is not a segment.
+            .replace(/[ːˑ]/g, '');
+    }
+
+    function isVowel(ch) {
+        return VOWELS.indexOf(ch) !== -1;
+    }
+
+    /**
+     * Syllables, as a count of vowel runs in the authored IPA.
+     *
+     * KNOWN LIMITATION, AND IT ERRS SAFELY: a syllabic consonant (/ˈteɪbl/, whose
+     * final /l/ is a syllable) is not counted, so such a word is treated as
+     * having one syllable fewer than it has. Since the evidence floor is DIVIDED
+     * by the count, undercounting raises the bar — the app asks for more evidence
+     * than it strictly needs, which is the direction to be wrong in.
+     */
+    function syllableCount(ipa) {
+        const s = segments(ipa);
+        let count = 0;
+        let inVowel = false;
+        for (let i = 0; i < s.length; i++) {
+            if (isVowel(s[i])) {
+                if (!inVowel) count++;
+                inVowel = true;
+            } else {
+                inVowel = false;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * How many consonant segments the word ends on. 0 means it ends in a vowel,
+     * and is therefore not a T-P2/T-P3 word at all.
+     *
+     * /tʃ/ and /dʒ/ are single segments written with two characters, so they are
+     * counted once — otherwise *watch* would look like a cluster and be scoped in
+     * under T-P3, which is wrong about the content and wrong about the learner.
+     */
+    function finalConsonants(ipa) {
+        const s = segments(ipa);
+        let i = s.length - 1;
+        let count = 0;
+        while (i >= 0 && !isVowel(s[i])) {
+            if (i > 0 && (s[i] === 'ʃ' || s[i] === 'ʒ') && (s[i - 1] === 't' || s[i - 1] === 'd')) {
+                i -= 2;
+            } else {
+                i -= 1;
+            }
+            count++;
+        }
+        return count;
+    }
+
+    /**
+     * Is this word in scope for the hint, and under which interference row?
+     *
+     * DERIVED FROM THE AUTHORED IPA, never from prose. The pronunciation content
+     * files say outright that a rule which would need English sentences parsed at
+     * runtime is unactionable, so scoping by scanning `note` text for "T-P2" was
+     * not an option. The IPA is machine-readable content that already exists.
+     *
+     *   ends in a vowel        -> not in scope. There is no final consonant for a
+     *                             vowel to be added after.
+     *   one final consonant    -> T-P2, final-vowel epenthesis.
+     *   two or more            -> T-P3, cluster breaking (and T-P2 as well, but
+     *                             the cluster is the harder row and names it).
+     */
+    function riskFor(word, ipa) {
+        const cluster = finalConsonants(ipa);
+        const syllables = syllableCount(ipa);
+        if (!word || !cluster || !syllables) return null;
+        return {
+            word: String(word),
+            ipa: String(ipa || ''),
+            syllables: syllables,
+            cluster: cluster,
+            code: cluster >= 2 ? 'T-P3' : 'T-P2'
+        };
+    }
+
+    /**
+     * The two ratios for a word of this many syllables, or null when the app
+     * cannot tell an added vowel from careful speech and must not try.
+     */
+    function thresholds(syllables) {
+        const n = Math.max(1, Math.floor(syllables) || 1);
+        const evidence = 1 + EVIDENCE_EXCESS / n;
+        const noise = 1 + NOISE_EXCESS;
+        if (evidence < noise + MIN_MARGIN) return null;
+        return { evidence: evidence, noise: noise, syllables: n };
+    }
+
+    /** '0.42s'. Two decimals, because a hundredth of a second is the honest floor. */
+    function seconds(ms) {
+        return (Math.round(ms) / 1000).toFixed(2) + 's';
+    }
+
+    function percentLonger(ratio) {
+        return Math.round((ratio - 1) * 100);
+    }
+
+    /**
+     * Envelope analysis. PURE — samples in, milliseconds out — so the suite can
+     * prove it against synthesised audio instead of hoping.
+     *
+     * @returns {Object} { ok, ms, code, startMs, endMs, gapMs, peak }
+     */
+    function analyse(samples, sampleRate) {
+        if (!samples || !samples.length || !sampleRate) {
+            return { ok: false, code: 'no-audio', ms: 0 };
+        }
+        const frame = Math.max(1, Math.round((sampleRate * FRAME_MS) / 1000));
+        const frames = [];
+        let peak = 0;
+        for (let i = 0; i < samples.length; i += frame) {
+            let sum = 0;
+            let n = 0;
+            for (let j = i; j < i + frame && j < samples.length; j++) {
+                const v = samples[j];
+                sum += v * v;
+                n++;
+            }
+            const rms = n ? Math.sqrt(sum / n) : 0;
+            frames.push(rms);
+            if (rms > peak) peak = rms;
+        }
+        if (peak < ABSOLUTE_FLOOR) {
+            // The microphone was on and nothing arrived. "Silence" and "a quiet
+            // word" are different facts and this is the first one.
+            return { ok: false, code: 'silent', ms: 0, peak: peak };
+        }
+
+        const floor = Math.max(peak * RELATIVE_FLOOR, ABSOLUTE_FLOOR);
+        let first = -1;
+        let last = -1;
+        for (let i = 0; i < frames.length; i++) {
+            if (frames[i] >= floor) {
+                if (first === -1) first = i;
+                last = i;
+            }
+        }
+        if (first === -1) return { ok: false, code: 'silent', ms: 0, peak: peak };
+
+        // The longest run of silence INSIDE the span. A learner who paused, took a
+        // breath in the middle, or said the word twice has a span that means
+        // nothing, and reporting its length as "your word" would be a lie about
+        // what was measured.
+        let gap = 0;
+        let run = 0;
+        for (let i = first; i <= last; i++) {
+            if (frames[i] < floor) {
+                run++;
+                if (run > gap) gap = run;
+            } else {
+                run = 0;
+            }
+        }
+
+        const ms = (last - first + 1) * FRAME_MS;
+        const gapMs = gap * FRAME_MS;
+        if (gapMs > MAX_INTERNAL_GAP_MS) {
+            return { ok: false, code: 'gap', ms: ms, gapMs: gapMs, peak: peak };
+        }
+        if (ms < MIN_SENSIBLE_MS || ms > MAX_SENSIBLE_MS) {
+            return { ok: false, code: 'implausible', ms: ms, gapMs: gapMs, peak: peak };
+        }
+        return {
+            ok: true,
+            code: 'ok',
+            ms: ms,
+            startMs: first * FRAME_MS,
+            endMs: (last + 1) * FRAME_MS,
+            gapMs: gapMs,
+            peak: peak
+        };
+    }
+
+    /** Is there an AudioContext to decode with? Feature-detected, never assumed. */
+    function decoderMissing() {
+        return typeof (global.AudioContext || global.webkitAudioContext) !== 'function';
+    }
+
+    /**
+     * Decode a recording and measure its voiced span. NEVER REJECTS: a browser
+     * with no Web Audio, or a blob it cannot decode, is a hint that is not offered
+     * — not an error in front of a learner who was only practising.
+     */
+    function measure(arrayBuffer) {
+        if (decoderMissing()) {
+            return Promise.resolve({ ok: false, code: 'no-decoder', ms: 0 });
+        }
+        if (!arrayBuffer || !arrayBuffer.byteLength) {
+            return Promise.resolve({ ok: false, code: 'no-audio', ms: 0 });
+        }
+        let context;
+        try {
+            const Ctor = global.AudioContext || global.webkitAudioContext;
+            context = new Ctor();
+        } catch (e) {
+            return Promise.resolve({ ok: false, code: 'no-decoder', ms: 0 });
+        }
+        const close = () => {
+            try {
+                if (context && typeof context.close === 'function') context.close();
+            } catch (e) { /* a context that will not close is not the learner's problem */ }
+        };
+        return new Promise(resolve => {
+            const done = (result) => { close(); resolve(result); };
+            const onBuffer = (buffer) => {
+                try {
+                    const samples = buffer.getChannelData(0);
+                    done(analyse(samples, buffer.sampleRate));
+                } catch (e) {
+                    done({ ok: false, code: 'undecodable', ms: 0 });
+                }
+            };
+            try {
+                // Both call shapes: the promise form, and the older callback form
+                // that Safari needed for years.
+                const maybe = context.decodeAudioData(arrayBuffer, onBuffer,
+                    () => done({ ok: false, code: 'undecodable', ms: 0 }));
+                if (maybe && typeof maybe.then === 'function') {
+                    maybe.then(onBuffer, () => done({ ok: false, code: 'undecodable', ms: 0 }));
+                }
+            } catch (e) {
+                done({ ok: false, code: 'undecodable', ms: 0 });
+            }
+        });
+    }
+
+    /**
+     * What the learner is told. THE WHOLE HONESTY CONTRACT IS IN THIS FUNCTION'S
+     * STRINGS, so read them rather than the band names.
+     *
+     * @returns {Object} { band, ratio, percent, text, scored: false }
+     */
+    function verdict(modelMs, learnerMs, risk) {
+        const syllables = (risk && risk.syllables) || 1;
+        const limits = thresholds(syllables);
+        const measured = 'Measured: the model ' + seconds(modelMs) +
+            ', your recording ' + seconds(learnerMs) + '. ';
+
+        if (!limits) {
+            return {
+                band: 'not-offered', ratio: null, percent: null, scored: false,
+                text: measured + 'This word has more than one syllable, and on a longer ' +
+                    'word an added vowel changes the length by too little for this app to ' +
+                    'tell it apart from speaking carefully. So no interpretation is offered — ' +
+                    'the two numbers above are all there is.'
+            };
+        }
+        if (!(modelMs > 0) || !(learnerMs > 0)) {
+            return {
+                band: 'unmeasurable', ratio: null, percent: null, scored: false,
+                text: 'Nothing was measured this time, so there is nothing to compare. ' +
+                    'The comparison below still works and nothing has been scored.'
+            };
+        }
+
+        const ratio = learnerMs / modelMs;
+        const percent = percentLonger(ratio);
+        const word = (risk && risk.word) ? '*' + risk.word + '*' : 'the word';
+        const tail = risk && risk.cluster >= 2
+            ? 'the consonants at the end of ' + word
+            : 'the final consonant of ' + word;
+        const check = 'Press "▶ Model, you, model" and listen to the end of the word: ' +
+            'the model stops dead on ' + tail + '. If you can hear something after ' +
+            'yours, that is the thing to work on. Nothing here has been scored, and nothing ' +
+            'about this measurement is stored.';
+
+        if (ratio < 1) {
+            return {
+                band: 'shorter', ratio: ratio, percent: percent, scored: false,
+                text: measured + 'Yours was **shorter** than the model, so there is nothing ' +
+                    'here pointing at an added vowel. That does not mean it was right — a ' +
+                    'short recording can still have the wrong sounds in it. It means this ' +
+                    'particular measurement found nothing.'
+            };
+        }
+        if (ratio < limits.noise) {
+            return {
+                band: 'too-small', ratio: ratio, percent: percent, scored: false,
+                text: measured + 'That is ' + percent + '% longer, and **that difference is ' +
+                    'too small to mean anything.** Two recordings of the same person saying ' +
+                    'the same word differ by more than this, and so does the phone\'s voice ' +
+                    'from one play to the next. Nothing was found here.'
+            };
+        }
+        if (ratio < limits.evidence) {
+            return {
+                band: 'unclear', ratio: ratio, percent: percent, scored: false,
+                text: measured + 'That is ' + percent + '% longer. It is a real difference, ' +
+                    'but **it is not enough to tell an added vowel from simply speaking more ' +
+                    'slowly**, and this app cannot tell those two apart. ' + check
+            };
+        }
+        return {
+            band: 'consistent', ratio: ratio, percent: percent, scored: false,
+            text: measured + 'That is ' + percent + '% longer — about what a whole extra ' +
+                'vowel would add to a one-syllable word. **This is consistent with a vowel ' +
+                'after ' + tail + '. It is not proof of one:** speaking slowly, pausing ' +
+                'before the end, or breathing out after the word all measure longer in ' +
+                'exactly the same way, and nothing here can separate them. ' + check
+        };
+    }
+
+    /** The honest refusals, in the learner's terms. One per analyse() code. */
+    function refusal(code) {
+        switch (code) {
+            case 'no-decoder':
+                return 'This browser cannot measure the length of a recording, so this hint ' +
+                       'is not available on it. Everything else on this card works.';
+            case 'silent':
+                return 'The recording is silent, so there was no word in it to measure. ' +
+                       'Nothing has been scored — record again if you want to.';
+            case 'gap':
+                return 'There is a pause in the middle of the recording, so its total length ' +
+                       'is not the length of one word and measuring it would tell you nothing. ' +
+                       'Record just the one word, once, with no pause.';
+            case 'implausible':
+                return 'What was measured is not the length of a single short word, so no ' +
+                       'comparison is offered. Record just the one word on its own.';
+            case 'no-model':
+                return 'The phone\'s voice could not be timed this time, so there is nothing ' +
+                       'to compare against. The written exercise and the comparison need no ' +
+                       'measurement at all.';
+            default:
+                return 'That recording could not be measured, so no comparison is offered. ' +
+                       'Nothing has been scored.';
+        }
+    }
+
+    global.DurationHint = {
+        analyse: analyse,
+        measure: measure,
+        verdict: verdict,
+        refusal: refusal,
+        riskFor: riskFor,
+        thresholds: thresholds,
+        syllableCount: syllableCount,
+        finalConsonants: finalConsonants,
+        decoderMissing: decoderMissing,
+        seconds: seconds,
+        EVIDENCE_EXCESS: EVIDENCE_EXCESS,
+        NOISE_EXCESS: NOISE_EXCESS,
+        FRAME_MS: FRAME_MS,
+        MAX_INTERNAL_GAP_MS: MAX_INTERNAL_GAP_MS
+    };
+})(window);
+// ===== END DURATION HINT (US-406) =====
 
 /**
  * How far the audio can be trusted for this pair, stated before the learner
@@ -11864,7 +13278,11 @@ const PRON_GROUPS = {
     },
     noticing: {
         id: 'noticing',
-        label: 'Rhythm and syllables',
+        // Was 'Rhythm and syllables', which stopped being true when US-409 added
+        // the schwa, sentence stress, linking/elision and intonation items. A tab
+        // label that under-describes what is behind it is how content stays
+        // unfound even after it is wired.
+        label: 'Rhythm and connected speech',
         heading: 'Notice what English does',
         indexKey: 'currentNoticingIndex',
         noun: 'question',

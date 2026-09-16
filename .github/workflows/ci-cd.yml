@@ -83,21 +83,60 @@ jobs:
   # either. It only needs a Node binary, which setup-node provides. `cache: npm`
   # is likewise omitted: there is nothing to cache.
   #
-  # Discovery-based on purpose: it walks data/grammar/*.js and
-  # data/pronunciation/*.js rather than naming files, so a point authored next
-  # week is validated without anyone editing this workflow.
+  # Discovery-based on purpose: it walks data/grammar/*.js,
+  # data/pronunciation/*.js and data.js rather than naming files, so a point
+  # authored next week is validated without anyone editing this workflow.
   #
-  # NOT in the deploy job's `needs`, as of 2026-09-12, and this is a decision
-  # rather than an oversight. NFR-13 says a malformed content item should fail
-  # the build, and the mechanism to make it do so is one line — add `content` to
-  # `needs` below. It is left out for now because the validator is RED on arrival
-  # against pre-existing content: US-166 (`accept` entries absent from their own
-  # `options`) affects 7 items across data/grammar/countability.js and
-  # data/grammar/present-perfect.js, and two just-authored points are not yet in
-  # index.html or the precache list. Gating the GitHub Pages deploy on defects
-  # that predate this job would take the site down to report them. The job is
-  # loud instead: it runs on every push and PR, and its failure names every
-  # offending item. Add it to `needs` the moment those are closed.
+  # IN THE DEPLOY JOB'S `needs` SINCE 2026-09-16 (US-248), which is a change from
+  # what this comment said before, so here is what changed rather than a stale
+  # justification. The two conditions the earlier version named as its reasons
+  # for leaving the wire disconnected are both now false:
+  #
+  #   1. US-166 — accepted answers absent from their own `options`, 6 items in
+  #      data/grammar/countability.js and data/grammar/present-perfect.js — was
+  #      closed 2026-09-16, per item rather than by one rule.
+  #   2. The two then-unwired points (future-forms.js, gerund-infinitive.js) are
+  #      in index.html and in service-worker.js's STATIC_ASSETS.
+  #
+  # So the validator is no longer red against content that predates it, and
+  # gating the GitHub Pages deploy no longer means taking the site down to report
+  # a defect nobody introduced. NFR-13 ("a malformed content item fails the
+  # build") is met by the one word `content` in `needs:` below.
+  #
+  # WHAT WAS CHECKED BEFORE WIRING IT, because a gate that can go red for a
+  # reason outside the content is worse than no gate — it teaches everyone to
+  # re-run the job until it passes:
+  #
+  #   - No install, no network, no node_modules. The script requires only `fs`,
+  #     `path` and `vm` from Node plus three files in this repo
+  #     (js/core/mistakes.js, js/core/srs.js, and js/core/levels.js optionally —
+  #     it degrades to the tier keys rather than throwing if that one is absent).
+  #     Nothing it does reaches the network, so a registry or DNS outage cannot
+  #     turn a content pass into a deploy failure.
+  #   - Every file it reads is tracked by git. This was verified the only way
+  #     that proves it — `git archive HEAD | tar -x` into an empty directory, then
+  #     `node tools/validate-content.js` in that tree: PASS, exit 0. A validator
+  #     that is green in a working tree and red in a fresh checkout would have
+  #     blocked every deploy, and "it passes on my machine" would not have
+  #     caught it.
+  #   - No syntax newer than ES2018 (the newest thing in it is a Unicode
+  #     property escape in the IPA segmenter, `/\p{Mn}/u`), so the 20.x pin here
+  #     parses it, and so would 18.x or 22.x if this pin ever moves.
+  #   - It is deterministic: no clock, no randomness, no network, and no reliance
+  #     on filesystem ordering for any verdict.
+  #
+  # THE COST, recorded here because this is where the trade was made. A content
+  # defect now holds an unrelated fix off the live site until the content is
+  # fixed or this line is reverted. Two specific ways that will happen:
+  #   - the `wiring` check reads index.html and service-worker.js, so a new file
+  #     under data/ that is committed WITHOUT its <script> tag and precache entry
+  #     fails the deploy. That is the intended behaviour (such a file is invisible
+  #     in the app and missing offline) but the failure will name a data file
+  #     while the fix belongs in index.html;
+  #   - content authored across two commits is red in between. Author the file
+  #     and its wiring in one commit.
+  # Both are the point rather than a surprise: `node tools/validate-content.js`
+  # is one command with no install, so it can be run before pushing.
   content:
     name: Content Validation
     runs-on: ubuntu-latest
@@ -140,7 +179,9 @@ jobs:
   deploy:
     name: Deploy to GitHub Pages
     runs-on: ubuntu-latest
-    needs: [syntax, build]
+    # `content` is here as of US-248 — see the long note on the content job for
+    # what changed, what was checked first, and what it costs.
+    needs: [syntax, build, content]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     permissions:

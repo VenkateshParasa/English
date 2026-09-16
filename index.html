@@ -3,11 +3,49 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- ===================================================================
+         Content-Security-Policy — `media-src` added deliberately in US-408.
+         ===================================================================
+         `media-src` was ABSENT, which is not the same as permissive: with no
+         `media-src` the browser falls back to `default-src 'self'`, and 'self'
+         does NOT match a `blob:` URL — a blob URL's scheme is `blob`, not
+         `https`, so it fails the self-source match and the load is refused. So
+         the omission was not a neutral default, it was a rule.
+
+         Two things that rule was breaking or would break:
+
+         1. ⚠️ ALREADY SHIPPED AND ALREADY BLOCKED. Every playback of a
+            learner's OWN recording goes through URL.createObjectURL() and
+            `new Audio(blobUrl)` — app.js's RecordingArchive (US-136), the
+            pronunciation A→B→A comparison (US-404) and the free-production
+            card (US-601). Under `default-src 'self'` with no `media-src`, a
+            CSP-enforcing browser refuses all three. `blob:` here is therefore a
+            FIX to shipped behaviour, not a concession to this story.
+         2. `https://api.dictionaryapi.dev` is the SAME single origin CON-6
+            already permits, and which `connect-src` below already names for the
+            dictionary JSON. No new origin is introduced by this line.
+
+         WHAT IS DELIBERATELY *NOT* HERE. dictionaryapi.dev's
+         `phonetics[].audio` values are not all on its own origin — it also
+         hands back clips hosted on `ssl.gstatic.com`, and protocol-relative
+         `//host/path` URLs. Those are NOT allowed, and the code enforces the
+         same rule rather than leaning on CSP to do it: app.js's
+         apiAudioUrl() accepts a clip only when it parses to exactly
+         `https://api.dictionaryapi.dev`, and rejects every other host. A word
+         whose only clip is on gstatic simply has no native clip and stays on
+         TTS. Adding a second media host would make "one optional API" (CON-6)
+         false, and it is not worth a recording of one word.
+
+         'self' is named explicitly for the bundled clips the pronunciation
+         content already anticipates (`audio.clipIds`), so that path does not
+         depend on a default that this comment exists to distrust.
+         =================================================================== -->
     <meta http-equiv="Content-Security-Policy"
           content="default-src 'self';
                    script-src 'self' 'unsafe-inline';
                    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
                    font-src 'self' https://fonts.gstatic.com;
+                   media-src 'self' blob: https://api.dictionaryapi.dev;
                    connect-src 'self' https://api.dictionaryapi.dev;">
     <meta name="description" content="Interactive English Learning Portal with vocabulary, sentence formation, reading, listening, and puzzle exercises">
     <meta name="theme-color" content="#4CAF50">
@@ -323,6 +361,23 @@
                     <p class="definition" id="definition" aria-label="Definition"></p>
                     <p class="example" id="example" aria-label="Example sentence"></p>
                     <button class="btn-primary" id="speakWord" aria-label="Pronounce the word">🔊 Pronounce</button>
+                    <!-- US-408. The native-recording control and its credit.
+                         BOTH START HIDDEN AND STAY HIDDEN UNLESS A CLIP IS
+                         ACTUALLY IN HAND. That is the CON-6 rule made structural
+                         rather than promised: this button is not a control that
+                         waits on the network, it is a control that does not exist
+                         until there is nothing left to wait for. It is never
+                         disabled-and-spinning, because a pending fetch that owns
+                         a control is exactly US-245's eighteen-second hang in a
+                         different costume.
+                         🔊 Pronounce above is unchanged, works offline, and is
+                         what the learner presses if this never appears.
+                         #wordAudioCredit is FR-CNT-5: a third-party clip is
+                         credited with its licence and source, beside the thing
+                         it belongs to and only when it is used. -->
+                    <button class="btn-secondary" id="wordAudioNative" hidden
+                            aria-label="Play a recording of a person saying this word">🎧 A person saying it</button>
+                    <p class="attribution" id="wordAudioCredit" hidden></p>
                 </div>
                 <div class="vocab-quiz" role="form" aria-labelledby="quiz-title">
                     <h3 id="quiz-title">Test Your Knowledge</h3>
@@ -681,7 +736,7 @@
                                         `PRONUNCIATION_VOWELS_STRESS.pairs`
                Word stress           -> #pronunciationBrowse, from `.stress`
                                         (21 items, T-P4 / FR-PRN-3)
-               Rhythm and syllables  -> #pronunciationBrowse, from `.noticing`
+               Rhythm and connected speech -> #pronunciationBrowse, from `.noticing`
                                         (15 items, T-P1/T-P2/T-P3 / FR-PRN-8)
 
              The switcher buttons are `.pron-group-btn` and NOT `.diff-btn`. That
@@ -705,7 +760,7 @@
                 <div class="pron-groups" id="pronunciationGroups" role="group" aria-label="What to practise">
                     <button type="button" class="pron-group-btn active" data-pron-group="pairs" aria-pressed="true">Sound pairs</button>
                     <button type="button" class="pron-group-btn" data-pron-group="stress" aria-pressed="false">Word stress</button>
-                    <button type="button" class="pron-group-btn" data-pron-group="noticing" aria-pressed="false">Rhythm and syllables</button>
+                    <button type="button" class="pron-group-btn" data-pron-group="noticing" aria-pressed="false">Rhythm and connected speech</button>
                 </div>
 
                 <div class="exercise-card pron-lesson" id="pronLessonCard" role="article" aria-labelledby="pronunciationPairTitle">
@@ -834,6 +889,14 @@
          T-P11 /f/-/p/). Same schema as vowels-stress.js; pronunciationPairs()
          concatenates both sources, so order between them does not matter. -->
     <script src="data/pronunciation/consonants.js"></script>
+    <!-- Strand C parts 4-7 (US-409): the schwa, sentence stress, linking/elision
+         and intonation. Declares `PRONUNCIATION_CONNECTED_SPEECH`, whose 15
+         `noticing` items are gathered by pronContentList() alongside
+         vowels-stress.js's. Every item is answerable from TEXT and declares
+         `requiresImitation: false`, because FR-PRN-8 forbids imitation tasks for
+         prosody — TTS models it badly, so an imitation task would have the learner
+         copying the wrong thing and the app could not tell them so. -->
+    <script src="data/pronunciation/connected-speech.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

@@ -1,10 +1,67 @@
 // Curriculum Data - Basic to Medium Level
 
+// =============================================================================
+// `stress` ON A VOCABULARY ENTRY — US-235, FR-PRN-3, CURRICULUM.md §3 part 3
+// =============================================================================
+// FR-PRN-3 is "**word stress** marked on vocabulary entries and drillable".
+// The drillable half shipped in US-197: 21 word-stress items in
+// data/pronunciation/vowels-stress.js, browsable in the Pronunciation section.
+// The *marked* half is this field. Before it, no vocabularyData entry carried
+// any stress information, so a learner meeting a word in the Vocabulary section
+// was never shown where the beat falls — and REQUIREMENTS.md §3.1 rates
+// syllable-timed rhythm (T-P1) the **highest**-intelligibility-impact Telugu
+// interference feature of all, above any individual phoneme. Equal weight on
+// every syllable is what a Telugu-L1 learner will do unless the card says
+// otherwise, so this is the highest-value marking on the card.
+//
+// THE SHAPE IS NOT NEW. It is the marking `vowels-stress.js`'s `stress[]` items
+// already use, field for field, so that "where is the beat in *develop*" has ONE
+// representation in this repo and cannot drift (the defect US-160 was filed for):
+//
+//   syllables      spoken syllables, in order. Here they are also an exact
+//                  partition of the spelling ("de"+"ve"+"lop" === "develop"),
+//                  which is machine-checkable; vowels-stress.js allows a spoken
+//                  form that is not ("comf-ta-ble").
+//   stressNumbers  canonical machine-readable marking, one number per syllable:
+//                  1 = primary, 2 = secondary, 0 = unstressed (ARPAbet/CMUdict).
+//                  Exactly one 1 per word. Length === syllables.length.
+//   stressIndex    0-based index of the primary stress. Denormalised from
+//                  stressNumbers so a renderer never scans, exactly as in
+//                  vowels-stress.js. INVARIANT: stressNumbers.indexOf(1), and
+//                  therefore always < syllables.length.
+//   display        learner-facing form, stressed syllable in CAPITALS
+//                  ("de-VE-lop"). Display only — never parse it. Secondary
+//                  stress is deliberately not shown, matching "e-du-CA-tion".
+//   drillId        OPTIONAL. Id of the vowels-stress.js item for the same word,
+//                  where one exists (only "Develop" / 'stress-develop' today).
+//                  Lets app.js deep-link the card to the drill, and lets a test
+//                  assert the two markings agree rather than hoping they do.
+//
+// ONE-SYLLABLE WORDS: the field is present, `stressNumbers` is [1] (CMUdict
+// marks a monosyllable's only vowel as primary, so the canonical field stays
+// faithful to the convention), and **`display` is null**. There is no beat
+// contrast in *book* or *bus*; "BOOK" would teach nothing and would imply a
+// choice was made. So the syllable count is recorded — it is a real fact, and
+// T-P1 work needs it — while the learner-facing string is explicitly absent.
+//
+// RENDERER CONTRACT: show the mark **iff `typeof stress.display === 'string'`**.
+// That single guard covers monosyllables (null), entries with no `stress` field
+// (none today, but the API-sourced and generated words in app.js have none) and
+// any future entry an author leaves unmarked. Nothing renders this yet — see the
+// US-235 report: app.js's setPronunciationDisplay() has no stress sibling.
+// =============================================================================
+
 const vocabularyData = {
     foundation: [
         {
             word: "Happy",
             pronunciation: "/ˈhæpi/",
+            stress: {
+                syllables: ["hap", "py"],
+                stressNumbers: [1, 0],
+                stressIndex: 0,
+                display: "HAP-py"
+            },
             definition: "Feeling or showing pleasure or contentment",
             example: "She was happy to see her friends.",
             quiz: {
@@ -16,6 +73,12 @@ const vocabularyData = {
         {
             word: "Book",
             pronunciation: "/bʊk/",
+            stress: {
+                syllables: ["book"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "A written or printed work consisting of pages",
             example: "I love reading books in my free time.",
             quiz: {
@@ -27,6 +90,12 @@ const vocabularyData = {
         {
             word: "Friend",
             pronunciation: "/frend/",
+            stress: {
+                syllables: ["friend"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "A person you know well and like",
             example: "My best friend lives next door.",
             quiz: {
@@ -38,6 +107,12 @@ const vocabularyData = {
         {
             word: "Water",
             pronunciation: "/ˈwɔːtər/",
+            stress: {
+                syllables: ["wa", "ter"],
+                stressNumbers: [1, 0],
+                stressIndex: 0,
+                display: "WA-ter"
+            },
             definition: "A clear liquid that has no color, taste, or smell",
             example: "Please drink plenty of water every day.",
             quiz: {
@@ -49,6 +124,12 @@ const vocabularyData = {
         {
             word: "House",
             pronunciation: "/haʊs/",
+            stress: {
+                syllables: ["house"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "A building where people live",
             example: "They bought a new house last year.",
             quiz: {
@@ -60,6 +141,12 @@ const vocabularyData = {
         {
             word: "Learn",
             pronunciation: "/lɜːrn/",
+            stress: {
+                syllables: ["learn"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "To gain knowledge or skill by studying or practicing",
             example: "Children learn new things every day.",
             quiz: {
@@ -71,6 +158,12 @@ const vocabularyData = {
         {
             word: "Beautiful",
             pronunciation: "/ˈbjuːtɪfl/",
+            stress: {
+                syllables: ["beau", "ti", "ful"],
+                stressNumbers: [1, 0, 0],
+                stressIndex: 0,
+                display: "BEAU-ti-ful"
+            },
             definition: "Pleasing to the senses or mind",
             example: "The sunset was beautiful tonight.",
             quiz: {
@@ -82,6 +175,12 @@ const vocabularyData = {
         {
             word: "Family",
             pronunciation: "/ˈfæməli/",
+            stress: {
+                syllables: ["fa", "mi", "ly"],
+                stressNumbers: [1, 0, 0],
+                stressIndex: 0,
+                display: "FA-mi-ly"
+            },
             definition: "A group of people related by blood or marriage",
             example: "My family loves to travel together.",
             quiz: {
@@ -93,6 +192,12 @@ const vocabularyData = {
         {
             word: "Food",
             pronunciation: "/fuːd/",
+            stress: {
+                syllables: ["food"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "Any substance consumed to provide nutritional support",
             example: "Healthy food is important for our body.",
             quiz: {
@@ -104,6 +209,12 @@ const vocabularyData = {
         {
             word: "Time",
             pronunciation: "/taɪm/",
+            stress: {
+                syllables: ["time"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "The indefinite continued progress of existence",
             example: "Time flies when you're having fun.",
             quiz: {
@@ -115,6 +226,12 @@ const vocabularyData = {
         {
             word: "School",
             pronunciation: "/skuːl/",
+            stress: {
+                syllables: ["school"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "A place where children go to learn",
             example: "I go to school every weekday.",
             quiz: {
@@ -126,6 +243,12 @@ const vocabularyData = {
         {
             word: "Play",
             pronunciation: "/pleɪ/",
+            stress: {
+                syllables: ["play"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "To engage in activity for enjoyment",
             example: "Children love to play outside.",
             quiz: {
@@ -137,6 +260,12 @@ const vocabularyData = {
         {
             word: "Sun",
             pronunciation: "/sʌn/",
+            stress: {
+                syllables: ["sun"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "The star that gives Earth light and heat",
             example: "The sun rises in the morning.",
             quiz: {
@@ -148,6 +277,12 @@ const vocabularyData = {
         {
             word: "Tree",
             pronunciation: "/triː/",
+            stress: {
+                syllables: ["tree"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "A tall plant with a wooden trunk and branches",
             example: "Birds build nests in trees.",
             quiz: {
@@ -159,6 +294,12 @@ const vocabularyData = {
         {
             word: "Run",
             pronunciation: "/rʌn/",
+            stress: {
+                syllables: ["run"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "To move quickly on foot",
             example: "I like to run in the park.",
             quiz: {
@@ -170,6 +311,12 @@ const vocabularyData = {
         {
             word: "Smile",
             pronunciation: "/smaɪl/",
+            stress: {
+                syllables: ["smile"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "To make a happy expression with your face",
             example: "She has a beautiful smile.",
             quiz: {
@@ -181,6 +328,12 @@ const vocabularyData = {
         {
             word: "Color",
             pronunciation: "/ˈkʌlər/",
+            stress: {
+                syllables: ["co", "lor"],
+                stressNumbers: [1, 0],
+                stressIndex: 0,
+                display: "CO-lor"
+            },
             definition: "The property of objects that we see with our eyes",
             example: "Red is my favorite color.",
             quiz: {
@@ -192,6 +345,12 @@ const vocabularyData = {
         {
             word: "Music",
             pronunciation: "/ˈmjuːzɪk/",
+            stress: {
+                syllables: ["mu", "sic"],
+                stressNumbers: [1, 0],
+                stressIndex: 0,
+                display: "MU-sic"
+            },
             definition: "Sounds arranged in a pleasing way",
             example: "I enjoy listening to music.",
             quiz: {
@@ -203,6 +362,12 @@ const vocabularyData = {
         {
             word: "Help",
             pronunciation: "/help/",
+            stress: {
+                syllables: ["help"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "To make it easier for someone to do something",
             example: "Can you help me with this?",
             quiz: {
@@ -214,6 +379,12 @@ const vocabularyData = {
         {
             word: "Kind",
             pronunciation: "/kaɪnd/",
+            stress: {
+                syllables: ["kind"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "Friendly, generous, and considerate",
             example: "She is a very kind person.",
             quiz: {
@@ -225,6 +396,12 @@ const vocabularyData = {
         {
             word: "Music",
             pronunciation: "/ˈmjuːzɪk/",
+            stress: {
+                syllables: ["mu", "sic"],
+                stressNumbers: [1, 0],
+                stressIndex: 0,
+                display: "MU-sic"
+            },
             definition: "Sounds arranged in a pleasing or expressive way",
             example: "She listens to music every morning.",
             quiz: {
@@ -236,6 +413,12 @@ const vocabularyData = {
         {
             word: "Garden",
             pronunciation: "/ˈɡɑːrdn/",
+            stress: {
+                syllables: ["gar", "den"],
+                stressNumbers: [1, 0],
+                stressIndex: 0,
+                display: "GAR-den"
+            },
             definition: "A piece of ground where plants and flowers are grown",
             example: "They grow vegetables in their garden.",
             quiz: {
@@ -247,6 +430,12 @@ const vocabularyData = {
         {
             word: "Journey",
             pronunciation: "/ˈdʒɜːrni/",
+            stress: {
+                syllables: ["jour", "ney"],
+                stressNumbers: [1, 0],
+                stressIndex: 0,
+                display: "JOUR-ney"
+            },
             definition: "An act of travelling from one place to another",
             example: "Our journey to the mountains took six hours.",
             quiz: {
@@ -258,6 +447,12 @@ const vocabularyData = {
         {
             word: "Honest",
             pronunciation: "/ˈɒnɪst/",
+            stress: {
+                syllables: ["hon", "est"],
+                stressNumbers: [1, 0],
+                stressIndex: 0,
+                display: "HON-est"
+            },
             definition: "Truthful and sincere; not lying or cheating",
             example: "He gave an honest answer to the question.",
             quiz: {
@@ -269,6 +464,12 @@ const vocabularyData = {
         {
             word: "Quiet",
             pronunciation: "/ˈkwaɪət/",
+            stress: {
+                syllables: ["qui", "et"],
+                stressNumbers: [1, 0],
+                stressIndex: 0,
+                display: "QUI-et"
+            },
             definition: "Making little or no noise",
             example: "The library was very quiet.",
             quiz: {
@@ -280,6 +481,12 @@ const vocabularyData = {
         {
             word: "Strong",
             pronunciation: "/strɔːŋ/",
+            stress: {
+                syllables: ["strong"],
+                stressNumbers: [1],
+                stressIndex: 0,
+                display: null
+            },
             definition: "Having great physical power or force",
             example: "The strong wind blew the leaves away.",
             quiz: {
@@ -291,6 +498,12 @@ const vocabularyData = {
         {
             word: "Weather",
             pronunciation: "/ˈweðər/",
+            stress: {
+                syllables: ["wea", "ther"],
+                stressNumbers: [1, 0],
+                stressIndex: 0,
+                display: "WEA-ther"
+            },
             definition: "The state of the atmosphere, such as rain or sunshine",
             example: "The weather is sunny today.",
             quiz: {
@@ -304,6 +517,12 @@ const vocabularyData = {
         {
             word: "Achieve",
             pronunciation: "/əˈtʃiːv/",
+            stress: {
+                syllables: ["a", "chieve"],
+                stressNumbers: [0, 1],
+                stressIndex: 1,
+                display: "a-CHIEVE"
+            },
             definition: "To successfully reach a goal or complete something",
             example: "She worked hard to achieve her dreams.",
             quiz: {
@@ -315,6 +534,12 @@ const vocabularyData = {
         {
             word: "Challenge",
             pronunciation: "/ˈtʃælɪndʒ/",
+            stress: {
+                syllables: ["chal", "lenge"],
+                stressNumbers: [1, 0],
+                stressIndex: 0,
+                display: "CHAL-lenge"
+            },
             definition: "A difficult task that tests someone's abilities",
             example: "Learning a new language is a challenge.",
             quiz: {
@@ -326,6 +551,13 @@ const vocabularyData = {
         {
             word: "Develop",
             pronunciation: "/dɪˈveləp/",
+            stress: {
+                syllables: ["de", "ve", "lop"],
+                stressNumbers: [0, 1, 0],
+                stressIndex: 1,
+                display: "de-VE-lop",
+                drillId: "stress-develop"
+            },
             definition: "To grow or cause to grow and become more advanced",
             example: "Children develop new skills through practice.",
             quiz: {
@@ -337,6 +569,12 @@ const vocabularyData = {
         {
             word: "Environment",
             pronunciation: "/ɪnˈvaɪrənmənt/",
+            stress: {
+                syllables: ["en", "vi", "ron", "ment"],
+                stressNumbers: [0, 1, 0, 0],
+                stressIndex: 1,
+                display: "en-VI-ron-ment"
+            },
             definition: "The surroundings or conditions in which something exists",
             example: "We must protect our environment.",
             quiz: {
@@ -348,6 +586,12 @@ const vocabularyData = {
         {
             word: "Important",
             pronunciation: "/ɪmˈpɔːrtnt/",
+            stress: {
+                syllables: ["im", "por", "tant"],
+                stressNumbers: [0, 1, 0],
+                stressIndex: 1,
+                display: "im-POR-tant"
+            },
             definition: "Of great significance or value",
             example: "Education is important for everyone.",
             quiz: {
@@ -359,6 +603,12 @@ const vocabularyData = {
         {
             word: "Knowledge",
             pronunciation: "/ˈnɑːlɪdʒ/",
+            stress: {
+                syllables: ["know", "ledge"],
+                stressNumbers: [1, 0],
+                stressIndex: 0,
+                display: "KNOW-ledge"
+            },
             definition: "Information and skills acquired through experience or education",
             example: "Knowledge is power.",
             quiz: {
@@ -370,6 +620,12 @@ const vocabularyData = {
         {
             word: "Opportunity",
             pronunciation: "/ˌɑːpərˈtuːnəti/",
+            stress: {
+                syllables: ["op", "por", "tu", "ni", "ty"],
+                stressNumbers: [2, 0, 1, 0, 0],
+                stressIndex: 2,
+                display: "op-por-TU-ni-ty"
+            },
             definition: "A favorable time or occasion for doing something",
             example: "This job is a great opportunity for me.",
             quiz: {
@@ -381,6 +637,12 @@ const vocabularyData = {
         {
             word: "Practice",
             pronunciation: "/ˈpræktɪs/",
+            stress: {
+                syllables: ["prac", "tice"],
+                stressNumbers: [1, 0],
+                stressIndex: 0,
+                display: "PRAC-tice"
+            },
             definition: "Repeated exercise to improve a skill",
             example: "Practice makes perfect.",
             quiz: {
@@ -392,6 +654,12 @@ const vocabularyData = {
         {
             word: "Success",
             pronunciation: "/səkˈses/",
+            stress: {
+                syllables: ["suc", "cess"],
+                stressNumbers: [0, 1],
+                stressIndex: 1,
+                display: "suc-CESS"
+            },
             definition: "The accomplishment of an aim or purpose",
             example: "Hard work leads to success.",
             quiz: {
@@ -403,6 +671,12 @@ const vocabularyData = {
         {
             word: "Understand",
             pronunciation: "/ˌʌndərˈstænd/",
+            stress: {
+                syllables: ["un", "der", "stand"],
+                stressNumbers: [2, 0, 1],
+                stressIndex: 2,
+                display: "un-der-STAND"
+            },
             definition: "To perceive the meaning of something",
             example: "I understand the lesson now.",
             quiz: {
@@ -414,6 +688,12 @@ const vocabularyData = {
         {
             word: "Confident",
             pronunciation: "/ˈkɒnfɪdənt/",
+            stress: {
+                syllables: ["con", "fi", "dent"],
+                stressNumbers: [1, 0, 0],
+                stressIndex: 0,
+                display: "CON-fi-dent"
+            },
             definition: "Feeling sure about your own abilities or qualities",
             example: "She felt confident before the interview.",
             quiz: {
@@ -425,6 +705,12 @@ const vocabularyData = {
         {
             word: "Generous",
             pronunciation: "/ˈdʒenərəs/",
+            stress: {
+                syllables: ["ge", "ne", "rous"],
+                stressNumbers: [1, 0, 0],
+                stressIndex: 0,
+                display: "GE-ne-rous"
+            },
             definition: "Willing to give more of something than is necessary",
             example: "He was generous with his time and money.",
             quiz: {
@@ -436,6 +722,12 @@ const vocabularyData = {
         {
             word: "Curious",
             pronunciation: "/ˈkjʊəriəs/",
+            stress: {
+                syllables: ["cu", "ri", "ous"],
+                stressNumbers: [1, 0, 0],
+                stressIndex: 0,
+                display: "CU-ri-ous"
+            },
             definition: "Eager to know or learn something",
             example: "The curious child asked many questions.",
             quiz: {
@@ -447,6 +739,12 @@ const vocabularyData = {
         {
             word: "Determined",
             pronunciation: "/dɪˈtɜːrmɪnd/",
+            stress: {
+                syllables: ["de", "ter", "mined"],
+                stressNumbers: [0, 1, 0],
+                stressIndex: 1,
+                display: "de-TER-mined"
+            },
             definition: "Having made a firm decision and not changing it",
             example: "She was determined to finish the marathon.",
             quiz: {
@@ -458,6 +756,12 @@ const vocabularyData = {
         {
             word: "Reliable",
             pronunciation: "/rɪˈlaɪəbl/",
+            stress: {
+                syllables: ["re", "li", "a", "ble"],
+                stressNumbers: [0, 1, 0, 0],
+                stressIndex: 1,
+                display: "re-LI-a-ble"
+            },
             definition: "Able to be trusted to do what is expected",
             example: "He is a reliable friend who always helps.",
             quiz: {
@@ -469,6 +773,12 @@ const vocabularyData = {
         {
             word: "Accurate",
             pronunciation: "/ˈækjərət/",
+            stress: {
+                syllables: ["ac", "cu", "rate"],
+                stressNumbers: [1, 0, 0],
+                stressIndex: 0,
+                display: "AC-cu-rate"
+            },
             definition: "Correct in all details; exact",
             example: "The report gave an accurate account of events.",
             quiz: {
@@ -480,6 +790,12 @@ const vocabularyData = {
         {
             word: "Efficient",
             pronunciation: "/ɪˈfɪʃnt/",
+            stress: {
+                syllables: ["ef", "fi", "cient"],
+                stressNumbers: [0, 1, 0],
+                stressIndex: 1,
+                display: "ef-FI-cient"
+            },
             definition: "Working well without wasting time or energy",
             example: "The new system is fast and efficient.",
             quiz: {
@@ -493,6 +809,12 @@ const vocabularyData = {
         {
             word: "Accomplish",
             pronunciation: "/əˈkɑːmplɪʃ/",
+            stress: {
+                syllables: ["ac", "com", "plish"],
+                stressNumbers: [0, 1, 0],
+                stressIndex: 1,
+                display: "ac-COM-plish"
+            },
             definition: "To complete successfully or achieve a desired aim",
             example: "She accomplished all her goals this year.",
             quiz: {
@@ -504,6 +826,12 @@ const vocabularyData = {
         {
             word: "Beneficial",
             pronunciation: "/ˌbenɪˈfɪʃl/",
+            stress: {
+                syllables: ["be", "ne", "fi", "cial"],
+                stressNumbers: [2, 0, 1, 0],
+                stressIndex: 2,
+                display: "be-ne-FI-cial"
+            },
             definition: "Favorable or advantageous; resulting in good",
             example: "Exercise is beneficial for your health.",
             quiz: {
@@ -515,6 +843,12 @@ const vocabularyData = {
         {
             word: "Collaborate",
             pronunciation: "/kəˈlæbəreɪt/",
+            stress: {
+                syllables: ["col", "la", "bo", "rate"],
+                stressNumbers: [0, 1, 0, 2],
+                stressIndex: 1,
+                display: "col-LA-bo-rate"
+            },
             definition: "To work jointly with others on an activity",
             example: "We need to collaborate to finish this project.",
             quiz: {
@@ -526,6 +860,12 @@ const vocabularyData = {
         {
             word: "Demonstrate",
             pronunciation: "/ˈdemənstreɪt/",
+            stress: {
+                syllables: ["de", "mon", "strate"],
+                stressNumbers: [1, 0, 2],
+                stressIndex: 0,
+                display: "DE-mon-strate"
+            },
             definition: "To show clearly by giving proof or evidence",
             example: "The teacher will demonstrate the experiment.",
             quiz: {
@@ -537,6 +877,12 @@ const vocabularyData = {
         {
             word: "Efficient",
             pronunciation: "/ɪˈfɪʃnt/",
+            stress: {
+                syllables: ["ef", "fi", "cient"],
+                stressNumbers: [0, 1, 0],
+                stressIndex: 1,
+                display: "ef-FI-cient"
+            },
             definition: "Achieving maximum productivity with minimum effort",
             example: "This is an efficient way to solve the problem.",
             quiz: {
@@ -548,6 +894,12 @@ const vocabularyData = {
         {
             word: "Fundamental",
             pronunciation: "/ˌfʌndəˈmentl/",
+            stress: {
+                syllables: ["fun", "da", "men", "tal"],
+                stressNumbers: [2, 0, 1, 0],
+                stressIndex: 2,
+                display: "fun-da-MEN-tal"
+            },
             definition: "Forming a necessary base or core; of central importance",
             example: "Reading is a fundamental skill.",
             quiz: {
@@ -559,6 +911,12 @@ const vocabularyData = {
         {
             word: "Implement",
             pronunciation: "/ˈɪmplɪment/",
+            stress: {
+                syllables: ["im", "ple", "ment"],
+                stressNumbers: [1, 0, 2],
+                stressIndex: 0,
+                display: "IM-ple-ment"
+            },
             definition: "To put a decision or plan into effect",
             example: "We will implement the new policy next month.",
             quiz: {
@@ -570,6 +928,12 @@ const vocabularyData = {
         {
             word: "Perspective",
             pronunciation: "/pərˈspektɪv/",
+            stress: {
+                syllables: ["per", "spec", "tive"],
+                stressNumbers: [0, 1, 0],
+                stressIndex: 1,
+                display: "per-SPEC-tive"
+            },
             definition: "A particular attitude toward or way of regarding something",
             example: "Try to see things from a different perspective.",
             quiz: {
@@ -581,6 +945,12 @@ const vocabularyData = {
         {
             word: "Significant",
             pronunciation: "/sɪɡˈnɪfɪkənt/",
+            stress: {
+                syllables: ["sig", "ni", "fi", "cant"],
+                stressNumbers: [0, 1, 0, 0],
+                stressIndex: 1,
+                display: "sig-NI-fi-cant"
+            },
             definition: "Sufficiently great or important to be worthy of attention",
             example: "This is a significant achievement.",
             quiz: {
@@ -592,6 +962,12 @@ const vocabularyData = {
         {
             word: "Versatile",
             pronunciation: "/ˈvɜːrsətl/",
+            stress: {
+                syllables: ["ver", "sa", "tile"],
+                stressNumbers: [1, 0, 0],
+                stressIndex: 0,
+                display: "VER-sa-tile"
+            },
             definition: "Able to adapt or be adapted to many different functions",
             example: "She is a versatile artist.",
             quiz: {
@@ -603,6 +979,12 @@ const vocabularyData = {
         {
             word: "Ambiguous",
             pronunciation: "/æmˈbɪɡjuəs/",
+            stress: {
+                syllables: ["am", "bi", "gu", "ous"],
+                stressNumbers: [0, 1, 0, 0],
+                stressIndex: 1,
+                display: "am-BI-gu-ous"
+            },
             definition: "Open to more than one interpretation; unclear",
             example: "His ambiguous reply left everyone confused.",
             quiz: {
@@ -614,6 +996,12 @@ const vocabularyData = {
         {
             word: "Meticulous",
             pronunciation: "/məˈtɪkjələs/",
+            stress: {
+                syllables: ["me", "ti", "cu", "lous"],
+                stressNumbers: [0, 1, 0, 0],
+                stressIndex: 1,
+                display: "me-TI-cu-lous"
+            },
             definition: "Showing great attention to detail; very careful",
             example: "She kept meticulous records of every expense.",
             quiz: {
@@ -625,6 +1013,12 @@ const vocabularyData = {
         {
             word: "Resilient",
             pronunciation: "/rɪˈzɪliənt/",
+            stress: {
+                syllables: ["re", "si", "li", "ent"],
+                stressNumbers: [0, 1, 0, 0],
+                stressIndex: 1,
+                display: "re-SI-li-ent"
+            },
             definition: "Able to recover quickly from difficulties",
             example: "The resilient community rebuilt after the storm.",
             quiz: {
@@ -636,6 +1030,12 @@ const vocabularyData = {
         {
             word: "Pragmatic",
             pronunciation: "/præɡˈmætɪk/",
+            stress: {
+                syllables: ["prag", "ma", "tic"],
+                stressNumbers: [0, 1, 0],
+                stressIndex: 1,
+                display: "prag-MA-tic"
+            },
             definition: "Dealing with things sensibly and realistically",
             example: "They took a pragmatic approach to the problem.",
             quiz: {
@@ -647,6 +1047,12 @@ const vocabularyData = {
         {
             word: "Diligent",
             pronunciation: "/ˈdɪlɪdʒənt/",
+            stress: {
+                syllables: ["di", "li", "gent"],
+                stressNumbers: [1, 0, 0],
+                stressIndex: 0,
+                display: "DI-li-gent"
+            },
             definition: "Showing careful and persistent effort in work",
             example: "The diligent student studied every night.",
             quiz: {
@@ -658,6 +1064,12 @@ const vocabularyData = {
         {
             word: "Coherent",
             pronunciation: "/koʊˈhɪərənt/",
+            stress: {
+                syllables: ["co", "he", "rent"],
+                stressNumbers: [0, 1, 0],
+                stressIndex: 1,
+                display: "co-HE-rent"
+            },
             definition: "Logical and clearly connected; making sense",
             example: "She presented a coherent argument.",
             quiz: {
@@ -669,6 +1081,12 @@ const vocabularyData = {
         {
             word: "Inevitable",
             pronunciation: "/ɪnˈevɪtəbl/",
+            stress: {
+                syllables: ["in", "e", "vi", "ta", "ble"],
+                stressNumbers: [0, 1, 0, 0, 0],
+                stressIndex: 1,
+                display: "in-E-vi-ta-ble"
+            },
             definition: "Certain to happen; unavoidable",
             example: "Change is an inevitable part of life.",
             quiz: {

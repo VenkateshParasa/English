@@ -847,6 +847,17 @@ header h1 {
     margin-bottom: 20px;
 }
 
+/* FR-CNT-5 attribution line (US-408). Small, low-contrast-but-readable, and
+   inside the word card so the credit sits beside the clip it credits. `word-break`
+   because a source URL is long and must not overflow the card at 200% zoom. */
+.attribution {
+    font-size: 0.8em;
+    opacity: 0.85;
+    margin-top: 12px;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
 .vocab-quiz {
     background: #f9f9f9;
     padding: 30px;
@@ -3617,6 +3628,22 @@ header h1 {
     margin: var(--space-2, 0.5rem) 0 0;
     font-size: var(--text-sm, 0.875rem);
     min-height: 1.4em;
+}
+
+/* --- Duration hint (US-406 / FR-PRN-7) ----------------------------------- */
+/* A dotted top rule, not a card of its own: this is a hint UNDER the A→B→A
+   comparison and reads as part of it. Deliberately no colour by outcome — a
+   green/amber/red result would be a score drawn in CSS, which is exactly what
+   FR-PRN-5 and BR-3 forbid, so every band looks identical. */
+.pron-duration {
+    margin: var(--space-3, 0.75rem) 0 0;
+    padding: var(--space-3, 0.75rem) 0 0;
+    border-top: 1px dashed var(--border-color, #e0e0e0);
+}
+
+.pron-duration-result {
+    margin: var(--space-2, 0.5rem) 0 0;
+    font-size: var(--text-sm, 0.875rem);
 }
 
 /* --- Free production (US-601 / FR-SPK-3) --------------------------------- */

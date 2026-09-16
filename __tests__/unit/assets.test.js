@@ -87,3 +87,54 @@ describe('service worker STATIC_ASSETS', () => {
         expect(assetSet.has('offline.html')).toBe(true);
     });
 });
+
+/**
+ * Cache-name guard (US-408).
+ *
+ * activate() deletes every `english-portal-*` cache that is not one of the named
+ * constants. A new cache added without a matching line in that filter is deleted
+ * the moment the worker activates — so the feature works until the next reload
+ * and then silently stops, which is the worst version of this bug to debug.
+ * MEDIA_CACHE is the fourth such constant and the first one whose contents cost
+ * the learner mobile data to replace.
+ */
+describe('service worker cache names', () => {
+    /** Every `const X_CACHE = '...'` in the worker. */
+    function cacheConstants(source) {
+        const out = {};
+        const re = /const\s+([A-Z_]*CACHE[A-Z_]*)\s*=\s*'([^']+)'/g;
+        let m;
+        while ((m = re.exec(source)) !== null) out[m[1]] = m[2];
+        return out;
+    }
+
+    const names = cacheConstants(swSource);
+    const activate = swSource.slice(swSource.indexOf("addEventListener('activate'"),
+                                   swSource.indexOf("addEventListener('fetch'"));
+
+    it('declares the caches this worker uses', () => {
+        // Sanity check on the parser, so the assertions below cannot pass vacuously.
+        expect(Object.keys(names).sort()).toEqual(
+            ['API_CACHE', 'CACHE_NAME', 'DYNAMIC_CACHE', 'MEDIA_CACHE', 'STATIC_CACHE']);
+    });
+
+    it('gives every cache a distinct name', () => {
+        const values = Object.values(names);
+        expect(values).toHaveLength(new Set(values).size);
+    });
+
+    it.each(Object.keys(names).filter(n => n !== 'CACHE_NAME'))(
+        '%s survives activate()',
+        constant => {
+            // CACHE_NAME is the unused v1.0.2 legacy constant and is deliberately
+            // NOT exempted from cleanup.
+            expect(activate).toContain('cacheName !== ' + constant);
+        });
+
+    it('still prefixes every cache with english-portal-, or cleanup misses it', () => {
+        expect(activate).toContain("cacheName.startsWith('english-portal-')");
+        Object.values(names).forEach(value => {
+            expect(value.startsWith('english-portal-')).toBe(true);
+        });
+    });
+});

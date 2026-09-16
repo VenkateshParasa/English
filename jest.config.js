@@ -24,7 +24,20 @@ module.exports = {
         // testMatch picks up everything under __tests__/, so without this it is
         // collected as a test file and fails with "must contain at least one
         // test" — one red suite that says nothing about the code.
-        '/__tests__/setup\\.js$'
+        '/__tests__/setup\\.js$',
+        // tmp/ is gitignored scratch — throwaway harnesses, CI dry-runs, copies of
+        // the tree. Jest's default testMatch is rooted at the project, not at
+        // __tests__/, so ANY *.test.js under tmp/ gets collected. That is not
+        // hypothetical: a CI simulation left a full copy of the suites at
+        // tmp/ci-sim/__tests__/unit/, and `npx jest` went from 10 suites and 1,538
+        // tests to 20 and 3,076 — every figure exactly doubled, every suite
+        // reported twice, and coverage computed over two copies of the same file.
+        // Doubled-but-green is the dangerous shape: nothing fails, so nothing tells
+        // you the number you are quoting is wrong.
+        //
+        // Same root cause as the setup.js line above — the default testMatch is
+        // greedier than the directory it looks like it is scoped to.
+        '/tmp/'
     ],
 
     // Coverage is scoped to what is actually testable. Reporting on app.js
